@@ -1,16 +1,7 @@
-# -*- coding: utf-8 -*-
-"""Official Streamlit entry point for AI Council V19.4.
+import streamlit as st
+from main import run_app
 
-Deployment contract:
-    streamlit run app.py
+st.set_page_config(page_title='AI Council V20', page_icon='🏛️', layout='wide')
 
-The application logic remains in main.py; this file is intentionally thin so
-Streamlit Cloud and other hosts have one stable, explicit entry point.
-"""
-from __future__ import annotations
-
-from main import main
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run_app()
