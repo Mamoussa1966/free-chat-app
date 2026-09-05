@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import concurrent.futures
@@ -5,8 +6,8 @@ import hashlib
 import html
 import json
 import os
-import re
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -16,20 +17,35 @@ import streamlit as st
 from local_engine import generate_local
 from providers import PROVIDERS, call_official, get_models, get_secret, safe_error
 
-APP_VERSION = "V9.0-PROVIDER-LAYER-FREE-FIRST"
+APP_VERSION = "V18.0-PRODUCTION-HYBRID"
+SCHEMA_VERSION = "5.0"
 MAX_QUERY_CHARS = 6000
-MAX_HISTORY = 40
-MAX_CONTEXT_CHARS = 14000
-MAX_OUTPUT_CHARS = 6000
-REQUEST_TIMEOUT = int(os.getenv("AI_ROOM_TIMEOUT", "35"))
+MAX_HISTORY_MESSAGES = 30
+MAX_CONTEXT_CHARS = 12000
+MAX_OUTPUT_CHARS = 5000
+MAX_PEER_CHARS = 7000
+MAX_ROOM_SIZE = 15
 MAX_WORKERS = 5
+REQUEST_TIMEOUT = max(5, min(90, int(os.getenv("AI_ROOM_TIMEOUT", "35"))))
 
-AGENTS: Tuple[Dict[str, str], ...] = (
+CORE_AGENTS: Tuple[Dict[str, str], ...] = (
     {"id": "analysis", "provider": "openai", "name": "ChatGPT", "role": "التحليل العام", "icon": "💬", "instruction": "حلل الهدف والوقائع والقيود والخيارات الرئيسية."},
-    {"id": "reasoning", "provider": "gemini", "name": "Gemini", "role": "الاستدلال المنطقي", "icon": "♊", "instruction": "فكك السؤال إلى فرضيات واختبر العلاقات المنطقية."},
-    {"id": "critic", "provider": "anthropic", "name": "Claude", "role": "النقد والمنهج", "icon": "🧠", "instruction": "اكشف الافتراضات الخفية والتناقضات وما يحتاج إلى دليل."},
-    {"id": "risk", "provider": "xai", "name": "Grok", "role": "البدائل والمخاطر", "icon": "⚡", "instruction": "قيّم المخاطر ونقاط الفشل والبدائل وخطة الرجوع."},
-    {"id": "synthesis", "provider": "kimi", "name": "Kimi", "role": "التركيب التنفيذي", "icon": "🌙", "instruction": "ركب أفضل النقاط في خلاصة عملية قابلة للتنفيذ."},
+    {"id": "reasoning", "provider": "gemini", "name": "Gemini", "role": "الاستدلال المنطقي", "icon": "♊", "instruction": "فكك المسألة واختبر العلاقات المنطقية والبدائل."},
+    {"id": "critic", "provider": "anthropic", "name": "Claude", "role": "النقد والمنهج", "icon": "🧠", "instruction": "ابحث عن الثغرات والتناقضات والادعاءات التي تحتاج دليلاً."},
+    {"id": "risk", "provider": "xai", "name": "Grok", "role": "المخاطر والبدائل", "icon": "⚡", "instruction": "قيّم المخاطر ونقاط الفشل والبدائل."},
+    {"id": "synthesis", "provider": "kimi", "name": "Kimi", "role": "التركيب التنفيذي", "icon": "🌙", "instruction": "ركب أفضل النقاط في قرار عملي مرتب."},
+)
+
+EXTRA_LOCAL_AGENTS: Tuple[Dict[str, str], ...] = (
+    {"id": "factcheck", "provider": "local", "name": "مراجع الحقائق", "role": "فحص الادعاءات", "icon": "🔬", "instruction": "حدد الادعاءات التي تحتاج تحققاً."},
+    {"id": "planner", "provider": "local", "name": "مخطط التنفيذ", "role": "خطة العمل", "icon": "🗺️", "instruction": "حوّل النتيجة إلى خطوات قابلة للتنفيذ."},
+    {"id": "security", "provider": "local", "name": "مراجع الأمان", "role": "الأمان", "icon": "🛡️", "instruction": "راجع مخاطر الأمان والخصوصية."},
+    {"id": "engineering", "provider": "local", "name": "المهندس", "role": "الهندسة", "icon": "⚙️", "instruction": "راجع الاعتمادية والصيانة والتوسع."},
+    {"id": "economics", "provider": "local", "name": "محلل التكلفة", "role": "الكفاءة", "icon": "📊", "instruction": "وازن الموارد والتكلفة."},
+    {"id": "ux", "provider": "local", "name": "مراجع التجربة", "role": "تجربة المستخدم", "icon": "🧩", "instruction": "راجع الوضوح وسهولة الاستخدام."},
+    {"id": "devils_advocate", "provider": "local", "name": "محامي الشيطان", "role": "الاعتراض", "icon": "⚖️", "instruction": "قدم أقوى اعتراض منطقي."},
+    {"id": "minimalist", "provider": "local", "name": "المبسّط", "role": "التبسيط", "icon": "✂️", "instruction": "ابحث عن أبسط حل آمن."},
+    {"id": "quality", "provider": "local", "name": "ضابط الجودة", "role": "الجودة", "icon": "✅", "instruction": "ضع معايير قبول واختبارات."},
 )
 
 
@@ -44,225 +60,293 @@ class AgentResult:
     latency: float
     mode: str
     model_used: str = ""
-    error: Optional[str] = None
+    error: str = ""
+    official_authenticated: bool = False
+    source_mode: str = "local"
+    fallback_used: bool = False
 
 
-def normalize_text(value: object, limit: int = MAX_OUTPUT_CHARS) -> str:
-    text = str(value or "").strip()
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text[:limit].strip()
+def clean_text(value: object, limit: int = MAX_OUTPUT_CHARS) -> str:
+    return str(value or "").strip()[:limit].strip()
 
 
-def validate_query(query: str) -> Tuple[bool, str]:
-    q = normalize_text(query, MAX_QUERY_CHARS)
-    if not q:
-        return False, "اكتب رسالتك أولاً."
-    if len(q) > MAX_QUERY_CHARS:
-        return False, f"الرسالة طويلة جداً. الحد الأقصى {MAX_QUERY_CHARS} حرف."
-    return True, ""
-
-
-def build_context(history: List[dict]) -> str:
+def build_context(messages: List[dict]) -> str:
     rows = []
-    for item in history[-10:]:
-        sender = normalize_text(item.get("sender", ""), 80)
-        content = normalize_text(item.get("content", ""), 1800)
+    for msg in messages[-MAX_HISTORY_MESSAGES:]:
+        sender = clean_text(msg.get("sender", ""), 80)
+        content = clean_text(msg.get("content", ""), 900)
         if content:
             rows.append(f"{sender}: {content}")
     return "\n".join(rows)[-MAX_CONTEXT_CHARS:]
 
 
-def system_prompt(agent: Dict[str, str], tone: str) -> str:
+def validate_query(query: str) -> Tuple[bool, str]:
+    q = (query or "").strip()
+    if not q:
+        return False, "اكتب السؤال أولاً."
+    if len(q) > MAX_QUERY_CHARS:
+        return False, f"الحد الأقصى للسؤال {MAX_QUERY_CHARS} حرف."
+    return True, ""
+
+
+def select_agents(size: int) -> List[Dict[str, str]]:
+    size = max(5, min(MAX_ROOM_SIZE, int(size)))
+    return list(CORE_AGENTS) + list(EXTRA_LOCAL_AGENTS[: size - 5])
+
+
+def make_prompt(agent: Dict[str, str], query: str, context: str, tone: str, peer_text: str = "") -> str:
+    peer = f"\nنتائج زملاء سابقة للنقد:\n{peer_text[-MAX_PEER_CHARS:]}" if peer_text else ""
     return (
-        "أنت عضو مستقل في غرفة AI Council. "
-        f"اسم الدور: {agent['name']}. الدور الوظيفي: {agent['role']}. "
-        f"المهمة: {agent['instruction']} "
-        f"النبرة: {tone}. أجب بالعربية الواضحة. لا تنتحل هوية مزود آخر، ولا تدّعِ معلومة غير متاحة. "
-        "إذا كان السؤال تحية فقط، أجب باختصار."
+        "أنت عضو في غرفة ذكاء اصطناعي متعددة المصادر. لا تدّعِ أنك نموذج تجاري معين "
+        "إلا إذا كان الرد فعلياً من مزود رسمي مصادق عليه. "
+        f"دورك: {agent['role']}. تعليمات الدور: {agent['instruction']}. النبرة: {tone}. "
+        "أجب بالعربية ما لم يتطلب السؤال غير ذلك.\n\n"
+        f"السؤال:\n{query}\n\nالسياق السابق:\n{context or '(لا يوجد)'}{peer}"
     )
 
 
-def clean_provider_labels(text: str) -> str:
-    return re.sub(r"^\s*(ChatGPT|Gemini|Claude|Grok|Kimi)\s*[:：-]\s*", "", text or "", flags=re.I).strip()
+def _local_result(agent: Dict[str, str], text: str, started: float, error: str = "", fallback: bool = False) -> AgentResult:
+    return AgentResult(
+        agent["id"], agent["name"], agent["role"], agent["provider"], clean_text(text), bool(text),
+        time.perf_counter() - started, "local-fallback" if fallback else "local", "local-engine", error,
+        False, "local-fallback" if fallback else "local", fallback,
+    )
 
 
-def run_one_agent(agent: Dict[str, str], query: str, context: str, tone: str) -> AgentResult:
+def run_agent(agent: Dict[str, str], query: str, context: str, tone: str, peer_text: str = "") -> AgentResult:
     started = time.perf_counter()
-    cfg = PROVIDERS[agent["provider"]]
-    api_key = get_secret(cfg.key_names)
-    user_prompt = f"السياق السابق:\n{context or 'لا يوجد سياق سابق.'}\n\nرسالة المستخدم:\n{query}"
-    system = system_prompt(agent, tone)
-
-    # Critical invariant: no credential => no network attempt => local room remains usable.
-    if not api_key:
-        text = generate_local(agent, query, context, tone)
-        return AgentResult(agent["id"], agent["name"], agent["role"], cfg.family, text, True,
-                           time.perf_counter() - started, "محلي مجاني — بلا اعتماد رسمي", "local")
-
-    errors: List[str] = []
-    for model in get_models(cfg):
+    if agent["provider"] == "local":
         try:
-            text = clean_provider_labels(call_official(agent["provider"], api_key, model, system, user_prompt, REQUEST_TIMEOUT))
-            return AgentResult(agent["id"], agent["name"], agent["role"], cfg.family, normalize_text(text), True,
-                               time.perf_counter() - started, "نموذج أصلي عبر API رسمي", model)
+            text = generate_local(agent["id"], agent["role"], agent["instruction"], query, context, tone, peer_text)
+            return _local_result(agent, text, started)
         except Exception as exc:
-            errors.append(f"{model}: {safe_error(exc)}")
+            return AgentResult(agent["id"], agent["name"], agent["role"], "local", "تعذر تشغيل المقعد المحلي.", False,
+                               time.perf_counter() - started, "error", "local-engine", safe_error(exc), False, "error", False)
 
-    # Authenticated route failed: fail open to the local engine, never fail the room.
-    text = generate_local(agent, query, context, tone)
-    return AgentResult(agent["id"], agent["name"], agent["role"], cfg.family, text, True,
-                       time.perf_counter() - started, "محلي مجاني — fallback بعد فشل الرسمي", "local",
-                       " | ".join(errors)[:1200])
+    cfg = PROVIDERS[agent["provider"]]
+    key = get_secret(cfg.key_names)
+    errors: List[str] = []
+    if key:
+        prompt = make_prompt(agent, query, context, tone, peer_text)
+        for model in get_models(cfg):
+            try:
+                text = call_official(agent["provider"], prompt, model, REQUEST_TIMEOUT)
+                return AgentResult(agent["id"], agent["name"], agent["role"], agent["provider"], clean_text(text), True,
+                                   time.perf_counter() - started, "official", model, "", True, "official", False)
+            except Exception as exc:
+                errors.append(f"{model}: {safe_error(exc)}")
+    else:
+        errors.append("لا يوجد اعتماد رسمي؛ لم تتم أي محاولة شبكة.")
 
-
-def run_council(query: str, tone: str) -> List[AgentResult]:
-    context = build_context(st.session_state.get("chat_history", []))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = [pool.submit(run_one_agent, agent, query, context, tone) for agent in AGENTS]
-        return [f.result() for f in futures]
-
-
-def council_summary(query: str, results: List[AgentResult]) -> str:
-    official = [r for r in results if r.mode == "نموذج أصلي عبر API رسمي"]
-    local = [r for r in results if r.mode != "نموذج أصلي عبر API رسمي"]
-    if official and local:
-        return f"الجولة هجينة: {len(official)} مسار أصلي عبر API رسمي و{len(local)} مسار محلي احتياطي. لم يتوقف المجلس عند تعذر أي مزود."
-    if official:
-        return f"اكتملت الجولة عبر {len(official)}/5 مسارات رسمية موثقة."
-    return "اكتملت الجولة بالكامل بالمحرك المحلي المجاني؛ لا توجد اعتمادات رسمية لازمة لتشغيل الغرفة."
-
-
-def round_id(query: str, results: List[AgentResult]) -> str:
-    payload = json.dumps({"q": query, "r": [asdict(r) for r in results]}, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    try:
+        text = generate_local(agent["id"], agent["role"], agent["instruction"], query, context, tone, peer_text)
+        return _local_result(agent, text, started, " | ".join(errors)[:1200], True)
+    except Exception as exc:
+        return AgentResult(agent["id"], agent["name"], agent["role"], agent["provider"],
+                           "تعذر تشغيل المقعد، واستمر المجلس ببقية المقاعد.", False,
+                           time.perf_counter() - started, "error", "", safe_error(exc), False, "error", True)
 
 
-def export_payload(query: str, results: List[AgentResult], summary: str) -> str:
-    return json.dumps({
+def run_parallel(agents: List[Dict[str, str]], query: str, history: List[dict], tone: str) -> List[AgentResult]:
+    context = build_context(history)
+    results: List[AgentResult] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(agents))) as pool:
+        futures = {pool.submit(run_agent, agent, query, context, tone): agent for agent in agents}
+        for future in concurrent.futures.as_completed(futures):
+            agent = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                results.append(AgentResult(agent["id"], agent["name"], agent["role"], agent["provider"],
+                                           "تعذر تشغيل هذا المقعد، واستمر المجلس بدونه.", False, 0.0,
+                                           "error", "", safe_error(exc), False, "error", True))
+    order = {agent["id"]: i for i, agent in enumerate(agents)}
+    results.sort(key=lambda r: order.get(r.agent_id, 999))
+    return results
+
+
+def compact_results(results: List[AgentResult], limit: int = 9000) -> str:
+    chunks = []
+    for result in results:
+        if result.success and result.text:
+            source = "رسمي" if result.official_authenticated else "محلي"
+            chunks.append(f"[{result.agent_name} | {source}]\n{result.text}")
+    return "\n\n".join(chunks)[-limit:]
+
+
+def run_debate(results: List[AgentResult], query: str, tone: str) -> List[AgentResult]:
+    good = [r for r in results if r.success]
+    if not good:
+        return results
+    started = time.perf_counter()
+    text = generate_local("devils_advocate", "مراجع المناظرة", "قارن الردود وحدد الاتفاق والاختلاف وأقوى نقطة ضعف.", query, "", tone, compact_results(good, 8000))
+    results.append(AgentResult("bounded_critique", "مراجع المناظرة", "مراجعة جماعية محدودة", "local", clean_text(text), True,
+                               time.perf_counter() - started, "local-debate", "local-engine", "", False, "local", False))
+    return results
+
+
+def local_moderator(query: str, results: List[AgentResult], tone: str) -> AgentResult:
+    started = time.perf_counter()
+    text = generate_local("quality", "الحكم المحلي", "اجمع الأدلة ورجّح النتيجة دون ادعاء مصادر خارجية.", query, "", tone, compact_results(results, 10000))
+    return AgentResult("moderator_local", "الحكم المحلي", "الخلاصة المحايدة", "local", clean_text(text), True,
+                       time.perf_counter() - started, "local-moderator", "local-engine", "", False, "local", False)
+
+
+def audit_record(result: AgentResult) -> dict:
+    return {
+        "agent_id": result.agent_id,
+        "agent_name": result.agent_name,
+        "provider_family": result.provider,
+        "mode": result.mode,
+        "source_mode": result.source_mode,
+        "official_authenticated": bool(result.official_authenticated),
+        "fallback_used": bool(result.fallback_used),
+        "model_id": result.model_used if result.official_authenticated else None,
+        "local_engine": not result.official_authenticated,
+        "success": bool(result.success),
+        "latency_seconds": round(result.latency, 4),
+    }
+
+
+def export_json(query: str, results: List[AgentResult], moderator: Optional[AgentResult], run_id: str) -> str:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
         "app_version": APP_VERSION,
+        "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "identity_policy": "Only authenticated official provider API results are labeled as official/original; local fallback is never represented as a provider model.",
+        "identity_policy": "Only successful authenticated official-provider responses are labeled official. Local outputs never impersonate commercial models.",
         "query": query,
-        "results": [asdict(r) for r in results],
-        "summary": summary,
-    }, ensure_ascii=False, indent=2)
+        "results": [{**asdict(r), "audit": audit_record(r)} for r in results],
+        "moderator": ({**asdict(moderator), "audit": audit_record(moderator)} if moderator else None),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def provider_status() -> Dict[str, bool]:
-    return {pid: bool(get_secret(cfg.key_names)) for pid, cfg in PROVIDERS.items()}
+def round_hash(query: str, results: List[AgentResult], moderator: Optional[AgentResult]) -> str:
+    payload = {"q": query, "r": [asdict(r) for r in results], "m": asdict(moderator) if moderator else None}
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def render_css() -> None:
-    st.markdown("""
-    <style>
-      .block-container {max-width: 980px; padding-top: 1rem; padding-bottom: 5rem;}
-      .hero {text-align:center; margin-bottom:1rem;}
-      .hero h1 {font-size:2.15rem; margin-bottom:.2rem;}
-      .hero p {opacity:.7; margin-top:0;}
-      .truth {border:1px solid rgba(180,140,40,.35); border-radius:16px; padding:15px; line-height:1.8;}
-      .agent {border:1px solid rgba(120,120,120,.22); border-radius:16px; padding:16px; margin:10px 0;}
-      .agent-title {font-weight:800; font-size:1.08rem; margin-bottom:8px;}
-      .meta {font-size:.78rem; opacity:.62; margin-top:10px; line-height:1.65;}
-      .summary {border:1px solid rgba(80,120,180,.28); border-radius:16px; padding:16px; line-height:1.8;}
-      @media (max-width: 650px) { .hero h1 {font-size:1.65rem;} .block-container {padding-left:.75rem; padding-right:.75rem;} }
-    </style>
-    """, unsafe_allow_html=True)
+def render_result(result: AgentResult) -> None:
+    if result.mode == "official":
+        source = f"🟢 رسمي — {html.escape(result.model_used)}"
+    elif result.mode == "local-fallback":
+        source = "🟡 احتياطي محلي"
+    elif result.mode.startswith("local"):
+        source = "🔵 محلي"
+    else:
+        source = "🔴 تعذر التشغيل"
+    icon = next((a["icon"] for a in CORE_AGENTS + EXTRA_LOCAL_AGENTS if a["id"] == result.agent_id), "🤖")
+    body = html.escape(result.text).replace("\n", "<br>")
+    st.markdown(
+        f"<div class='card'><div class='title'>{icon} {html.escape(result.agent_name)}</div>"
+        f"<div class='meta'>{html.escape(result.role)} · {source} · {result.latency:.2f}s</div>"
+        f"<div class='body'>{body}</div></div>", unsafe_allow_html=True
+    )
+    if result.error:
+        with st.expander("تفاصيل المسار"):
+            st.caption(result.error)
+
+
+def reset() -> None:
+    for key, value in {"messages": [], "last_results": [], "last_moderator": None, "last_query": "", "last_run_id": ""}.items():
+        st.session_state[key] = value
+    st.rerun()
+
+
+def _init_state() -> None:
+    defaults = {"messages": [], "last_results": [], "last_moderator": None, "last_query": "", "last_run_id": ""}
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
 
 
 def main() -> None:
-    st.set_page_config(page_title="AI Council — الغرفة الخماسية", page_icon="🏛️", layout="centered", initial_sidebar_state="collapsed")
-    render_css()
-    st.session_state.setdefault("chat_history", [])
-    st.session_state.setdefault("last_results", [])
-    st.session_state.setdefault("last_query", "")
-    st.session_state.setdefault("last_summary", "")
-
-    st.markdown(f"<div class='hero'><h1>🏛️ الغرفة الخماسية الكبرى</h1><p>{APP_VERSION}</p></div>", unsafe_allow_html=True)
+    st.set_page_config(page_title="AI Council V18", page_icon="🏛️", layout="centered", initial_sidebar_state="collapsed")
+    _init_state()
+    st.markdown("<style>.block-container{max-width:1050px;padding:1rem .8rem 5rem}.hero{text-align:center}.truth,.card,.summary{border:1px solid rgba(128,128,128,.28);border-radius:16px;padding:15px;margin:10px 0;line-height:1.85}.title{font-weight:800;font-size:1.08rem}.meta{opacity:.65;font-size:.8rem;margin:.35rem 0 .8rem}.body{line-height:1.85}</style>", unsafe_allow_html=True)
+    st.markdown(f"<div class='hero'><h1>🏛️ AI Council — الغرفة الخماسية</h1><div>{APP_VERSION}</div></div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='truth'><b>العقد المعماري:</b> الغرفة تعمل بدون أي مفاتيح. عند وجود اعتماد رسمي محفوظ على الخادم، يستخدم كل Provider قناته الرسمية ونموذجه المحدد؛ وعند عدم وجود الاعتماد أو فشل الشبكة/النموذج يعود ذلك العضو فوراً إلى المحرك المحلي. لا توجد شاشة إدخال مفاتيح ولا Session Scraping ولا Cookies.</div>",
-        unsafe_allow_html=True,
+        "<div class='truth'><b>العقد التشغيلي:</b> بدون مفاتيح تعمل الغرفة محلياً. عند وجود اعتماد رسمي فقط يحاول المقعد API الرسمي. "
+        "أي فشل رسمي يؤدي إلى Local Fallback. المحرك المحلي لا ينتحل هوية نموذج تجاري.</div>", unsafe_allow_html=True
     )
 
-    statuses = provider_status()
     with st.sidebar:
         st.header("⚙️ لوحة التحكم")
-        st.caption(APP_VERSION)
+        size = int(st.radio("حجم الغرفة", ["5", "10", "15"], index=0))
         tone = st.selectbox("النبرة", ["علمية دقيقة", "مباشرة وسريعة", "ودية", "نقدية صارمة"], index=0)
+        mode = st.selectbox("النمط", ["موازٍ سريع", "نقاش محدود", "نقاش + حكم محلي"], index=0)
         st.divider()
-        st.subheader("🔌 حالة Providers")
-        for pid, cfg in PROVIDERS.items():
-            if statuses[pid]:
-                st.success(f"{cfg.icon} {cfg.family}: اعتماد رسمي موجود")
+        st.subheader("🔌 الاعتمادات على الخادم")
+        for provider_id, cfg in PROVIDERS.items():
+            if get_secret(cfg.key_names):
+                st.success(f"{cfg.icon} {cfg.family}: مُهيأ (سيُختبر عند الجولة)")
             else:
-                st.info(f"{cfg.icon} {cfg.family}: محلي احتياطي")
-        st.caption("هذه الحالة تعني وجود اعتماد على الخادم فقط؛ الاختبار الفعلي يحدث عند الطلب.")
-        st.divider()
-        if st.button("🗑️ مسح الجلسة", use_container_width=True):
-            st.session_state.chat_history = []
-            st.session_state.last_results = []
-            st.session_state.last_query = ""
-            st.session_state.last_summary = ""
-            st.rerun()
+                st.info(f"{cfg.icon} {cfg.family}: بلا اعتماد → محلي")
+        st.caption("المفتاح لا يعني أن استخدام API مجاني.")
+        if st.button("🗑️ مسح الغرفة", use_container_width=True):
+            reset()
 
-    st.subheader("🧩 أعضاء الغرفة")
+    agents = select_agents(size)
     cols = st.columns(5)
-    for col, agent in zip(cols, AGENTS):
+    for col, agent in zip(cols, CORE_AGENTS):
         with col:
-            cfg = PROVIDERS[agent["provider"]]
-            label = "🟢 رسمي" if statuses[agent["provider"]] else "🔵 محلي"
-            st.metric(agent["icon"], label, agent["name"])
-            st.caption(agent["role"])
+            configured = bool(get_secret(PROVIDERS[agent["provider"]].key_names))
+            st.metric(agent["name"], "🟠 مُهيأ" if configured else "🔵 محلي", agent["role"])
+    if size > 5:
+        st.caption(f"المقاعد الإضافية ({size - 5}) محلية عمداً.")
 
-    for item in st.session_state.chat_history[-MAX_HISTORY:]:
-        with st.chat_message("user" if item.get("role") == "user" else "assistant"):
-            st.write(item.get("content", ""))
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    query = st.chat_input("اكتب رسالتك للمجلس الخماسي…")
-    if query is not None:
+    query = st.chat_input("اكتب سؤالك للمجلس…")
+    if query:
         ok, error = validate_query(query)
         if not ok:
             st.error(error)
             return
-        query = normalize_text(query, MAX_QUERY_CHARS)
-        st.session_state.chat_history.append({"role": "user", "sender": "المستخدم", "content": query})
-        with st.status("🔄 المجلس يعمل — الرسمي عند توفر الاعتماد، والمحلي عند الحاجة…", expanded=False) as status:
-            results = run_council(query, tone)
-            summary = council_summary(query, results)
-            st.session_state.last_results = results
-            st.session_state.last_query = query
-            st.session_state.last_summary = summary
-            status.update(label="✅ اكتملت الجولة دون توقف", state="complete")
+        query = query.strip()
+        st.session_state.messages.append({"role": "user", "sender": "أنت", "content": query})
+        run_id = uuid.uuid4().hex[:12]
+        with st.status("⚡ تشغيل أعضاء الغرفة…", expanded=True) as status:
+            results = run_parallel(agents, query, st.session_state.messages[:-1], tone)
+            status.update(label="اكتملت الجولة الأساسية", state="complete")
+        if mode in ("نقاش محدود", "نقاش + حكم محلي"):
+            results = run_debate(results, query, tone)
+        moderator = local_moderator(query, results, tone) if mode == "نقاش + حكم محلي" else None
+        run_id = round_hash(query, results, moderator) or run_id
+        st.session_state.last_results = [asdict(r) for r in results]
+        st.session_state.last_moderator = asdict(moderator) if moderator else None
+        st.session_state.last_query = query
+        st.session_state.last_run_id = run_id
 
-    if st.session_state.last_results:
-        st.subheader("🧠 نتائج الوكلاء")
-        for r in st.session_state.last_results:
-            safe_name = html.escape(r.agent_name)
-            safe_role = html.escape(r.role)
-            safe_text = html.escape(r.text).replace("\n", "<br>")
-            safe_mode = html.escape(r.mode)
-            safe_model = html.escape(r.model_used or "—")
-            err_note = "<br>تم استخدام fallback المحلي بعد تعذر المسار الرسمي." if r.error else ""
-            st.markdown(
-                f"<div class='agent'><div class='agent-title'>{safe_name} · {safe_role}</div>"
-                f"<div>{safe_text}</div><div class='meta'>المسار: {safe_mode} · النموذج: {safe_model} · الزمن: {r.latency:.2f}s{err_note}</div></div>",
-                unsafe_allow_html=True,
-            )
+        with st.chat_message("assistant"):
+            official = sum(r.official_authenticated for r in results)
+            fallback = sum(r.fallback_used for r in results)
+            failed = sum(not r.success for r in results)
+            st.markdown(f"<div class='summary'><b>الجولة:</b> {len(results)} نتيجة · {official} رسمي ناجح · {fallback} fallback · {failed} فشل نهائي</div>", unsafe_allow_html=True)
+            for result in results:
+                render_result(result)
+            if moderator:
+                st.markdown("### 🏛️ الحكم المحلي")
+                render_result(moderator)
 
-        summary = st.session_state.last_summary or council_summary(st.session_state.last_query, st.session_state.last_results)
-        st.subheader("🏆 خلاصة المجلس")
-        st.markdown(f"<div class='summary'>{html.escape(summary)}</div>", unsafe_allow_html=True)
-        rid = round_id(st.session_state.last_query, st.session_state.last_results)
-        st.caption(f"معرّف الجولة: {rid}")
+        combined = "\n\n".join(f"{r.agent_name}: {r.text}" for r in results)
+        if moderator:
+            combined += f"\n\nالحكم المحلي: {moderator.text}"
+        st.session_state.messages.append({"role": "assistant", "sender": "المجلس", "content": combined})
 
-        payload = export_payload(st.session_state.last_query, st.session_state.last_results, summary)
-        st.download_button("⬇️ تصدير الجولة JSON", payload, file_name=f"ai_council_{rid}.json", mime="application/json")
-
-        existing = [x for x in st.session_state.chat_history if x.get("role") == "assistant"]
-        if not existing or existing[-1].get("content") != summary:
-            st.session_state.chat_history.append({"role": "assistant", "sender": "المجلس الخماسي", "content": summary})
-    else:
-        st.info("الغرفة جاهزة. اكتب أول رسالة لبدء الجولة.")
+    if st.session_state.last_results and not query:
+        result_objects = [AgentResult(**item) for item in st.session_state.last_results]
+        st.subheader("آخر جولة")
+        for result in result_objects:
+            render_result(result)
+        moderator = AgentResult(**st.session_state.last_moderator) if st.session_state.last_moderator else None
+        if moderator:
+            st.markdown("### 🏛️ الحكم المحلي")
+            render_result(moderator)
+        audit = export_json(st.session_state.last_query, result_objects, moderator, st.session_state.last_run_id or "round")
+        st.download_button("⬇️ تصدير JSON Audit", audit, file_name=f"ai_council_{st.session_state.last_run_id or 'round'}.json", mime="application/json", use_container_width=True)
 
 
 if __name__ == "__main__":
