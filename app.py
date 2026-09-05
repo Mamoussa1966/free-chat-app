@@ -16,7 +16,7 @@ import streamlit as st
 from local_engine import generate_local
 from providers import PROVIDERS, call_official, get_models, get_secret, safe_error
 
-APP_VERSION = "V18.0-PRODUCTION-HYBRID"
+APP_VERSION = "V19.0-PRODUCTION-HYBRID"
 SCHEMA_VERSION = "4.0"
 MAX_QUERY_CHARS = 6000
 MAX_HISTORY_MESSAGES = 30
@@ -44,6 +44,7 @@ EXTRA_LOCAL_AGENTS: Tuple[Dict[str, str], ...] = (
     {"id": "devils_advocate", "provider": "local", "name": "محامي الشيطان", "role": "الاعتراض", "icon": "⚖️", "instruction": "قدم أقوى اعتراض منطقي."},
     {"id": "minimalist", "provider": "local", "name": "المبسّط", "role": "التبسيط", "icon": "✂️", "instruction": "ابحث عن أبسط حل آمن."},
     {"id": "quality", "provider": "local", "name": "ضابط الجودة", "role": "الجودة", "icon": "✅", "instruction": "ضع معايير قبول واختبارات."},
+    {"id": "compliance", "provider": "local", "name": "مراجِع الامتثال", "role": "الامتثال والقانون", "icon": "⚖️", "instruction": "راجع التوافق مع اللوائح والأنظمة وحدد ما يحتاج مراجعة قانونية متخصصة."},
 )
 
 
@@ -88,7 +89,7 @@ def validate_query(query: str) -> Tuple[bool, str]:
 
 
 def select_agents(size: int) -> List[Dict[str, str]]:
-    size = max(5, min(14, int(size)))
+    size = max(5, min(15, int(size)))
     return list(CORE_AGENTS) + list(EXTRA_LOCAL_AGENTS[: size - 5])
 
 
@@ -110,7 +111,7 @@ def _local_result(agent: Dict[str, str], text: str, started: float, error: str =
     )
 
 
-def run_agent(agent: Dict[str, str], query: str, context: str, tone: str, peer_text: str = "") -> AgentResult:
+def run_agent(agent: Dict[str, str], query: str, context: str, tone: str, credential: Optional[str] = None, peer_text: str = "") -> AgentResult:
     started = time.perf_counter()
 
     # Local-only seats never enter the provider layer.
@@ -122,15 +123,15 @@ def run_agent(agent: Dict[str, str], query: str, context: str, tone: str, peer_t
                                time.perf_counter() - started, "error", "local-engine", safe_error(exc), False, "error", False)
 
     cfg = PROVIDERS[agent["provider"]]
-    key = get_secret(cfg.key_names)
+    key = (credential or "").strip()
     errors: List[str] = []
 
-    # No key = zero provider network attempts.
+    # No credential reaches this worker as None/empty; therefore no network call.
     if key:
         prompt = make_prompt(agent, query, context, tone, peer_text)
         for model in get_models(cfg):
             try:
-                text = call_official(agent["provider"], prompt, model, REQUEST_TIMEOUT)
+                text = call_official(agent["provider"], prompt, model, REQUEST_TIMEOUT, credential=key)
                 return AgentResult(agent["id"], agent["name"], agent["role"], agent["provider"], clean_text(text), True,
                                    time.perf_counter() - started, "official", model, "", True, "official", False)
             except Exception as exc:
@@ -148,11 +149,29 @@ def run_agent(agent: Dict[str, str], query: str, context: str, tone: str, peer_t
                            time.perf_counter() - started, "error", "", safe_error(exc), False, "error", True)
 
 
-def run_parallel(agents: List[Dict[str, str]], query: str, history: List[dict], tone: str) -> List[AgentResult]:
+def collect_active_credentials() -> Dict[str, Optional[str]]:
+    """Read Streamlit secrets exactly once on the Streamlit script thread."""
+    active: Dict[str, Optional[str]] = {}
+    for provider_id, cfg in PROVIDERS.items():
+        active[provider_id] = get_secret(cfg.key_names)
+    return active
+
+
+def run_parallel(agents: List[Dict[str, str]], query: str, history: List[dict], tone: str,
+                 active_credentials: Optional[Dict[str, Optional[str]]] = None) -> List[AgentResult]:
     context = build_context(history)
+    # IMPORTANT: never call st.secrets from worker threads. Credentials are
+    # captured on the main Streamlit thread and passed as plain strings.
+    active_credentials = active_credentials or collect_active_credentials()
     results: List[AgentResult] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(agents))) as pool:
-        future_map = {pool.submit(run_agent, a, query, context, tone): a for a in agents}
+        future_map = {
+            pool.submit(
+                run_agent, a, query, context, tone,
+                active_credentials.get(a["provider"]),
+            ): a
+            for a in agents
+        }
         for future in concurrent.futures.as_completed(future_map):
             agent = future_map[future]
             try:
@@ -233,23 +252,23 @@ def export_json(query: str, results: List[AgentResult], moderator: Optional[Agen
 
 def render_result(r: AgentResult) -> None:
     if r.mode == "official":
-        source = f"🟢 رسمي — {html.escape(r.model_used)}"
+        source = f"🟢 رسمي — {r.model_used}"
     elif r.mode == "local-fallback":
         source = "🟡 احتياطي محلي"
     elif r.mode.startswith("local"):
         source = "🔵 محلي"
     else:
         source = "🔴 تعذر التشغيل"
+
     icon = next((a["icon"] for a in CORE_AGENTS + EXTRA_LOCAL_AGENTS if a["id"] == r.agent_id), "🤖")
-    body = html.escape(r.text).replace(chr(10), "<br>")
-    st.markdown(
-        f"<div class='card'><div class='title'>{icon} {html.escape(r.agent_name)}</div>"
-        f"<div class='meta'>{html.escape(r.role)} · {source} · {r.latency:.2f}s</div>"
-        f"<div class='body'>{body}</div></div>", unsafe_allow_html=True,
-    )
-    if r.error:
-        with st.expander("تفاصيل المسار"):
-            st.caption(r.error)
+    with st.container(border=True):
+        st.caption(f"{icon} **{r.agent_name}** | {r.role} · {source} · {r.latency:.2f}s")
+        # Preserve Markdown (lists, tables, code blocks, emphasis, etc.).
+        # Streamlit renders Markdown safely; do not HTML-escape model output.
+        st.markdown(r.text)
+        if r.error:
+            with st.expander("تفاصيل المسار"):
+                st.caption(r.error)
 
 
 def reset() -> None:
@@ -259,7 +278,7 @@ def reset() -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="AI Council V18", page_icon="🏛️", layout="centered", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="AI Council V19", page_icon="🏛️", layout="centered", initial_sidebar_state="collapsed")
     st.markdown(
         "<style>.block-container{max-width:1050px;padding:1rem .8rem 5rem}.hero{text-align:center}.truth,.card,.summary{border:1px solid rgba(128,128,128,.28);border-radius:16px;padding:15px;margin:10px 0;line-height:1.85}.title{font-weight:800;font-size:1.08rem}.meta{opacity:.65;font-size:.8rem;margin:.35rem 0 .8rem}.body{line-height:1.85}</style>",
         unsafe_allow_html=True,
@@ -273,15 +292,17 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    active_credentials = collect_active_credentials()
+
     with st.sidebar:
         st.header("⚙️ لوحة التحكم")
-        size = int(st.radio("حجم الغرفة", ["5", "10", "14"], index=0))
+        size = int(st.radio("حجم الغرفة", ["5", "10", "15"], index=0))
         tone = st.selectbox("النبرة", ["علمية دقيقة", "مباشرة وسريعة", "ودية", "نقدية صارمة"], index=0)
         mode = st.selectbox("النمط", ["موازٍ سريع", "نقاش محدود", "نقاش + حكم محلي"], index=0)
         st.divider()
         st.subheader("🔌 حالة الاعتمادات")
         for cfg in PROVIDERS.values():
-            if get_secret(cfg.key_names):
+            if active_credentials.get(cfg.provider_id):
                 st.success(f"{cfg.icon} {cfg.family}: اعتماد موجود")
             else:
                 st.info(f"{cfg.icon} {cfg.family}: بدون اعتماد → محلي")
@@ -293,7 +314,7 @@ def main() -> None:
     cols = st.columns(5)
     for col, agent in zip(cols, CORE_AGENTS):
         with col:
-            connected = bool(get_secret(PROVIDERS[agent["provider"]].key_names))
+            connected = bool(active_credentials.get(agent["provider"]))
             st.metric(agent["name"], "🟢 API" if connected else "🔵 Local", agent["role"])
     if size > 5:
         st.caption(f"المقاعد الإضافية ({size - 5}) محلية عمداً.")
@@ -311,7 +332,7 @@ def main() -> None:
         query = query.strip()
         st.session_state.messages.append({"role": "user", "sender": "أنت", "content": query})
         with st.status("⚡ تشغيل أعضاء الغرفة…", expanded=True) as status:
-            results = run_parallel(agents, query, st.session_state.messages[:-1], tone)
+            results = run_parallel(agents, query, st.session_state.messages[:-1], tone, active_credentials)
             status.update(label="اكتملت الجولة الأساسية", state="complete")
         if mode in ("نقاش محدود", "نقاش + حكم محلي"):
             results = run_debate(results, query, tone)
@@ -337,15 +358,12 @@ def main() -> None:
             combined += f"\n\nالحكم المحلي: {moderator.text}"
         st.session_state.messages.append({"role": "assistant", "sender": "المجلس", "content": combined})
 
-    if st.session_state.last_results and not query:
+    # Do not re-render last_results as cards here. The complete assistant turn
+    # is already persisted in st.session_state.messages and is rendered above.
+    # Re-rendering both paths caused duplicate cards after Streamlit reruns.
+    if st.session_state.last_results:
         result_objects = [AgentResult(**item) for item in st.session_state.last_results]
-        st.subheader("آخر جولة")
-        for result in result_objects:
-            render_result(result)
         moderator = AgentResult(**st.session_state.last_moderator) if st.session_state.last_moderator else None
-        if moderator:
-            st.markdown("### 🏛️ الحكم المحلي")
-            render_result(moderator)
         st.download_button(
             "⬇️ تصدير JSON Audit",
             export_json(st.session_state.last_query, result_objects, moderator, st.session_state.last_run_id or "round"),
