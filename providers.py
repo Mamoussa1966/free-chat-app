@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Optional official-provider layer.
+"""V19.4 optional official Provider layer.
 
-Invariant:
-    no credential -> no network request for that provider.
-    official failure -> caller can safely fall back to the local engine.
-
-This module never stores credentials and never exposes them to the UI.
+Truth contract:
+- No credential => no provider network call.
+- Successful authenticated provider response => official_api.
+- Provider failure after an attempted call is handled by main.py as local_fallback.
+- This module never claims that a local engine is a commercial model.
 """
 from __future__ import annotations
 
@@ -30,40 +30,36 @@ class ProviderConfig:
     endpoint: str
 
 
-# These are OFFICIAL API model IDs only. They are never used by local_engine.py.
-# They are deliberately configurable through *_MODEL(S) so a provider can be
-# updated without changing the application code.
 PROVIDERS: Dict[str, ProviderConfig] = {
     "openai": ProviderConfig(
-        "openai", "ChatGPT / OpenAI", "💬", ("OPENAI_API_KEY",),
-        "OPENAI_MODELS", ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
-        "openai_responses", "https://api.openai.com/v1/responses",
+        "openai", "ChatGPT / OpenAI", "💬", ("OPENAI_API_KEY",), "OPENAI_MODELS",
+        ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"),
+        "responses", "https://api.openai.com/v1/responses",
     ),
     "gemini": ProviderConfig(
-        "gemini", "Gemini / Google", "♊", ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-        "GEMINI_MODELS", ("gemini-3.7-flash", "gemini-3.6-flash"),
-        "gemini_generate_content", "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        "gemini", "Gemini / Google", "♊", ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "GEMINI_MODELS",
+        ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"),
+        "gemini_interactions", "https://generativelanguage.googleapis.com/v1beta/interactions",
     ),
     "anthropic": ProviderConfig(
-        "anthropic", "Claude / Anthropic", "🧠", ("ANTHROPIC_API_KEY",),
-        "ANTHROPIC_MODELS", ("claude-sonnet-5", "claude-sonnet-4-6"),
+        "anthropic", "Claude / Anthropic", "🧠", ("ANTHROPIC_API_KEY",), "ANTHROPIC_MODELS",
+        ("claude-sonnet-5", "claude-sonnet-4-6"),
         "anthropic_messages", "https://api.anthropic.com/v1/messages",
     ),
     "xai": ProviderConfig(
-        "xai", "Grok / xAI", "⚡", ("XAI_API_KEY",),
-        "XAI_MODELS", ("grok-4.6",),
-        "xai_responses", "https://api.x.ai/v1/responses",
+        "xai", "Grok / xAI", "⚡", ("XAI_API_KEY",), "XAI_MODELS",
+        ("grok-4.6",), "responses", "https://api.x.ai/v1/responses",
     ),
     "kimi": ProviderConfig(
-        "kimi", "Kimi / Moonshot AI", "🌙", ("MOONSHOT_API_KEY", "KIMI_API_KEY"),
-        "KIMI_MODELS", ("kimi-k3",),
+        "kimi", "Kimi / Moonshot AI", "🌙", ("MOONSHOT_API_KEY", "KIMI_API_KEY"), "KIMI_MODELS",
+        ("kimi-k3", "kimi-k2.7-code-highspeed", "kimi-k2.6"),
         "chat_completions", "https://api.moonshot.ai/v1/chat/completions",
     ),
 }
 
 
 class ProviderError(RuntimeError):
-    """Expected provider-layer failure; safe to sanitize and audit."""
+    """Expected, isolated provider failure."""
 
 
 def _streamlit_secret(name: str) -> Optional[str]:
@@ -76,7 +72,7 @@ def _streamlit_secret(name: str) -> Optional[str]:
 
 
 def get_secret(names: Iterable[str]) -> Optional[str]:
-    """Read server-side credentials only: Streamlit Secrets, then environment."""
+    """Resolve server-side credentials only; never expose them to the UI."""
     for name in names:
         value = _streamlit_secret(name)
         if value:
@@ -85,14 +81,6 @@ def get_secret(names: Iterable[str]) -> Optional[str]:
         if value:
             return value
     return None
-
-
-def has_credential(provider_id: str) -> bool:
-    return bool(get_secret(PROVIDERS[provider_id].key_names))
-
-
-def configured_provider_ids() -> Tuple[str, ...]:
-    return tuple(pid for pid in PROVIDERS if has_credential(pid))
 
 
 def get_models(cfg: ProviderConfig) -> Tuple[str, ...]:
@@ -106,42 +94,41 @@ def get_models(cfg: ProviderConfig) -> Tuple[str, ...]:
     return cfg.default_models
 
 
+def configured_provider_ids() -> Tuple[str, ...]:
+    return tuple(pid for pid, cfg in PROVIDERS.items() if get_secret(cfg.key_names))
+
+
+def _redact(text: str) -> str:
+    text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", text)
+    text = re.sub(r"(?i)(api[_ -]?key|x-api-key|authorization)\s*[:=]\s*[^\s,;]+", r"\1=[REDACTED]", text)
+    text = re.sub(r"(?i)(secret|token|password)\s*[:=]\s*[^\s,;]+", r"\1=[REDACTED]", text)
+    return text
+
+
 def safe_error(exc: Exception) -> str:
-    text = str(exc).replace("\n", " ").strip()
-    patterns = (
-        r"(?i)(authorization\s*[:=]\s*bearer)\s+[^\s,;]+",
-        r"(?i)(x-api-key\s*[:=])\s*[^\s,;]+",
-        r"(?i)(api[_ -]?key\s*[:=])\s*[^\s,;]+",
-        r"(?i)(bearer\s+)[^\s,;]+",
-    )
-    for pattern in patterns:
-        text = re.sub(pattern, r"\1[REDACTED]", text)
+    text = _redact(str(exc).replace("\n", " ").strip())
     return text[:700] or exc.__class__.__name__
 
 
 def _post(url: str, headers: dict, payload: dict, timeout: int, retries: int = 1) -> dict:
-    timeout = max(5, min(90, int(timeout)))
     last: Optional[Exception] = None
-    for attempt in range(max(0, retries) + 1):
+    for attempt in range(retries + 1):
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         except requests.RequestException as exc:
             last = ProviderError(f"network:{exc.__class__.__name__}")
             if attempt < retries:
-                time.sleep(0.25 * (attempt + 1))
+                time.sleep(0.35 * (attempt + 1))
                 continue
             raise last from exc
-
         if response.status_code >= 400:
-            body = safe_error(Exception(response.text[:600].replace("\n", " ")))
+            body = _redact(response.text[:600]).replace("\n", " ")
             last = ProviderError(f"HTTP {response.status_code}: {body}")
-            # Retry only conditions where a retry is plausibly useful.
             if response.status_code in {408, 409, 425, 429} or response.status_code >= 500:
                 if attempt < retries:
-                    time.sleep(0.25 * (attempt + 1))
+                    time.sleep(0.35 * (attempt + 1))
                     continue
             raise last
-
         try:
             data = response.json()
         except ValueError as exc:
@@ -149,11 +136,10 @@ def _post(url: str, headers: dict, payload: dict, timeout: int, retries: int = 1
         if not isinstance(data, dict):
             raise ProviderError("unexpected JSON response")
         return data
-
     raise last or ProviderError("provider request failed")
 
 
-def _openai_responses_text(data: dict) -> str:
+def _responses_text(data: dict) -> str:
     value = data.get("output_text")
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -167,25 +153,6 @@ def _openai_responses_text(data: dict) -> str:
     return "\n".join(chunks).strip()
 
 
-def _gemini_text(data: dict) -> str:
-    chunks = []
-    for candidate in data.get("candidates", []) or []:
-        if not isinstance(candidate, dict):
-            continue
-        content = candidate.get("content") or {}
-        for part in content.get("parts", []) or []:
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                chunks.append(part["text"])
-    return "\n".join(chunks).strip()
-
-
-def _anthropic_text(data: dict) -> str:
-    return "\n".join(
-        item.get("text", "") for item in (data.get("content") or [])
-        if isinstance(item, dict) and isinstance(item.get("text"), str)
-    ).strip()
-
-
 def _chat_text(data: dict) -> str:
     choices = data.get("choices") or []
     if not choices or not isinstance(choices[0], dict):
@@ -194,43 +161,63 @@ def _chat_text(data: dict) -> str:
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
-        return "\n".join(
-            item.get("text", "") for item in content
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
-        ).strip()
+        return "\n".join(x.get("text", "") for x in content if isinstance(x, dict) and isinstance(x.get("text"), str)).strip()
     return ""
 
 
-def call_official(provider_id: str, prompt: str, model: str, timeout: int = 35, credential: Optional[str] = None) -> str:
-    """Perform exactly one authenticated official request.
+def _gemini_interaction_text(data: dict) -> str:
+    if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+        return data["output_text"].strip()
+    chunks = []
+    for item in data.get("output", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("text"), str):
+            chunks.append(item["text"])
+        for content in item.get("content", []) or []:
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                chunks.append(content["text"])
+    for step in data.get("steps", []) or []:
+        if not isinstance(step, dict) or step.get("type") != "model_output":
+            continue
+        for item in step.get("content", []) or []:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                chunks.append(item["text"])
+    return "\n".join(chunks).strip()
 
-    The caller owns fallback behavior. No credential means no network call.
-    """
+
+def _anthropic_text(data: dict) -> str:
+    return "\n".join(
+        item.get("text", "") for item in data.get("content", []) or []
+        if isinstance(item, dict) and isinstance(item.get("text"), str)
+    ).strip()
+
+
+def call_official(provider_id: str, prompt: str, model: str, timeout: int = 35, credential: Optional[str] = None) -> str:
+    """Perform one official authenticated request using the supplied credential."""
     if provider_id not in PROVIDERS:
         raise ProviderError("unknown provider")
     cfg = PROVIDERS[provider_id]
-    # Credential must be supplied by the Streamlit main thread. This keeps
-    # st.secrets access out of worker threads.
-    key = (credential or "").strip()
+    key = (credential or "").strip() if credential is not None else get_secret(cfg.key_names)
     if not key:
         raise ProviderError("no official credential configured")
 
-    if cfg.kind == "openai_responses":
+    if cfg.kind == "responses":
         data = _post(
             cfg.endpoint,
             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             {"model": model, "input": prompt, "max_output_tokens": 1400, "store": False},
             timeout,
         )
-        text = _openai_responses_text(data)
-    elif cfg.kind == "gemini_generate_content":
+        text = _responses_text(data)
+    elif cfg.kind == "gemini_interactions":
         data = _post(
-            cfg.endpoint.format(model=model),
+            cfg.endpoint,
             {"x-goog-api-key": key, "Content-Type": "application/json"},
-            {"contents": [{"role": "user", "parts": [{"text": prompt}]}]},
+            {"model": model, "input": prompt, "store": False},
             timeout,
         )
-        text = _gemini_text(data)
+        text = _gemini_interaction_text(data)
     elif cfg.kind == "anthropic_messages":
         data = _post(
             cfg.endpoint,
@@ -239,14 +226,6 @@ def call_official(provider_id: str, prompt: str, model: str, timeout: int = 35, 
             timeout,
         )
         text = _anthropic_text(data)
-    elif cfg.kind == "xai_responses":
-        data = _post(
-            cfg.endpoint,
-            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            {"model": model, "input": prompt, "max_output_tokens": 1400},
-            timeout,
-        )
-        text = _openai_responses_text(data)
     elif cfg.kind == "chat_completions":
         data = _post(
             cfg.endpoint,
