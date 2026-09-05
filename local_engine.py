@@ -1,94 +1,97 @@
 # -*- coding: utf-8 -*-
-"""Deterministic, dependency-free local fallback.
+"""Dependency-free local engine.
 
-This is intentionally NOT an LLM. It never impersonates ChatGPT, Gemini,
-Claude, Grok, or Kimi. Its job is continuity: the room remains usable when
-no official provider is configured or when an official provider fails.
+It is intentionally heuristic/deterministic. It is NOT ChatGPT, Gemini,
+Claude, Grok, or Kimi and never claims to be one of them.
 """
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import List
 
 
-def _clean(value: object, limit: int = 4500) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip())[:limit]
+def _clean(value: str, limit: int = 2600) -> str:
+    return (value or "").strip()[:limit].strip()
 
 
-def _keywords(text: str) -> List[str]:
-    words = re.findall(r"[\w\u0600-\u06FF]{4,}", (text or "").lower())
-    seen: List[str] = []
+def _sentences(text: str, limit: int = 4) -> List[str]:
+    parts = re.split(r"(?<=[.!؟])\s+|\n+", _clean(text))
+    return [p.strip(" -•") for p in parts if p.strip()][:limit]
+
+
+def _keywords(query: str) -> List[str]:
+    words = re.findall(r"[\u0600-\u06FFA-Za-z0-9_]{4,}", query)
+    stop = {"كيف", "يمكن", "ماهو", "ماذا", "الذي", "التي", "هذا", "هذه", "ذلك", "هناك", "على", "إلى", "من", "في", "عن", "مع", "هل", "أريد", "اريد", "لدي", "لدينا", "بشكل", "لذلك", "عندما", "أجل", "حول"}
+    out = []
     for word in words:
-        if word not in seen:
-            seen.append(word)
-    return seen[:12]
+        if word.lower() not in stop and word not in out:
+            out.append(word)
+    return out[:8]
 
 
-def _simple_social(query: str) -> Optional[str]:
-    q = re.sub(r"[\s\.,!?؟،؛:]+", " ", (query or "").strip().lower()).strip()
-    if q in {"hello", "hi", "hey", "سلام", "السلام عليكم", "اهلا", "أهلا", "أهلًا", "مرحبا", "مرحبًا"}:
-        return "مرحبًا 👋 جاهز للمشاركة في الجولة."
-    if q in {"شكرا", "شكرًا", "thanks", "thank you"}:
-        return "على الرحب والسعة. جاهز للجولة التالية."
-    if q in {"مع السلامة", "الى اللقاء", "إلى اللقاء", "bye", "goodbye"}:
-        return "مع السلامة 👋"
-    return None
+def _question_type(query: str) -> str:
+    q = query.strip()
+    if "؟" in q or re.search(r"\b(هل|كيف|لماذا|متى|ما|أي|كم)\b", q):
+        if re.search(r"\b(كيف|خطة|خطوات|تنفيذ|تطبيق)\b", q):
+            return "سؤال إجرائي/تنفيذي"
+        if re.search(r"\b(لماذا|سبب|أسباب)\b", q):
+            return "سؤال سببي/تشخيصي"
+        return "سؤال تحليلي/استفهامي"
+    return "طلب مفتوح يحتاج تحديد هدف ومعايير نجاح"
 
 
-def generate_local(
-    agent_id: str,
-    role: str,
-    instruction: str,
-    query: str,
-    context: str = "",
-    tone: str = "علمية دقيقة",
-    peer_text: str = "",
-) -> str:
-    social = _simple_social(query)
-    if social:
-        return social + "\nالمصدر: Local Engine؛ ليس نموذجًا تجاريًا أصليًا."
-
-    q = _clean(query, 3500)
-    c = _clean(context, 1800)
-    peers = _clean(peer_text, 5000)
+def generate_local(agent_id: str, role: str, instruction: str, query: str, context: str = "", tone: str = "علمية دقيقة", peer_text: str = "") -> str:
+    q = _clean(query, 3200)
+    ctx = _sentences(context, 3)
+    peers = _sentences(peer_text, 3)
     keys = _keywords(q)
-    focus = ", ".join(keys) if keys else "الهدف والقيود والمخاطر"
+    qtype = _question_type(q)
+    key_text = "، ".join(keys) if keys else "الموضوع المطروح"
 
-    if agent_id in {"quality", "moderator_local"} or "الحكم" in role:
-        return (
-            "الخلاصة من Local Engine: افصل الحقائق عن الافتراضات، وقارن البدائل وفق الهدف والقيود، "
-            "وسجّل مواطن عدم اليقين.\n\n"
-            f"نقاط التركيز: {focus}.\n"
-            "معيار القبول: نتيجة واضحة، قابلة للتنفيذ، وقابلة للمراجعة.\n"
-            + (f"المادة التي تمت مراجعتها: {peers}\n" if peers else "")
-            + "المصدر: Local Engine؛ ليست نتيجة من ChatGPT/Gemini/Claude/Grok/Kimi الأصلي."
-        )
-    if agent_id == "devils_advocate" or agent_id == "bounded_critique":
-        return (
-            "اعتراض/مراجعة محلية: اختبر الافتراضات، ابحث عن حالة فشل، وحدد الادعاء الذي يحتاج دليلاً مستقلًا.\n"
-            f"محور المراجعة: {focus}."
-        )
-    if agent_id == "security":
-        return "مراجعة أمان محلية: لا تسجل الأسرار، افصلها عن الواجهة، قلّل البيانات المرسلة للمزودات، واعزل فشل كل مزود عن بقية الغرفة."
-    if agent_id == "planner":
-        return "خطة محلية: عرّف النتيجة، اجمع المدخلات، نفّذ أصغر خطوة قابلة للاختبار، اختبر الفشل، ثم راجع النتيجة."
-    if agent_id == "factcheck":
-        return "مراجعة حقائق محلية: صنّف كل ادعاء إلى حقيقة أو استنتاج أو افتراض. لا يوجد بحث ويب في هذا المحرك."
-    if agent_id == "engineering":
-        return "مراجعة هندسية محلية: حافظ على فصل Provider/Local، وعزل الأعطال، والمهلات الزمنية، وAudit Metadata الصريح."
-    if agent_id == "economics":
-        return "مراجعة تكلفة محلية: افصل تكلفة API عن المسار المحلي، وراقب الطلبات والحصص، ولا تجعل API شرطًا للوظيفة الأساسية."
-    if agent_id == "ux":
-        return "مراجعة تجربة محلية: أظهر مصدر كل رد بوضوح، وميّز الرسمي عن المحلي دون عرض الأسرار."
-    if agent_id == "minimalist":
-        return "الحل الأبسط: اجعل المسار المحلي هو أساس الاستمرارية، واجعل المزود الرسمي إضافة اختيارية لا توقف الغرفة عند فشلها."
+    actions = {
+        "analysis": "افصل الهدف عن القيود، ثم قارن البدائل قبل إصدار الحكم.",
+        "reasoning": "اختبر الافتراضات والعلاقات السببية وابحث عن القفزات المنطقية.",
+        "critic": "ابحث عن نقاط الضعف والأدلة الناقصة والاستنتاجات التي تتجاوز المعطيات.",
+        "risk": "حدد نقاط الفشل المحتملة واحتمالها وأثرها وإجراء التخفيف.",
+        "synthesis": "حوّل النتائج إلى قرار مختصر مع أولويات ومعيار نجاح قابل للفحص.",
+        "factcheck": "افصل الحقائق القابلة للتحقق عن الآراء والافتراضات التي تحتاج مصدراً.",
+        "planner": "حوّل الهدف إلى مراحل صغيرة مرتبة مع مخرجات قبول لكل مرحلة.",
+        "security": "افحص الأسرار والصلاحيات وحدود الثقة وسلوك النظام عند الفشل.",
+        "engineering": "راجع الاعتمادية والصيانة والاختبارات والتوسع قبل التنفيذ.",
+        "economics": "وازن القيمة مقابل الموارد والزمن والتكلفة ومخاطر الاعتماد الخارجي.",
+        "ux": "ابحث عن نقاط الالتباس والاحتكاك وما يحتاجه المستخدم كي ينجح من أول محاولة.",
+        "devils_advocate": "ابنِ أقوى حجة معاكسة للنتيجة الحالية ثم اختبر صمودها.",
+        "minimalist": "ابحث عن أقل حل يحقق الهدف بأمان دون تعقيد غير ضروري.",
+        "quality": "حوّل المطلوب إلى معايير قبول واختبارات قابلة للملاحظة.",
+        "compliance": "حدد المتطلبات التنظيمية المحتملة وما يحتاج مراجعة قانونية متخصصة.",
+    }
+    action = actions.get(agent_id, instruction)
 
-    return (
-        f"تحليل محلي — الدور: {role}.\n"
-        f"منهج الدور: {instruction}\n"
-        f"النبرة: {tone}\n"
-        f"السؤال يركز على: {focus}.\n"
-        f"السياق المتاح: {c or '(لا يوجد)'}\n"
-        "ابدأ بتحديد المطلوب، ثم قارن الخيارات والمخاطر قبل التوصية.\n"
-        "المصدر: Local Engine؛ ليست النتيجة من نموذج تجاري أصلي."
-    )
+    sections = [
+        f"### {role} — تحليل محلي مستقل",
+        f"**السؤال:** {q}",
+        f"**نوع الطلب:** {qtype}",
+        f"**المحاور البارزة:** {key_text}",
+        "",
+        f"**منهج الدور:** {action}",
+        "",
+        "**النتيجة الأولية:**",
+        "المعالجة محلية ومبنية على السؤال والدور والسياق المتاح. لا تُنسب هذه النتيجة إلى نموذج تجاري أو مزود خارجي.",
+    ]
+    if ctx:
+        sections += ["", "**السياق المؤثر:**"] + [f"- {x}" for x in ctx]
+    else:
+        sections += ["", "**السياق المؤثر:** لا يوجد سياق سابق كافٍ؛ لذلك لا أفترض معلومات غير مذكورة."]
+    if peers:
+        sections += ["", "**مراجعة أولية لآراء الزملاء:**"] + [f"- {x}" for x in peers]
+        sections.append("نقطة تدقيق: اتفاق الأعضاء ليس دليلاً مستقلاً، ويجب فحص الافتراضات المشتركة.")
+    sections += [
+        "",
+        "**خطوة عملية مقترحة:**",
+        "1. تحديد معيار نجاح واضح.",
+        "2. اختبار أهم افتراض أو مخاطرة أولاً.",
+        "3. مقارنة النتيجة بالمعيار قبل اعتماد القرار.",
+        "",
+        "> **المصدر:** Local Engine — محرك محلي مستقل؛ ليس ChatGPT أو Gemini أو Claude أو Grok أو Kimi الأصلي.",
+    ]
+    return "\n".join(sections)
