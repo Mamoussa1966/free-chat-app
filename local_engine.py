@@ -1,43 +1,65 @@
+# -*- coding: utf-8 -*-
+"""Deterministic, dependency-free local fallback.
+
+This is intentionally NOT an LLM and does not impersonate ChatGPT, Gemini,
+Claude, Grok, or Kimi. It provides resilient role-based analysis so the room
+remains usable when official providers are unavailable.
+"""
 from __future__ import annotations
 
 import re
-from typing import Dict, List
+from typing import List
 
 
-def topic_tokens(text: str) -> List[str]:
-    words = re.findall(r"[\w\u0600-\u06FF]+", text.lower(), flags=re.UNICODE)
-    stop = {
-        "من", "في", "على", "عن", "إلى", "الى", "ما", "ماذا", "كيف", "هل", "هو", "هي",
-        "هذا", "هذه", "ذلك", "تلك", "مع", "و", "أو", "أن", "إن", "the", "a", "an",
-        "is", "are", "to", "of", "in", "on", "for", "and", "or", "how", "what", "why",
-    }
-    return [w for w in words if len(w) > 1 and w not in stop][:12]
+def _keywords(text: str) -> List[str]:
+    words = re.findall(r"[\w\u0600-\u06FF]{4,}", (text or "").lower())
+    seen = []
+    for word in words:
+        if word not in seen:
+            seen.append(word)
+    return seen[:12]
 
 
-def is_greeting(text: str) -> bool:
-    compact = re.sub(r"[^a-zA-Zأ-يء-ى\s]", "", text.lower()).strip()
-    return compact in {
-        "hello", "hi", "hey", "مرحبا", "مرحباً", "اهلا", "أهلا", "أهلاً",
-        "السلام عليكم", "السلام عليكم ورحمة الله وبركاته", "صباح الخير", "مساء الخير",
-    }
+def generate_local(
+    agent_id: str,
+    role: str,
+    instruction: str,
+    query: str,
+    context: str = "",
+    tone: str = "علمية دقيقة",
+    peer_text: str = "",
+) -> str:
+    keys = _keywords(query)
+    focus = ", ".join(keys) if keys else "الهدف والقيود والمخاطر"
 
+    if agent_id in {"quality", "moderator_local"} or "الحكم" in role:
+        return (
+            "الخلاصة من Local Engine: افصل الحقائق عن الافتراضات، قارن البدائل وفق الهدف والقيود، "
+            "وسجّل مواطن عدم اليقين.\n\n"
+            f"نقاط التركيز: {focus}.\n"
+            "معيار القبول: نتيجة واضحة، قابلة للتنفيذ، وقابلة للمراجعة.\n"
+            "مصدر هذه النتيجة: Local Engine؛ وليست من نموذج تجاري أصلي."
+        )
+    if agent_id == "devils_advocate":
+        return "اعتراض محلي: اختبر الافتراضات، ابحث عن حالة فشل، وحدد الدليل الذي يمكن أن يغيّر النتيجة."
+    if agent_id == "security":
+        return "مراجعة أمان محلية: لا تسجل الأسرار، افصلها عن الواجهة، قلّل البيانات المرسلة للمزودات، واعزل فشل كل مزود عن بقية الغرفة."
+    if agent_id == "planner":
+        return "خطة محلية: عرّف النتيجة، اجمع المدخلات، نفّذ أصغر خطوة قابلة للاختبار، اختبر الفشل، ثم راجع النتيجة."
+    if agent_id == "factcheck":
+        return "مراجعة حقائق محلية: صنّف كل ادعاء إلى حقيقة أو استنتاج أو افتراض. لا يوجد بحث ويب في هذا المحرك."
+    if agent_id == "engineering":
+        return "مراجعة هندسية محلية: حافظ على فصل Provider/Local، عزل الأعطال، حدود زمنية، واختبارات Audit Metadata."
+    if agent_id == "economics":
+        return "مراجعة تكلفة محلية: افصل تكلفة API عن المسار المحلي، راقب الطلبات والحصص، ولا تجعل API شرطاً للوظيفة الأساسية."
+    if agent_id == "ux":
+        return "مراجعة تجربة محلية: أظهر مصدر كل رد بوضوح، وميّز الرسمي عن المحلي دون عرض الأسرار."
+    if agent_id == "minimalist":
+        return "الحل الأبسط: شغّل المسار الأساسي محلياً، واجعل المزود الرسمي إضافة اختيارية لا توقف الغرفة عند فشلها."
 
-def generate_local(agent: Dict[str, str], query: str, context: str, tone: str) -> str:
-    if is_greeting(query):
-        return f"أهلاً بك. أنا {agent['name']} في الدور المحلي: {agent['role']}. جاهز للعمل مع المجلس."
-
-    tokens = "، ".join(topic_tokens(query)) or query[:180]
-    ctx = " توجد ملاحظات سابقة في الجلسة؛ سأستخدمها كسياق لا كحقيقة مؤكدة." if context else ""
-    base = f"السؤال: «{query}». المحاور الظاهرة: {tokens}."
-    role = agent["instruction"]
-    if agent["id"] == "analysis":
-        extra = " افصل بين الحقائق والافتراضات، وحدد معيار القرار قبل التوصية."
-    elif agent["id"] == "reasoning":
-        extra = " اختبر الفرضيات، واذكر ما الذي يجعل الاستنتاج مشروطاً أو غير يقيني."
-    elif agent["id"] == "critic":
-        extra = " ابحث عن الثغرات، واسأل ما الدليل وما الذي قد يغيّر الحكم."
-    elif agent["id"] == "risk":
-        extra = " حدد نقاط الفشل والتأثير وخطة رجوع منخفضة التكلفة."
-    else:
-        extra = " حوّل أفضل النقاط إلى خطوات تنفيذية مرتبة وقابلة للقياس."
-    return f"{base} {role}{extra} النبرة المطلوبة: {tone}.{ctx}"
+    return (
+        f"تحليل محلي — الدور: {role}. {instruction}\n"
+        f"السؤال يركز على: {focus}.\n"
+        "ابدأ بتحديد المطلوب، ثم قارن الخيارات والمخاطر قبل التوصية.\n"
+        "مصدر هذه النتيجة: Local Engine؛ وليست ChatGPT/Gemini/Claude/Grok/Kimi الأصلي."
+    )
