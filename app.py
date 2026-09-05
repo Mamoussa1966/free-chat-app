@@ -1,271 +1,223 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import html
 import os
 import re
-import json
 import time
-import hashlib
-import concurrent.futures
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
-
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
 import requests
 import streamlit as st
 
-APP_VERSION = "V6-FREE-COUNCIL"
-MAX_HISTORY_MESSAGES = 20
-MAX_CONTEXT_CHARS = 12000
-REMOTE_TIMEOUT = 18
-MAX_OUTPUT_CHARS = 5000
+APP_VERSION = "V6.1-FREE-ONLY-FINAL"
+REQUEST_TIMEOUT = 8
+MAX_INPUT = 2500
 
-# No API keys, no st.secrets, no environment credentials.
-# The remote route is opportunistic only. If it requires authentication or fails,
-# the application automatically switches to the built-in offline engine.
-FREE_ROUTES = [
-    {"id": "free-openai", "family": "OpenAI-style", "label": "وكيل التحليل العام", "model": "openai"},
-    {"id": "free-gemini", "family": "Gemini-style", "label": "وكيل الاستدلال", "model": "gemini"},
-    {"id": "free-claude", "family": "Claude-style", "label": "وكيل النقد والمنهج", "model": "claude"},
-    {"id": "free-grok", "family": "Grok-style", "label": "وكيل البدائل والمخاطر", "model": "grok"},
-    {"id": "free-kimi", "family": "Kimi-style", "label": "وكيل التركيب والخلاصة", "model": "kimi"},
-]
+st.set_page_config(page_title="AI Council — الغرفة الخماسية", page_icon="🧠", layout="wide")
 
-
-def clean_text(text: str) -> str:
-    text = re.sub(r"\s+", " ", (text or "")).strip()
-    return text[:MAX_OUTPUT_CHARS]
-
-
-def stable_id(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-class InputGuard:
-    @staticmethod
-    def inspect(query: str) -> Tuple[bool, str]:
-        q = (query or "").strip()
-        if not q:
-            return False, "اكتب السؤال أولاً."
-        if len(q) < 3:
-            return False, "السؤال قصير جداً."
-        if len(q) > 5000:
-            return False, "الحد الأقصى للسؤال 5000 حرف."
-        return True, ""
-
-
-class ContextManager:
-    @staticmethod
-    def build(history: List[dict], limit: int = 8) -> str:
-        rows = []
-        for item in history[-limit:]:
-            sender = clean_text(str(item.get("sender", "")))
-            content = clean_text(str(item.get("content", item.get("content_ar", ""))))
-            if content:
-                rows.append(f"{sender}: {content}")
-        context = "\n".join(rows)
-        return context[-MAX_CONTEXT_CHARS:]
-
-
-class FreeRemote:
-    """Best-effort unauthenticated legacy/free route. Never requires a key."""
-
-    BASE = "https://text.pollinations.ai"
-
-    @classmethod
-    def call(cls, route: dict, prompt: str) -> Tuple[bool, str, str]:
-        try:
-            url = f"{cls.BASE}/{quote(prompt, safe='')}"
-            response = requests.get(
-                url,
-                params={"model": route["model"], "temperature": 0.35},
-                timeout=REMOTE_TIMEOUT,
-                headers={"User-Agent": "AI-Council-Free/6.0"},
-            )
-            if response.status_code != 200:
-                return False, "", f"HTTP {response.status_code}"
-            text = clean_text(response.text)
-            if not text:
-                return False, "", "empty response"
-            return True, text, "remote-free-route"
-        except requests.RequestException as exc:
-            return False, "", type(exc).__name__
-        except Exception as exc:
-            return False, "", type(exc).__name__
-
-
-class LocalCouncilEngine:
-    """Deterministic offline fallback: always works without network/API credentials."""
-
-    @staticmethod
-    def tokenize(text: str) -> List[str]:
-        return [x for x in re.findall(r"[\w\u0600-\u06FF]+", text.lower()) if len(x) > 2]
-
-    @classmethod
-    def generate(cls, route: dict, query: str, context: str) -> str:
-        words = cls.tokenize(query)
-        focus = "، ".join(words[:8]) if words else "جوهر السؤال"
-        q = query.strip()
-        family = route["family"]
-        role = route["label"]
-
-        templates = {
-            "free-openai": (
-                f"أتعامل مع السؤال من زاوية التحليل العام. جوهر المسألة يدور حول: {focus}. "
-                f"أولاً نحدد الهدف والقيود، ثم نفصل الحقائق عن الافتراضات، ثم نقارن البدائل وفق معيار واضح. "
-                f"الاستنتاج الأولي: لا ينبغي اختيار حل لمجرد أنه يبدو أسرع؛ يجب قياس قابلية التنفيذ والمخاطر والاعتمادية. "
-                f"السؤال محل التقييم: {q}"
-            ),
-            "free-gemini": (
-                f"من منظور الاستدلال المنظم، أبدأ بتفكيك السؤال إلى فرضيات قابلة للاختبار: {focus}. "
-                f"إذا كانت إحدى الفرضيات غير مؤكدة، فالأفضل وضعها كشرط بدلاً من بناء النتيجة عليها. "
-                f"أفضل مسار هو: تعريف المشكلة، تحديد الأدلة، اختبار البدائل، ثم اتخاذ قرار مع خطة رجوع عند الفشل."
-            ),
-            "free-claude": (
-                f"النقطة الحرجة منهجياً هي التمييز بين الادعاء والدليل في موضوع: {focus}. "
-                f"أبحث عن التناقضات، حالات الفشل، والافتراضات المخفية. أي حل قوي يجب أن يوضح ما الذي يعرفه، "
-                f"وما الذي لا يعرفه، وما الاختبار الذي يمكن أن يثبت أو ينفي النتيجة."
-            ),
-            "free-grok": (
-                f"أفحص البدائل والمخاطر العملية المتعلقة بـ {focus}. "
-                f"السيناريو المتفائل وحده لا يكفي؛ نحتاج إلى سيناريو فشل، نقطة اختناق، وخطة بديلة. "
-                f"إذا كان الخيار المقترح يعتمد على خدمة خارجية، فيجب أن يكون هناك fallback حتى لا تتوقف الغرفة بالكامل."
-            ),
-            "free-kimi": (
-                f"أجمع النقاط السابقة في مسار تنفيذي مختصر حول {focus}: حدد الهدف، رتب الأولويات، "
-                f"اختبر أقل حل قابل للتشغيل، ثم وسّع النظام بعد نجاح الاختبار. "
-                f"القرار الأفضل ليس بالضرورة الأكثر تعقيداً، بل الأكثر وضوحاً وقابلية للقياس والتراجع."
-            ),
-        }
-        answer = templates.get(route["id"], "تحليل مستقل للسؤال.")
-        if context:
-            answer += "\n\nالسياق السابق أُخذ في الاعتبار، لكن لم يُسمح له بتجاوز السؤال الحالي."
-        return clean_text(answer)
-
+AGENTS: Dict[str, Dict[str, str]] = {
+    "ChatGPT": {"icon": "💬", "role": "التحليل العام"},
+    "Gemini": {"icon": "♊", "role": "الاستدلال والتنظيم"},
+    "Claude": {"icon": "🧠", "role": "النقد والمنهج"},
+    "Grok": {"icon": "🏴‍☠️", "role": "البدائل والمخاطر"},
+    "Kimi": {"icon": "🥝", "role": "التركيب والخلاصة"},
+}
 
 @dataclass
 class AgentResult:
-    agent_id: str
-    label: str
-    family: str
-    model: str
+    name: str
+    role: str
     text: str
-    success: bool
     latency: float
-    source: str
-    error: Optional[str] = None
+    source: str = "local-role-engine"
+    success: bool = True
 
+def clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())
 
-class Council:
-    @staticmethod
-    def prompt(route: dict, query: str, context: str, tone: str) -> str:
-        return (
-            "أنت وكيل مستقل داخل مجلس ذكاء اصطناعي. "
-            f"دورك: {route['label']}. النبرة: {tone}.\n"
-            "أجب بالعربية بوضوح، ولا تدّعِ أنك استخدمت أدوات أو مصادر لم تستخدمها.\n"
-            f"السؤال: {query}\n"
-            f"السياق السابق: {context or 'لا يوجد'}\n"
-            "قدّم تحليلاً عملياً مركزاً مع نقاط قوة وضعف ومقترح قابل للتنفيذ."
-        )
-
-    @classmethod
-    def run_one(cls, route: dict, query: str, context: str, tone: str, allow_remote: bool) -> AgentResult:
-        start = time.perf_counter()
-        prompt = cls.prompt(route, query, context, tone)
-        if allow_remote:
-            ok, text, source = FreeRemote.call(route, prompt)
-            if ok:
-                return AgentResult(route["id"], route["label"], route["family"], route["model"], text, True,
-                                   time.perf_counter() - start, source)
-        text = LocalCouncilEngine.generate(route, query, context)
-        return AgentResult(route["id"], route["label"], route["family"], route["model"], text, True,
-                           time.perf_counter() - start, "offline-fallback",
-                           None if not allow_remote else "remote route unavailable")
-
-    @classmethod
-    def run(cls, query: str, history: List[dict], tone: str, allow_remote: bool) -> List[AgentResult]:
-        context = ContextManager.build(history)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-            futures = [pool.submit(cls.run_one, r, query, context, tone, allow_remote) for r in FREE_ROUTES]
-            return [f.result() for f in futures]
-
-
-def build_consensus(results: List[AgentResult], query: str) -> str:
-    successful = [r for r in results if r.success]
-    if not successful:
-        return "لم ينتج أي وكيل نتيجة."
-    lines = [
-        "### 🏆 خلاصة المجلس",
-        f"**السؤال:** {query}",
-        "",
-        "**نقاط الاتفاق:** التركيز على تعريف الهدف، اختبار الافتراضات، قياس المخاطر، ووجود مسار رجوع عند الفشل.",
-        "",
-        "**التباين:** تختلف الزوايا بين التحليل العام، الاستدلال، النقد، إدارة المخاطر، والتركيب التنفيذي.",
-        "",
-        "**القرار العملي:** ابدأ بأصغر تجربة قابلة للقياس، ثم وسّع الحل بعد نجاحها؛ لا تعتمد على مسار خارجي واحد.",
+def is_greeting(text: str) -> bool:
+    t = clean_text(text).lower()
+    patterns = [
+        r"\bgood\s+morning\b", r"\bgood\s+evening\b",
+        r"\bgood\s+afternoon\b", r"\bhello\b", r"\bhi\b", r"\bhey\b",
+        r"صباح\s+الخير", r"مساء\s+الخير", r"السلام\s+عليكم",
+        r"مرحبا", r"مرحباً", r"اهلا", r"أهلا", r"هاي",
     ]
+    return any(re.search(p, t, re.I) for p in patterns)
+
+def greeting_reply(name: str) -> str:
+    replies = {
+        "ChatGPT": "صباح الخير! 👋 سعيد بوجودك. اكتب ما تريد مناقشته وسأساعدك في تنظيم الفكرة وتحليلها.",
+        "Gemini": "صباح النور! ☀️ جاهز لترتيب الموضوع إلى نقاط واضحة ومقارنة الخيارات.",
+        "Claude": "صباح الخير 🌷 جاهز لمراجعة الفكرة بهدوء والتنبيه إلى الافتراضات والنقاط التي تحتاج تدقيقاً.",
+        "Grok": "صباح النور! 🚀 أعطني الموضوع مباشرة وسأركز على البدائل والمخاطر والنقاط العملية.",
+        "Kimi": "صباح الخير! 🥝 أعطني التفاصيل وسأجمع زوايا المجلس في خلاصة عملية.",
+    }
+    return replies[name]
+
+def local_role_response(name: str, user_text: str) -> str:
+    t = clean_text(user_text)
+    role = AGENTS[name]["role"]
+    if is_greeting(t):
+        return greeting_reply(name)
+    if len(t) < 12:
+        return f"أنا وكيل {role}. أحتاج تفاصيل إضافية قليلة حتى أقدم رأياً مفيداً بدلاً من التخمين."
+    if name == "ChatGPT":
+        return f"من زاوية {role}: أحدد الهدف والقيود والنتيجة المطلوبة في «{t[:320]}»، ثم أقترح مساراً عملياً قابلاً للاختبار."
+    if name == "Gemini":
+        return f"من زاوية {role}: أقسم «{t[:320]}» إلى معطيات مؤكدة، نقاط تحتاج تحققاً، ثم خيارات تنفيذ مرتبة."
+    if name == "Claude":
+        return f"من زاوية {role}: أراجع الافتراضات في «{t[:320]}»، وأفصل الحقائق عن الفرضيات وأشير إلى نقاط الفشل المحتملة."
+    if name == "Grok":
+        return f"من زاوية {role}: أبحث عن أقصر مسار عملي في «{t[:320]}» مع إبراز المخاطر والبدائل وخطة التعامل مع الفشل."
+    return f"من زاوية {role}: أجمع زوايا «{t[:320]}» في قرار وخطوات تنفيذ، مع عدم اعتبار أي ادعاء خارجي مؤكداً قبل التحقق."
+
+def synthesize(results: List[AgentResult], user_text: str) -> str:
+    if is_greeting(user_text):
+        return (
+            "### 👋 المجلس جاهز\n\n"
+            "هذه الغرفة تعمل بدون مفاتيح API. الوكلاء الخمسة هنا أدوار محلية مستقلة، "
+            "وليست نسخاً أصلية من نماذج الشركات. اكتب سؤالك أو المهمة وسأجمع زواياهم."
+        )
+    lines = [
+        "### 🏛️ خلاصة المجلس",
+        f"**الموضوع:** {clean_text(user_text)[:500]}",
+        "",
+        "**النتيجة:** افصل الحقائق المؤكدة عن الافتراضات، ثم ابدأ بأصغر اختبار عملي قابل للقياس.",
+        "",
+        "**زوايا الوكلاء:**",
+    ]
+    for r in results:
+        lines.append(f"- **{r.name} — {r.role}:** {clean_text(r.text)[:360]}")
+    lines.append("")
+    lines.append("**الخطوة المقترحة:** نفّذ اختباراً صغيراً، سجّل النتيجة، ثم وسّع الحل بعد التحقق.")
     return "\n".join(lines)
 
+def external_best_effort(prompt: str) -> Tuple[str, str]:
+    endpoint = os.getenv("FREE_COUNCIL_PUBLIC_ENDPOINT", "").strip()
+    if not endpoint:
+        return "", "disabled"
+    try:
+        r = requests.post(endpoint, json={"prompt": prompt}, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        if "application/json" in r.headers.get("content-type", ""):
+            data = r.json()
+            text = ""
+            if isinstance(data, dict):
+                text = data.get("text") or data.get("response") or data.get("content") or ""
+            else:
+                text = str(data)
+        else:
+            text = r.text
+        text = clean_text(text)
+        return (text[:5000], "public-network-best-effort") if text else ("", "empty")
+    except Exception:
+        return "", "network-error"
 
-def init_state() -> None:
-    st.session_state.setdefault("chat_history", [])
-    st.session_state.setdefault("last_results", [])
-    st.session_state.setdefault("last_consensus", "")
-    st.session_state.setdefault("allow_remote", True)
+def run_council(user_text: str, use_external: bool) -> List[AgentResult]:
+    out = []
+    for name, meta in AGENTS.items():
+        started = time.perf_counter()
+        text = local_role_response(name, user_text)
+        source = "local-role-engine"
+        if use_external and not is_greeting(user_text):
+            prompt = (
+                "أنت دور محلي ضمن مجلس ذكاء اصطناعي. لا تدّع أنك نموذج تابع لشركة بعينها. "
+                f"الدور: {meta['role']}. المستخدم: {user_text}"
+            )
+            network_text, network_source = external_best_effort(prompt)
+            if network_text:
+                text, source = network_text, network_source
+        out.append(AgentResult(name, meta["role"], text, time.perf_counter() - started, source))
+    return out
 
+def render_agent(r: AgentResult) -> None:
+    meta = AGENTS[r.name]
+    source = "🟢 محلي — بدون مفتاح" if r.source == "local-role-engine" else "🌐 مسار شبكة تجريبي"
+    safe = html.escape(r.text).replace("\n", "<br>")
+    block = (
+        '<div class="agent-card">'
+        f'<div class="agent-title">{meta["icon"]} <strong>{html.escape(r.name)}</strong> '
+        f'<span class="role">— {html.escape(r.role)}</span></div>'
+        f'<div class="agent-source">{source} · {r.latency:.2f}s</div>'
+        f'<div class="agent-text">{safe}</div></div>'
+    )
+    st.markdown(block, unsafe_allow_html=True)
 
-st.set_page_config(page_title="AI Council V6 Free", page_icon="🤖", layout="wide", initial_sidebar_state="collapsed")
-init_state()
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "last_results" not in st.session_state:
+    st.session_state.last_results = []
 
-st.markdown("<h1 style='text-align:center'>🤖 الغرفة الخماسية الكبرى — V6 Free</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;opacity:.75'>5 مسارات وكلاء + تشغيل احتياطي محلي — بدون API Keys وبدون Secrets</p>", unsafe_allow_html=True)
+st.markdown(
+    "<style>.main-title{font-size:2rem;font-weight:800}.subtitle{opacity:.75}.agent-card{"
+    "border:1px solid rgba(128,128,128,.28);border-radius:16px;padding:14px;margin:8px 0;"
+    "background:rgba(128,128,128,.045)}.agent-title{display:flex;gap:8px;align-items:center;flex-wrap:wrap}"
+    ".role,.agent-source{opacity:.7}.agent-source{font-size:.82rem;margin:5px 0 9px}.agent-text{line-height:1.75}"
+    ".truth-box{border:1px solid rgba(255,165,0,.45);border-radius:14px;padding:12px;background:rgba(255,165,0,.07);line-height:1.7}"
+    "</style>",
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div class="main-title">🏛️ AI Council — الغرفة الخماسية</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="subtitle">{APP_VERSION} · بدون مفاتيح API</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="truth-box"><b>التصحيح المعماري:</b> الغرفة تعمل بدون مفاتيح لأن الوكلاء الخمسة '
+    '<b>أدوار محلية</b> وليست النماذج الأصلية لـ ChatGPT/Gemini/Claude/Grok/Kimi. '
+    'لا يتم تزوير هوية أي مزود.</div>',
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
-    st.header("⚙️ لوحة التحكم")
-    st.caption(APP_VERSION)
-    tone = st.selectbox("النبرة", ["علمية دقيقة", "مباشرة وسريعة", "ودية وداعمة", "نقدية وصارمة"])
-    mode = st.radio("الوضع", ["المجلس الخماسي", "وكيل واحد بالتناوب"], index=0)
-    st.session_state.allow_remote = st.toggle("محاولة المسار المجاني الخارجي", value=True,
-                                               help="لا يستخدم أي مفتاح. عند فشله يعمل النظام محلياً تلقائياً.")
+    st.header("⚙️ التحكم")
+    use_external = st.toggle(
+        "محاولة مسار شبكة تجريبي",
+        value=False,
+        help="معطل افتراضياً. لا يستخدم مفاتيح API ولا يضمن نموذجاً تابعاً لمزود بعينه.",
+    )
+    if use_external:
+        st.caption("يعمل فقط عند تعريف FREE_COUNCIL_PUBLIC_ENDPOINT. عند الفشل تستمر الأدوار المحلية.")
     st.divider()
-    if st.button("🗑️ إعادة ضبط ومسح المجلس", use_container_width=True):
-        st.session_state.chat_history = []
+    st.subheader("الوكلاء المحليون")
+    for n, m in AGENTS.items():
+        st.write(f'{m["icon"]} **{n}** — 🟢 متاح محلياً')
+        st.caption(m["role"])
+    st.divider()
+    if st.button("🗑️ بدء غرفة جديدة", use_container_width=True):
+        st.session_state.messages = []
         st.session_state.last_results = []
-        st.session_state.last_consensus = ""
         st.rerun()
+    st.caption("لا توجد شاشة مفاتيح API ولا قراءة من st.secrets.")
 
-cols = st.columns(5)
-for col, route in zip(cols, FREE_ROUTES):
-    with col:
-        st.metric(route["label"], "جاهز", route["model"])
-
-for msg in st.session_state.chat_history:
-    role = msg.get("role", "assistant")
-    with st.chat_message("user" if role == "user" else "assistant"):
-        st.markdown(msg.get("content", ""))
-
-query = st.chat_input("اكتب سؤالك للمجلس الخماسي…")
-if query:
-    valid, error = InputGuard.inspect(query)
-    if not valid:
-        st.error(error)
-    else:
-        st.session_state.chat_history.append({"role": "user", "sender": "أنت", "content": query})
-        with st.status("🧠 المجلس يعمل…", expanded=False) as status:
-            results = Council.run(query, st.session_state.chat_history[:-1], tone, st.session_state.allow_remote)
-            st.session_state.last_results = [asdict(r) for r in results]
-            consensus = build_consensus(results, query)
-            st.session_state.last_consensus = consensus
-            status.update(label="✅ اكتملت الجولة", state="complete")
-        st.rerun()
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
 if st.session_state.last_results:
-    st.divider()
-    st.subheader("🧠 نتائج الوكلاء")
-    for raw in st.session_state.last_results:
-        source = raw.get("source", "")
-        badge = "🌐 مسار خارجي" if source == "remote-free-route" else "💾 Fallback محلي"
-        with st.expander(f"{raw['label']} · {badge}", expanded=True):
-            st.markdown(raw["text"])
-            st.caption(f"العائلة: {raw['family']} · المسار: {raw['model']} · الزمن: {raw['latency']:.2f}s")
-    st.divider()
-    st.markdown(st.session_state.last_consensus)
+    st.subheader("👥 ردود المجلس الأخيرة")
+    for result in st.session_state.last_results:
+        render_agent(result)
 
-st.caption("ملاحظة تقنية: لا توجد طريقة شرعية لضمان تشغيل ChatGPT/Gemini/Claude/Grok/Kimi الأصليين من خادم Streamlit بدون اعتماد من الجهة المقدمة. هذا الإصدار لا يطلب مفاتيح؛ يحاول مساراً مجانياً إن كان متاحاً، وإلا يعمل محلياً بلا شبكة.")
+user_prompt = st.chat_input("اكتب رسالتك للمجلس…")
+if user_prompt is not None:
+    user_prompt = clean_text(user_prompt)
+    if not user_prompt:
+        st.warning("اكتب رسالة أولاً.")
+        st.stop()
+    if len(user_prompt) > MAX_INPUT:
+        st.error(f"الرسالة طويلة جداً. الحد الأقصى {MAX_INPUT} حرف.")
+        st.stop()
+
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("المجلس يعمل…"):
+            results = run_council(user_prompt, use_external)
+            summary = synthesize(results, user_prompt)
+        st.markdown(summary)
+
+    st.session_state.last_results = results
+    st.session_state.messages.append({"role": "assistant", "content": summary})
+    st.rerun()
