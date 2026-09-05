@@ -1,24 +1,36 @@
-AI Council V18 — Production Hybrid
-Architecture
-The room runs without any API key.
-Five core seats represent the official provider families: ChatGPT/OpenAI, Gemini/Google, Claude/Anthropic, Grok/xAI, and Kimi/Moonshot.
-Without a credential, a seat uses the dependency-free Local Engine and makes zero provider network calls.
-With a credential, the seat attempts the official provider API only.
-Any provider/model/network/quota failure falls back to the Local Engine without stopping the round.
-Local output never claims to be the commercial model.
-Credentials are read only from Streamlit Secrets or environment variables; there are no API-key fields in the UI.
-Run
+AI Council V19.4 — Production Hardened Hybrid
+العقد المعماري
+تعمل الغرفة بدون أي API Key.
+المقاعد الخمسة الأساسية تمثل عائلات ChatGPT/OpenAI وGemini/Google وClaude/Anthropic وGrok/xAI وKimi/Moonshot.
+غياب المفتاح = local_direct ولا توجد أي محاولة شبكة لذلك المزود.
+وجود مفتاح = محاولة API رسمي فقط.
+نجاح API مصادق عليه = official_api وofficial_authenticated=true.
+فشل المزود الرسمي بعد المحاولة = local_fallback لذلك المقعد فقط؛ بقية الغرفة تستمر.
+المقاعد 6–15 محلية صراحةً.
+المحرك المحلي ليس ChatGPT/Gemini/Claude/Grok/Kimi الأصلي ولا ينتحل هويتهم.
+الأسرار لا تدخل الواجهة ولا تُخزن في سجل التدقيق؛ تُقرأ فقط من Streamlit Secrets أو Environment Variables.
+تشغيل محلي
 python -m pip install -r requirements.txt
 streamlit run main.py
-Test
-python -m py_compile main.py providers.py local_engine.py
-python -m unittest discover -s tests -p 'test_*.py'
-Optional credentials
+اختبارات
+python -m py_compile main.py providers.py local_engine.py audit.py
+python -m unittest discover -s tests -p 'test_*.py' -v
+أسرار اختيارية
 OPENAI_API_KEY
-GEMINI_API_KEY or GOOGLE_API_KEY
+GEMINI_API_KEY أو GOOGLE_API_KEY
 ANTHROPIC_API_KEY
 XAI_API_KEY
-MOONSHOT_API_KEY or KIMI_API_KEY
-Optional model overrides use *_MODELS or *_MODEL environment variables.
-Identity policy
-A result is labeled official only after a successful authenticated request to the corresponding official provider API. Local fallback is explicitly labeled local.
+MOONSHOT_API_KEY أو KIMI_API_KEY
+نماذج قابلة للتخصيص عبر *_MODELS أو *_MODEL.
+هوية النماذج
+لا يُعرض أي مقعد على أنه النموذج الأصلي إلا عندما ينجح طلب API رسمي مصادق عليه ويُعاد نص فعلي. الأسماء في الواجهة هي أسماء المقاعد/عائلات المزودين، وليست دليلاً على اتصال رسمي.
+النشر
+Streamlit Cloud
+ارفع الملفات إلى GitHub.
+اختر main.py كنقطة تشغيل.
+أضف الأسرار اختيارياً في إعدادات التطبيق؛ لا تضعها في Git.
+بدون أسرار يجب أن تعمل الغرفة محلياً بالكامل داخل التطبيق.
+Google Cloud
+يمكن تشغيل المشروع داخل حاوية/خدمة تدعم Streamlit. ضع الأسرار في Secret Manager أو متغيرات البيئة، وليس داخل المستودع.
+ملاحظة التكلفة
+المسار المحلي لا يحتاج API ولا اعتماداً خارجياً. استخدام أي Provider رسمي قد يترتب عليه تكلفة بحسب حساب المزود، حتى لو كان التطبيق نفسه مستضافاً على طبقة مجانية.
