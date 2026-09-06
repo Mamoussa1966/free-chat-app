@@ -1,6 +1,37 @@
-.streamlit/secrets.toml
-audit/audit_history.jsonl
-__pycache__/
-.pytest_cache/
-*.pyc
+# Secrets / environment
 .env
+.env.*
+!.env.example
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest
+.pytest_cache/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# Audit runtime data
+audit/audit_history.jsonl
+
+# Local development
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
