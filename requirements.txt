@@ -1,6 +1,0 @@
-streamlit>=1.45,<2
-openai>=1.100,<2
-anthropic>=0.60,<1
-google-genai>=1.30,<2
-ollama>=0.5,<1
-pytest>=8,<9
