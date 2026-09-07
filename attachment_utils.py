@@ -31,33 +31,17 @@ IMAGE_MIMES = {
 
 
 def _safe_name(name: str) -> str:
-    name = os.path.basename(
-        name or "attachment"
-    )
-
-    name = re.sub(
-        r"[\x00-\x1f\x7f]",
-        "_",
-        name,
-    )
-
+    name = os.path.basename(name or "attachment")
+    name = re.sub(r"[\x00-\x1f\x7f]", "_", name)
     return name[:240]
 
 
 def _safe_mime(value: object) -> str:
-    mime = str(
-        value
-        or "application/octet-stream"
-    ).strip().lower()
-
-    mime = mime.split(
-        ";",
-        1,
-    )[0].strip()
+    mime = str(value or "application/octet-stream").strip().lower()
+    mime = mime.split(";", 1)[0].strip()
 
     if not re.fullmatch(
-        r"[a-z0-9!#$&^_.+\-]+/"
-        r"[a-z0-9!#$&^_.+\-]+",
+        r"[a-z0-9!#$&^_.+\-]+/[a-z0-9!#$&^_.+\-]+",
         mime,
     ):
         return "application/octet-stream"
@@ -65,74 +49,50 @@ def _safe_mime(value: object) -> str:
     return mime[:120]
 
 
-def normalize_uploaded_files(
-    files: Iterable[object],
-) -> list[dict]:
+def normalize_uploaded_files(files: Iterable[object]) -> list[dict]:
     result: list[dict] = []
     total = 0
     seen: set[bytes] = set()
 
     for uploaded in files:
-        if len(result) >= MAX_FILES:
-            raise ValueError(
-                f"عدد المرفقات يتجاوز الحد "
-                f"المسموح {MAX_FILES} ملفًا."
-            )
-
         try:
-            data = bytes(
-                uploaded.getvalue()
-            )
-        except Exception:
-            raise ValueError(
-                "تعذر قراءة أحد المرفقات."
-            )
+            data = bytes(uploaded.getvalue())
+        except Exception as exc:
+            raise ValueError("تعذر قراءة أحد المرفقات.") from exc
 
         if not data:
             continue
 
         if len(data) > MAX_FILE_BYTES:
             raise ValueError(
-                f"الملف "
-                f"{getattr(uploaded, 'name', 'attachment')} "
+                f"الملف {getattr(uploaded, 'name', 'attachment')} "
                 "أكبر من الحد المسموح 10 MB."
             )
 
-        mime = _safe_mime(
-            getattr(
-                uploaded,
-                "type",
-                None,
-            )
-        )
-
+        mime = _safe_mime(getattr(uploaded, "type", None))
         name = _safe_name(
-            str(
-                getattr(
-                    uploaded,
-                    "name",
-                    "attachment",
-                )
-            )
+            str(getattr(uploaded, "name", "attachment"))
         )
 
-        fingerprint = hashlib.sha256(
-            data
-        ).digest()
+        fingerprint = hashlib.sha256(data).digest()
 
+        # إزالة التكرارات قبل تطبيق حد عدد الملفات.
         if fingerprint in seen:
             continue
 
         seen.add(fingerprint)
 
-        if (
-            total + len(data)
-            > MAX_TOTAL_BYTES
-        ):
+        # الحد يطبق على الملفات الفريدة فعليًا.
+        if len(result) >= MAX_FILES:
             raise ValueError(
-                "إجمالي المرفقات يتجاوز "
-                "الحد المسموح 25 MB "
-                "للرسالة الواحدة."
+                f"عدد المرفقات الفريدة يتجاوز الحد المسموح "
+                f"{MAX_FILES} ملفًا."
+            )
+
+        if total + len(data) > MAX_TOTAL_BYTES:
+            raise ValueError(
+                "إجمالي المرفقات يتجاوز الحد المسموح "
+                "25 MB للرسالة الواحدة."
             )
 
         result.append(
@@ -149,85 +109,39 @@ def normalize_uploaded_files(
     return result
 
 
-def is_image(
-    att: dict,
-) -> bool:
-    mime = str(
-        att.get("mime", "")
-    ).lower()
-
-    ext = os.path.splitext(
-        att.get("name", "")
-    )[1].lower()
+def is_image(att: dict) -> bool:
+    mime = str(att.get("mime", "")).lower()
+    ext = os.path.splitext(att.get("name", ""))[1].lower()
 
     return (
         mime in IMAGE_MIMES
-        or ext in {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".webp",
-            ".gif",
-        }
+        or ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     )
 
 
-def as_data_url(
-    att: dict,
-) -> str:
-    mime = (
-        att.get("mime")
-        or "application/octet-stream"
-    )
-
+def as_data_url(att: dict) -> str:
+    mime = att.get("mime") or "application/octet-stream"
     encoded = base64.b64encode(
-        att.get(
-            "data",
-            b"",
-        )
+        att.get("data", b"")
     ).decode("ascii")
 
-    return (
-        f"data:{mime};base64,{encoded}"
-    )
+    return f"data:{mime};base64,{encoded}"
 
 
-def as_base64(
-    att: dict,
-) -> str:
+def as_base64(att: dict) -> str:
     return base64.b64encode(
-        att.get(
-            "data",
-            b"",
-        )
+        att.get("data", b"")
     ).decode("ascii")
 
 
-def extract_text(
-    att: dict,
-) -> str:
-    name = att.get(
-        "name",
-        "",
-    )
-
-    ext = os.path.splitext(
-        name
-    )[1].lower()
-
-    data = att.get(
-        "data",
-        b"",
-    )
+def extract_text(att: dict) -> str:
+    name = att.get("name", "")
+    ext = os.path.splitext(name)[1].lower()
+    data = att.get("data", b"")
 
     if (
         ext in TEXT_EXTENSIONS
-        or str(
-            att.get(
-                "mime",
-                "",
-            )
-        ).startswith("text/")
+        or str(att.get("mime", "")).startswith("text/")
     ):
         for encoding in (
             "utf-8",
@@ -236,42 +150,20 @@ def extract_text(
             "latin-1",
         ):
             try:
-                return data.decode(
-                    encoding
-                )[:MAX_TEXT_CHARS]
-
+                return data.decode(encoding)[:MAX_TEXT_CHARS]
             except UnicodeDecodeError:
                 pass
 
     if ext == ".docx":
         try:
-            with zipfile.ZipFile(
-                io.BytesIO(data)
-            ) as zf:
-                with zf.open(
-                    "word/document.xml"
-                ) as member:
-                    xml = (
-                        member.read(
-                            MAX_TEXT_CHARS * 8
-                        )
-                        .decode(
-                            "utf-8",
-                            "ignore",
-                        )
-                    )
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                with zf.open("word/document.xml") as member:
+                    xml = member.read(
+                        MAX_TEXT_CHARS * 8
+                    ).decode("utf-8", "ignore")
 
-            text = re.sub(
-                r"<[^>]+>",
-                " ",
-                xml,
-            )
-
-            text = re.sub(
-                r"\s+",
-                " ",
-                text,
-            ).strip()
+            text = re.sub(r"<[^>]+>", " ", xml)
+            text = re.sub(r"\s+", " ", text).strip()
 
             return text[:MAX_TEXT_CHARS]
 
@@ -301,24 +193,18 @@ def attachment_summary(
 
         if text:
             lines.append(
-                "  EXTRACTED TEXT:\n"
-                f"{text}"
+                f"  EXTRACTED TEXT:\n{text}"
             )
 
     return "\n".join(lines)[-max_chars:]
 
 
-def public_metadata(
-    attachments: list[dict],
-) -> list[dict]:
+def public_metadata(attachments: list[dict]) -> list[dict]:
     return [
         {
             "name": a.get("name"),
             "mime": a.get("mime"),
-            "size": a.get(
-                "size",
-                0,
-            ),
+            "size": a.get("size", 0),
         }
         for a in attachments
     ]
