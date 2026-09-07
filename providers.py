@@ -8,9 +8,46 @@ from typing import Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V21.9-PROVIDER-DIAGNOSTIC-HARDENED"
-REQUEST_TIMEOUT = int(os.getenv("PROVIDER_TIMEOUT_SECONDS", "45"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "1200"))
+
+VERSION = "V21.11-PROVIDER-COMPATIBILITY-HARDENED"
+
+
+def _bounded_int_env(
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(
+            os.getenv(
+                name,
+                str(default),
+            )
+        )
+    except (TypeError, ValueError):
+        value = default
+
+    return max(
+        minimum,
+        min(value, maximum),
+    )
+
+
+REQUEST_TIMEOUT = _bounded_int_env(
+    "PROVIDER_TIMEOUT_SECONDS",
+    45,
+    5,
+    90,
+)
+
+MAX_OUTPUT_TOKENS = _bounded_int_env(
+    "MAX_OUTPUT_TOKENS",
+    1200,
+    128,
+    4096,
+)
+
 RETRIES = 1
 
 
@@ -35,25 +72,40 @@ SEATS = (
         ("OPENAI_API_KEY",),
         ("OPENAI_MODELS", "OPENAI_MODEL"),
         "gpt-5.6",
-        ("gpt-5.6-luna", "gpt-5.6-terra"),
+        (
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+        ),
         "https://api.openai.com/v1/responses",
         "openai_responses",
     ),
+
     Seat(
         "gemini",
         "Gemini",
         "🔑 Gemini",
-        ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-        ("GEMINI_MODELS", "GEMINI_MODEL"),
+        (
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+        ),
+        (
+            "GEMINI_MODELS",
+            "GEMINI_MODEL",
+        ),
         "gemini-3.8-flash",
-        ("gemini-3.7-flash", "gemini-3.6-flash"),
+        (
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+        ),
         "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "gemini",
     ),
+
     Seat(
         "claude",
         "Claude",
         "🔑 Claude",
+        ("ANTHROPIC_API_KEY",),
         (
             "ANTHROPIC_MODELS",
             "ANTHROPIC_MODEL",
@@ -65,11 +117,15 @@ SEATS = (
         "https://api.anthropic.com/v1/messages",
         "anthropic",
     ),
+
     Seat(
         "grok",
         "Grok",
         "🔑 Grok",
-        ("XAI_API_KEY", "GROK_API_KEY"),
+        (
+            "XAI_API_KEY",
+            "GROK_API_KEY",
+        ),
         (
             "XAI_MODELS",
             "XAI_MODEL",
@@ -81,11 +137,15 @@ SEATS = (
         "https://api.x.ai/v1/responses",
         "xai_responses",
     ),
+
     Seat(
         "kimi",
         "Kimi",
         "🔑 Kimi",
-        ("KIMI_API_KEY", "MOONSHOT_API_KEY"),
+        (
+            "KIMI_API_KEY",
+            "MOONSHOT_API_KEY",
+        ),
         (
             "KIMI_MODELS",
             "KIMI_MODEL",
@@ -101,37 +161,54 @@ SEATS = (
 
 
 class ProviderError(RuntimeError):
+
     def __init__(
         self,
         message: str,
         status_code: Optional[int] = None,
         error_class: str = "provider",
     ) -> None:
+
         super().__init__(message)
+
         self.status_code = status_code
         self.error_class = error_class
 
 
-def _streamlit_secret(name: str) -> Optional[str]:
+def _streamlit_secret(
+    name: str,
+) -> Optional[str]:
+
     try:
         import streamlit as st
 
         value = st.secrets.get(name)
 
-        return str(value).strip() if value else None
+        return (
+            str(value).strip()
+            if value
+            else None
+        )
 
     except Exception:
         return None
 
 
-def _setting(names: Iterable[str]) -> Optional[str]:
+def _setting(
+    names: Iterable[str],
+) -> Optional[str]:
+
     for name in names:
+
         value = _streamlit_secret(name)
 
         if value:
             return value
 
-        value = os.getenv(name, "").strip()
+        value = os.getenv(
+            name,
+            "",
+        ).strip()
 
         if value:
             return value
@@ -139,7 +216,9 @@ def _setting(names: Iterable[str]) -> Optional[str]:
     return None
 
 
-def get_secret(names: Iterable[str]) -> Optional[str]:
+def get_secret(
+    names: Iterable[str],
+) -> Optional[str]:
     return _setting(names)
 
 
@@ -154,6 +233,7 @@ def configured(
     seat: Seat,
     credential: Optional[str] = None,
 ) -> bool:
+
     return bool(
         credential
         if credential is not None
@@ -162,7 +242,9 @@ def configured(
 
 
 def configured_count(
-    credentials: Optional[Dict[str, Optional[str]]] = None,
+    credentials: Optional[
+        Dict[str, Optional[str]]
+    ] = None,
 ) -> int:
 
     if credentials is None:
@@ -177,7 +259,10 @@ def configured_count(
     )
 
 
-def _parse_models(raw: str) -> Tuple[str, ...]:
+def _parse_models(
+    raw: str,
+) -> Tuple[str, ...]:
+
     values = tuple(
         x.strip()
         for x in re.split(
@@ -194,9 +279,12 @@ def get_model_candidates(
     seat: Seat,
 ) -> Tuple[str, ...]:
 
-    raw = _setting(seat.model_env)
+    raw = _setting(
+        seat.model_env
+    )
 
     if raw:
+
         values = _parse_models(raw)
 
         if values:
@@ -208,10 +296,30 @@ def get_model_candidates(
     )
 
 
+def capture_model_candidates() -> Dict[
+    str,
+    Tuple[str, ...],
+]:
+    """
+    Capture model configuration on the
+    Streamlit script thread only.
+
+    Worker threads receive this immutable
+    snapshot and never access st.secrets.
+    """
+
+    return {
+        seat.key: get_model_candidates(seat)
+        for seat in SEATS
+    }
+
+
 def _sanitize(text: str) -> str:
 
     text = re.sub(
-        r"(?i)(api[_ -]?key|authorization|bearer|x-api-key|x-goog-api-key)"
+        r"(?i)"
+        r"(api[_ -]?key|authorization|bearer|"
+        r"x-api-key|x-goog-api-key)"
         r"\s*[:=]\s*[^\s,;]+",
         r"\1=[REDACTED]",
         text,
@@ -224,15 +332,15 @@ def _sanitize(text: str) -> str:
     )
 
     text = re.sub(
-        r"(?i)(secret|token|password)"
+        r"(?i)"
+        r"(secret|token|password)"
         r"\s*[:=]\s*[^\s,;]+",
         r"\1=[REDACTED]",
         text,
     )
 
     return (
-        text
-        .replace("\n", " ")
+        text.replace("\n", " ")
         .strip()[:700]
     )
 
@@ -280,11 +388,16 @@ def _post(
     timeout: int,
 ) -> dict:
 
-    last: Optional[ProviderError] = None
+    last: Optional[
+        ProviderError
+    ] = None
 
-    for attempt in range(RETRIES + 1):
+    for attempt in range(
+        RETRIES + 1
+    ):
 
         try:
+
             response = requests.post(
                 url,
                 headers=headers,
@@ -300,9 +413,12 @@ def _post(
             )
 
             if attempt < RETRIES:
+
                 time.sleep(
-                    0.35 * (attempt + 1)
+                    0.35
+                    * (attempt + 1)
                 )
+
                 continue
 
             raise last from exc
@@ -310,14 +426,18 @@ def _post(
         except requests.RequestException as exc:
 
             last = ProviderError(
-                f"network error: {exc.__class__.__name__}",
+                "network error: "
+                f"{exc.__class__.__name__}",
                 error_class="network",
             )
 
             if attempt < RETRIES:
+
                 time.sleep(
-                    0.35 * (attempt + 1)
+                    0.35
+                    * (attempt + 1)
                 )
+
                 continue
 
             raise last from exc
@@ -340,7 +460,12 @@ def _post(
 
             retryable = (
                 response.status_code
-                in (408, 409, 425, 429)
+                in (
+                    408,
+                    409,
+                    425,
+                    429,
+                )
                 or response.status_code >= 500
             )
 
@@ -348,9 +473,12 @@ def _post(
                 retryable
                 and attempt < RETRIES
             ):
+
                 time.sleep(
-                    0.35 * (attempt + 1)
+                    0.35
+                    * (attempt + 1)
                 )
+
                 continue
 
             raise last
@@ -371,7 +499,9 @@ def _post(
     )
 
 
-def _openai_text(data: dict) -> str:
+def _openai_text(
+    data: dict,
+) -> str:
 
     if (
         isinstance(
@@ -380,42 +510,56 @@ def _openai_text(data: dict) -> str:
         )
         and data["output_text"].strip()
     ):
-        return data["output_text"].strip()
+        return data[
+            "output_text"
+        ].strip()
 
     parts = []
 
-    for item in data.get(
-        "output",
-        [],
-    ) or []:
+    for item in (
+        data.get("output", [])
+        or []
+    ):
 
-        if not isinstance(item, dict):
+        if not isinstance(
+            item,
+            dict,
+        ):
             continue
 
-        for content in item.get(
-            "content",
-            [],
-        ) or []:
+        for content in (
+            item.get("content", [])
+            or []
+        ):
 
             if (
-                isinstance(content, dict)
+                isinstance(
+                    content,
+                    dict,
+                )
                 and isinstance(
                     content.get("text"),
                     str,
                 )
             ):
+
                 parts.append(
                     content["text"]
                 )
 
-    return "\n".join(parts).strip()
+    return "\n".join(
+        parts
+    ).strip()
 
 
-def _chat_text(data: dict) -> str:
+def _chat_text(
+    data: dict,
+) -> str:
 
-    choices = data.get(
-        "choices"
-    ) or []
+    choices = (
+        data.get("choices")
+        or []
+    )
 
     if not choices:
         return ""
@@ -428,10 +572,16 @@ def _chat_text(data: dict) -> str:
         "",
     )
 
-    if isinstance(content, str):
+    if isinstance(
+        content,
+        str,
+    ):
         return content.strip()
 
-    if isinstance(content, list):
+    if isinstance(
+        content,
+        list,
+    ):
 
         return "\n".join(
             str(
@@ -450,7 +600,9 @@ def _chat_text(data: dict) -> str:
     return ""
 
 
-def _gemini_text(data: dict) -> str:
+def _gemini_text(
+    data: dict,
+) -> str:
 
     out = []
 
@@ -473,20 +625,28 @@ def _gemini_text(data: dict) -> str:
         ) or []:
 
             if (
-                isinstance(part, dict)
+                isinstance(
+                    part,
+                    dict,
+                )
                 and isinstance(
                     part.get("text"),
                     str,
                 )
             ):
+
                 out.append(
                     part["text"]
                 )
 
-    return "\n".join(out).strip()
+    return "\n".join(
+        out
+    ).strip()
 
 
-def _anthropic_text(data: dict) -> str:
+def _anthropic_text(
+    data: dict,
+) -> str:
 
     return "\n".join(
         item.get(
@@ -500,7 +660,10 @@ def _anthropic_text(data: dict) -> str:
             or []
         )
         if (
-            isinstance(item, dict)
+            isinstance(
+                item,
+                dict,
+            )
             and isinstance(
                 item.get("text"),
                 str,
@@ -517,10 +680,11 @@ def _prompt(
 ) -> str:
 
     return (
-        "You are one seat in a multi-provider AI council. "
-        "Answer independently and honestly. "
-        "Do not claim to be another provider. "
-        "Use the shared context only as background. "
+        "You are one seat in a multi-provider "
+        "AI council. Answer independently "
+        "and honestly. Do not claim to be "
+        "another provider. Use the shared "
+        "context only as background. "
         f"This is council round {round_no}.\n\n"
         f"SHARED CONTEXT:\n"
         f"{shared_context.strip() or '(none)'}\n\n"
@@ -536,10 +700,14 @@ def call_official(
     model: str,
     credential: Optional[str],
     timeout: int = REQUEST_TIMEOUT,
-    attachments: Optional[list[dict]] = None,
+    attachments: Optional[
+        list[dict]
+    ] = None,
 ) -> str:
 
-    key = (credential or "").strip()
+    key = (
+        credential or ""
+    ).strip()
 
     if not key:
         raise ProviderError(
@@ -593,24 +761,22 @@ def call_official(
                     }
                 )
 
-        payload = {
-            "model": model,
-            "input": [
-                {
-                    "role": "user",
-                    "content": content,
-                }
-            ],
-            "max_output_tokens": MAX_OUTPUT_TOKENS,
-        }
-
         data = _post(
             seat.endpoint,
             {
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
             },
-            payload,
+            {
+                "model": model,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                ],
+                "max_output_tokens": MAX_OUTPUT_TOKENS,
+            },
             timeout,
         )
 
@@ -640,29 +806,25 @@ def call_official(
                 }
             )
 
-        payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": parts,
-                }
-            ],
-            "generationConfig": {
-                "maxOutputTokens":
-                    MAX_OUTPUT_TOKENS
-            },
-        }
-
         data = _post(
             seat.endpoint.format(
                 model=model
             ),
             {
                 "x-goog-api-key": key,
-                "Content-Type":
-                    "application/json",
+                "Content-Type": "application/json",
             },
-            payload,
+            {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": parts,
+                    }
+                ],
+                "generationConfig": {
+                    "maxOutputTokens": MAX_OUTPUT_TOKENS,
+                },
+            },
             timeout,
         )
 
@@ -686,15 +848,13 @@ def call_official(
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type":
-                                attachment.get(
-                                    "mime",
-                                    "image/png",
-                                ),
-                            "data":
-                                as_base64(
-                                    attachment
-                                ),
+                            "media_type": attachment.get(
+                                "mime",
+                                "image/png",
+                            ),
+                            "data": as_base64(
+                                attachment
+                            ),
                         },
                     }
                 )
@@ -716,28 +876,23 @@ def call_official(
                     }
                 )
 
-        payload = {
-            "model": model,
-            "max_tokens":
-                MAX_OUTPUT_TOKENS,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": content,
-                }
-            ],
-        }
-
         data = _post(
             seat.endpoint,
             {
                 "x-api-key": key,
-                "anthropic-version":
-                    "2023-06-01",
-                "content-type":
-                    "application/json",
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
             },
-            payload,
+            {
+                "model": model,
+                "max_tokens": MAX_OUTPUT_TOKENS,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                ],
+            },
             timeout,
         )
 
@@ -758,12 +913,10 @@ def call_official(
 
                 content.append(
                     {
-                        "type":
-                            "input_image",
-                        "image_url":
-                            as_data_url(
-                                attachment
-                            ),
+                        "type": "input_image",
+                        "image_url": as_data_url(
+                            attachment
+                        ),
                     }
                 )
 
@@ -775,8 +928,7 @@ def call_official(
 
                 content.append(
                     {
-                        "type":
-                            "input_text",
+                        "type": "input_text",
                         "text": (
                             f"Attached file: "
                             f"{attachment.get('name')}\n"
@@ -785,27 +937,22 @@ def call_official(
                     }
                 )
 
-        payload = {
-            "model": model,
-            "input": [
-                {
-                    "role": "user",
-                    "content": content,
-                }
-            ],
-            "max_output_tokens":
-                MAX_OUTPUT_TOKENS,
-        }
-
         data = _post(
             seat.endpoint,
             {
-                "Authorization":
-                    f"Bearer {key}",
-                "Content-Type":
-                    "application/json",
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
             },
-            payload,
+            {
+                "model": model,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                ],
+                "max_output_tokens": MAX_OUTPUT_TOKENS,
+            },
             timeout,
         )
 
@@ -828,10 +975,9 @@ def call_official(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url":
-                                as_data_url(
-                                    attachment
-                                )
+                            "url": as_data_url(
+                                attachment
+                            )
                         },
                     }
                 )
@@ -853,27 +999,22 @@ def call_official(
                     }
                 )
 
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": content,
-                }
-            ],
-            "max_tokens":
-                MAX_OUTPUT_TOKENS,
-        }
-
         data = _post(
             seat.endpoint,
             {
-                "Authorization":
-                    f"Bearer {key}",
-                "Content-Type":
-                    "application/json",
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
             },
-            payload,
+            {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                ],
+                "max_tokens": MAX_OUTPUT_TOKENS,
+            },
             timeout,
         )
 
@@ -887,7 +1028,6 @@ def call_official(
         )
 
     if not text:
-
         raise ProviderError(
             "official provider returned no text",
             error_class="empty_response",
@@ -903,13 +1043,22 @@ def call_seat(
     round_no: int,
     local_fallback: bool,
     credential: Optional[str],
-    attachments: Optional[list[dict]] = None,
+    attachments: Optional[
+        list[dict]
+    ] = None,
+    model_candidates: Optional[
+        Tuple[str, ...]
+    ] = None,
 ) -> dict:
 
     started = time.perf_counter()
 
-    candidates = get_model_candidates(
-        seat
+    candidates = tuple(
+        model_candidates
+        or (
+            seat.default_model,
+            *seat.fallback_models,
+        )
     )
 
     attempted: list[str] = []
@@ -1053,7 +1202,15 @@ def call_seat(
 def diagnostic_seat(
     seat: Seat,
     credential: Optional[str],
+    model_candidates: Optional[
+        Tuple[str, ...]
+    ] = None,
 ) -> dict:
+
+    """
+    Run one minimal official API probe
+    without local fallback or attachments.
+    """
 
     return call_seat(
         seat,
@@ -1063,6 +1220,7 @@ def diagnostic_seat(
         False,
         credential,
         [],
+        model_candidates=model_candidates,
     )
 
 
