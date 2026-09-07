@@ -1,78 +1,218 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
-import os
 import streamlit as st
 
-from providers import SEATS, call_seat, get_seat_credential
+from providers import SEATS, call_seat, get_seat_config
 
 
-APP_VERSION = "V20.0-MULTI-MODEL-VERIFICATION-GATED"
+APP_VERSION = "V21.2-FINAL"
+MAX_CONTEXT_CHARS = 50000
+MAX_HISTORY_CHATS = 100
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _default_title() -> str:
+    return "محادثة جديدة"
+
+
+def _make_chat() -> dict:
+    now = _now()
+
+    return {
+        "id": now.replace(":", "").replace("+00:00", "Z"),
+        "title": _default_title(),
+        "created_at": now,
+        "updated_at": now,
+        "messages": [],
+    }
+
+
+def _ensure_state() -> None:
+    if "chat" not in st.session_state:
+        st.session_state.chat = _make_chat()
+
+    if "history_chats" not in st.session_state:
+        st.session_state.history_chats = []
+
+    if "title_draft" not in st.session_state:
+        st.session_state.title_draft = (
+            st.session_state.chat["title"]
+        )
 
 
 def _context(
-    history: list[dict],
-    max_chars: int = 50000,
+    messages: list[dict],
+    max_chars: int = MAX_CONTEXT_CHARS,
 ) -> str:
 
     chunks: list[str] = []
 
-    for item in history:
-        chunks.append(
-            f"{item.get('sender', 'Unknown')}: "
-            f"{item.get('content', '')}"
-        )
+    for item in messages:
+        sender = item.get("sender", "Unknown")
+        content = item.get("content", "")
+
+        if content:
+            chunks.append(
+                f"{sender}: {content}"
+            )
 
     text = "\n\n".join(chunks)
 
     return text[-max_chars:]
 
 
-def _credential_map() -> dict[str, str | None]:
-    """
-    Resolve credentials in the Streamlit main thread.
-
-    This prevents worker threads from accessing st.secrets.
-    """
-
-    credentials: dict[str, str | None] = {}
+def _credential_state() -> dict[str, dict]:
+    state: dict[str, dict] = {}
 
     for seat in SEATS:
         try:
-            credentials[seat.name] = get_seat_credential(seat)
+            state[seat.name] = get_seat_config(seat)
         except Exception:
-            credentials[seat.name] = None
+            state[seat.name] = {
+                "credential": None,
+                "workspace_id": None,
+            }
 
-    return credentials
+    return state
 
 
-def _configured_seat(
-    seat,
-    credentials: dict[str, str | None],
-) -> bool:
+def _save_current_chat() -> None:
+    chat = dict(st.session_state.chat)
 
-    return bool(credentials.get(seat.name))
+    chat["messages"] = list(
+        st.session_state.chat.get(
+            "messages",
+            [],
+        )
+    )
+
+    chat["updated_at"] = _now()
+
+    existing = [
+        item
+        for item in st.session_state.history_chats
+        if item.get("id") != chat.get("id")
+    ]
+
+    existing.insert(0, chat)
+
+    st.session_state.history_chats = (
+        existing[:MAX_HISTORY_CHATS]
+    )
+
+
+def _set_title(title: str) -> bool:
+
+    cleaned = " ".join(
+        (title or "").split()
+    ).strip()
+
+    if not cleaned:
+        return False
+
+    cleaned = cleaned[:120]
+
+    st.session_state.chat["title"] = cleaned
+    st.session_state.chat["updated_at"] = _now()
+    st.session_state.title_draft = cleaned
+
+    _save_current_chat()
+
+    return True
+
+
+def _new_chat() -> None:
+
+    _save_current_chat()
+
+    st.session_state.chat = _make_chat()
+
+    st.session_state.title_draft = (
+        st.session_state.chat["title"]
+    )
+
+
+def _load_chat(chat: dict) -> None:
+
+    st.session_state.chat = {
+        "id": chat.get(
+            "id",
+            _make_chat()["id"],
+        ),
+        "title": (
+            chat.get("title")
+            or _default_title()
+        ),
+        "created_at": chat.get(
+            "created_at",
+            _now(),
+        ),
+        "updated_at": chat.get(
+            "updated_at",
+            _now(),
+        ),
+        "messages": list(
+            chat.get(
+                "messages",
+                [],
+            )
+        ),
+    }
+
+    st.session_state.title_draft = (
+        st.session_state.chat["title"]
+    )
+
+
+def _auto_title_from_prompt(prompt: str) -> None:
+
+    if (
+        st.session_state.chat["title"]
+        != _default_title()
+    ):
+        return
+
+    title = " ".join(
+        prompt.split()
+    ).strip()
+
+    if title:
+        st.session_state.chat["title"] = (
+            title[:80]
+        )
+
+        st.session_state.title_draft = (
+            st.session_state.chat["title"]
+        )
 
 
 def run_room(
     user_prompt: str,
-    history: list[dict],
+    messages: list[dict],
     rounds: int,
     local_fallback: bool,
 ) -> list[dict]:
 
     results: list[dict] = []
 
-    working_history = list(history)
+    working_messages = list(messages)
 
-    credentials = _credential_map()
+    credentials = _credential_state()
 
-    for round_no in range(1, rounds + 1):
+    for round_no in range(
+        1,
+        rounds + 1,
+    ):
 
-        # Barrier model:
-        # every seat receives the same snapshot.
-        snapshot = _context(working_history)
+        snapshot = _context(
+            working_messages
+        )
 
         round_results: list[dict] = []
 
@@ -88,12 +228,21 @@ def run_room(
                     snapshot,
                     round_no,
                     local_fallback,
-                    credentials.get(seat.name),
+                    credentials.get(
+                        seat.name,
+                        {},
+                    ).get("credential"),
+                    credentials.get(
+                        seat.name,
+                        {},
+                    ).get("workspace_id"),
                 ): seat
                 for seat in SEATS
             }
 
-            for future in as_completed(futures):
+            for future in as_completed(
+                futures
+            ):
 
                 seat = futures[future]
 
@@ -101,26 +250,36 @@ def run_room(
                     result = future.result()
 
                 except Exception as exc:
+
                     result = {
                         "seat": seat.name,
-                        "label": f"❌ {seat.name} — Worker Error",
-                        "provider": seat.provider_id,
-                        "model": seat.default_model,
+                        "label": (
+                            f"❌ {seat.name} "
+                            "— Worker Error"
+                        ),
+                        "provider": (
+                            seat.provider_id
+                        ),
+                        "model": (
+                            seat.default_model
+                        ),
                         "status": "FAILED",
                         "mode": "NONE",
                         "round": round_no,
                         "content": (
-                            f"حدث خطأ داخلي أثناء تشغيل "
-                            f"مقعد {seat.name}."
+                            "حدث خطأ داخلي أثناء "
+                            f"تشغيل مقعد {seat.name}."
                         ),
                         "error": str(exc)[:1200],
                     }
 
-                round_results.append(result)
+                round_results.append(
+                    result
+                )
 
         order = {
-            seat.name: index
-            for index, seat in enumerate(SEATS)
+            seat.name: i
+            for i, seat in enumerate(SEATS)
         }
 
         round_results.sort(
@@ -133,11 +292,15 @@ def run_room(
         for item in round_results:
 
             if item.get("status") == "SUCCESS":
-                working_history.append(
+
+                working_messages.append(
                     {
                         "sender": item.get(
                             "label",
-                            item.get("seat", "Unknown"),
+                            item.get(
+                                "seat",
+                                "Unknown",
+                            ),
                         ),
                         "content": item.get(
                             "content",
@@ -151,27 +314,79 @@ def run_room(
     return results
 
 
-def run_app() -> None:
-
-    st.title("🏛️ AI Council — Shared Context Arena")
-
-    st.caption(
-        f"{APP_VERSION} • "
-        "خمسة مقاعد أصلية + سياق مشترك + جولات متزامنة"
-    )
-
-    if "history" not in st.session_state:
-        st.session_state.history = []
+def _render_sidebar() -> tuple[int, bool]:
 
     with st.sidebar:
 
-        st.header("⚙️ إعدادات المجلس")
+        st.header(
+            "⚙️ إعدادات المجلس"
+        )
+
+        st.subheader(
+            "📝 اسم المحادثة"
+        )
+
+        st.text_input(
+            "الاسم",
+            key="title_draft",
+            label_visibility="collapsed",
+        )
+
+        if st.button(
+            "💾 حفظ اسم المحادثة",
+            use_container_width=True,
+        ):
+
+            if _set_title(
+                st.session_state.title_draft
+            ):
+
+                st.success(
+                    "تم حفظ اسم المحادثة."
+                )
+
+            else:
+
+                st.warning(
+                    "اكتب اسمًا صالحًا للمحادثة."
+                )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            if st.button(
+                "🆕 جديدة",
+                use_container_width=True,
+            ):
+
+                _new_chat()
+                st.rerun()
+
+        with col2:
+
+            if st.button(
+                "🗑️ مسح",
+                use_container_width=True,
+            ):
+
+                st.session_state.chat[
+                    "messages"
+                ] = []
+
+                st.session_state.chat[
+                    "updated_at"
+                ] = _now()
+
+                _save_current_chat()
+
+                st.rerun()
 
         rounds = st.slider(
             "عدد الجولات",
-            min_value=1,
-            max_value=4,
-            value=2,
+            1,
+            4,
+            2,
         )
 
         local_fallback = st.checkbox(
@@ -181,45 +396,116 @@ def run_app() -> None:
 
         st.divider()
 
-        st.subheader("المقاعد")
+        st.subheader(
+            "المقاعد الرسمية"
+        )
 
-        credentials = _credential_map()
+        credentials = _credential_state()
 
         for seat in SEATS:
 
-            configured = _configured_seat(
-                seat,
-                credentials,
+            configured = bool(
+                credentials.get(
+                    seat.name,
+                    {},
+                ).get(
+                    "credential"
+                )
             )
 
-            if configured:
-                st.write(
-                    f"🟢 {seat.name}"
-                )
-            else:
-                st.write(
-                    f"⚪ {seat.name}"
-                )
+            icon = (
+                "🔑"
+                if configured
+                else "⚪"
+            )
+
+            st.write(
+                f"{icon} {seat.name}"
+            )
 
             st.caption(
                 f"Model: {seat.default_model}"
             )
 
+        st.caption(
+            "🔑 تعني أن اعتمادًا وُجد في البيئة؛ "
+            "ولا تعني نجاح API."
+        )
+
+        st.caption(
+            "Local Engine مستقل ولا ينتحل "
+            "هوية أي مزود رسمي."
+        )
+
         st.divider()
 
-        st.caption(
-            "المفاتيح لا تُعرض في الواجهة ولا تُحفظ في سجل المحادثة."
+        st.subheader(
+            "📚 History"
         )
 
-        st.caption(
-            "Local Engine مستقل عن النماذج التجارية ولا ينتحل هويتها."
-        )
+        if not st.session_state.history_chats:
 
-    # ---------------------------------------------------------------
-    # Previous conversation
-    # ---------------------------------------------------------------
+            st.caption(
+                "لا توجد محادثات محفوظة بعد."
+            )
 
-    for item in st.session_state.history:
+        else:
+
+            for saved in (
+                st.session_state.history_chats[
+                    :20
+                ]
+            ):
+
+                title = (
+                    saved.get("title")
+                    or _default_title()
+                )
+
+                label = title[:45]
+
+                if st.button(
+                    label,
+                    key=(
+                        f"load_"
+                        f"{saved.get('id')}"
+                    ),
+                    use_container_width=True,
+                ):
+
+                    _load_chat(saved)
+
+                    st.rerun()
+
+    return rounds, local_fallback
+
+
+def run_app() -> None:
+
+    _ensure_state()
+
+    st.title(
+        "🏛️ AI Council — Shared Context Arena"
+    )
+
+    st.caption(
+        f"{APP_VERSION} • "
+        "المستخدم + خمسة مقاعد أصلية • "
+        "سياق مشترك • جولات متزامنة"
+    )
+
+    st.caption(
+        "المحادثة الحالية: "
+        f"**{st.session_state.chat['title']}**"
+    )
+
+    rounds, local_fallback = (
+        _render_sidebar()
+    )
+
+    for item in (
+        st.session_state.chat["messages"]
+    ):
 
         role = (
             "user"
@@ -234,10 +520,6 @@ def run_app() -> None:
                 f"{item.get('content', '')}"
             )
 
-    # ---------------------------------------------------------------
-    # User input
-    # ---------------------------------------------------------------
-
     prompt = st.chat_input(
         "اكتب موضوع النقاش على المجلس..."
     )
@@ -250,7 +532,11 @@ def run_app() -> None:
     if not prompt:
         return
 
-    st.session_state.history.append(
+    _auto_title_from_prompt(prompt)
+
+    st.session_state.chat[
+        "messages"
+    ].append(
         {
             "role": "user",
             "sender": "👤 أنت",
@@ -258,15 +544,15 @@ def run_app() -> None:
         }
     )
 
+    st.session_state.chat[
+        "updated_at"
+    ] = _now()
+
     with st.chat_message("user"):
 
         st.markdown(
             f"**👤 أنت**\n\n{prompt}"
         )
-
-    # ---------------------------------------------------------------
-    # Council execution
-    # ---------------------------------------------------------------
 
     with st.spinner(
         "المجلس يناقش..."
@@ -274,20 +560,21 @@ def run_app() -> None:
 
         results = run_room(
             prompt,
-            st.session_state.history,
+            st.session_state.chat[
+                "messages"
+            ],
             rounds,
             local_fallback,
         )
-
-    # ---------------------------------------------------------------
-    # Results
-    # ---------------------------------------------------------------
 
     for item in results:
 
         label = item.get(
             "label",
-            item.get("seat", "Unknown"),
+            item.get(
+                "seat",
+                "Unknown",
+            ),
         )
 
         content = item.get(
@@ -295,7 +582,9 @@ def run_app() -> None:
             "",
         )
 
-        st.session_state.history.append(
+        st.session_state.chat[
+            "messages"
+        ].append(
             {
                 "role": "assistant",
                 "sender": label,
@@ -303,18 +592,30 @@ def run_app() -> None:
             }
         )
 
-        with st.chat_message("assistant"):
+        with st.chat_message(
+            "assistant"
+        ):
 
             st.markdown(
                 f"**{label}**\n\n{content}"
             )
 
-        error = item.get("error", "")
+        error = item.get(
+            "error",
+            "",
+        )
 
         if error:
+
             with st.expander(
-                f"تفاصيل حالة {item.get('seat', 'المقعد')}"
+                "تفاصيل حالة "
+                f"{item.get('seat', 'المقعد')}"
             ):
-                st.warning(
-                    error
-                )
+
+                st.warning(error)
+
+    st.session_state.chat[
+        "updated_at"
+    ] = _now()
+
+    _save_current_chat()
