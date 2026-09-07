@@ -8,7 +8,7 @@ from typing import Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V21.7-PROVIDER-CONTRACT-HARDENED"
+VERSION = "V21.9-PROVIDER-DIAGNOSTIC-HARDENED"
 REQUEST_TIMEOUT = int(os.getenv("PROVIDER_TIMEOUT_SECONDS", "45"))
 MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "1200"))
 RETRIES = 1
@@ -54,7 +54,6 @@ SEATS = (
         "claude",
         "Claude",
         "🔑 Claude",
-        ("ANTHROPIC_API_KEY",),
         (
             "ANTHROPIC_MODELS",
             "ANTHROPIC_MODEL",
@@ -71,7 +70,12 @@ SEATS = (
         "Grok",
         "🔑 Grok",
         ("XAI_API_KEY", "GROK_API_KEY"),
-        ("XAI_MODELS", "XAI_MODEL", "GROK_MODELS", "GROK_MODEL"),
+        (
+            "XAI_MODELS",
+            "XAI_MODEL",
+            "GROK_MODELS",
+            "GROK_MODEL",
+        ),
         "grok-4.6",
         ("grok-4.5",),
         "https://api.x.ai/v1/responses",
@@ -113,13 +117,14 @@ def _streamlit_secret(name: str) -> Optional[str]:
         import streamlit as st
 
         value = st.secrets.get(name)
+
         return str(value).strip() if value else None
+
     except Exception:
         return None
 
 
-def get_secret(names: Iterable[str]) -> Optional[str]:
-    """Resolve a credential on the main thread."""
+def _setting(names: Iterable[str]) -> Optional[str]:
     for name in names:
         value = _streamlit_secret(name)
 
@@ -132,6 +137,10 @@ def get_secret(names: Iterable[str]) -> Optional[str]:
             return value
 
     return None
+
+
+def get_secret(names: Iterable[str]) -> Optional[str]:
+    return _setting(names)
 
 
 def capture_credentials() -> Dict[str, Optional[str]]:
@@ -155,6 +164,7 @@ def configured(
 def configured_count(
     credentials: Optional[Dict[str, Optional[str]]] = None,
 ) -> int:
+
     if credentials is None:
         return sum(
             configured(seat)
@@ -167,19 +177,30 @@ def configured_count(
     )
 
 
-def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
-    for env_name in seat.model_env:
-        raw = os.getenv(env_name, "").strip()
+def _parse_models(raw: str) -> Tuple[str, ...]:
+    values = tuple(
+        x.strip()
+        for x in re.split(
+            r"[,;\n]",
+            raw,
+        )
+        if x.strip()
+    )
 
-        if raw:
-            values = tuple(
-                x.strip()
-                for x in re.split(r"[,;]", raw)
-                if x.strip()
-            )
+    return values
 
-            if values:
-                return values
+
+def get_model_candidates(
+    seat: Seat,
+) -> Tuple[str, ...]:
+
+    raw = _setting(seat.model_env)
+
+    if raw:
+        values = _parse_models(raw)
+
+        if values:
+            return values
 
     return (
         seat.default_model,
@@ -188,6 +209,7 @@ def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
 
 
 def _sanitize(text: str) -> str:
+
     text = re.sub(
         r"(?i)(api[_ -]?key|authorization|bearer|x-api-key|x-goog-api-key)"
         r"\s*[:=]\s*[^\s,;]+",
@@ -219,6 +241,7 @@ def _classify(
     status: Optional[int],
     body: str,
 ) -> str:
+
     low = body.lower()
 
     if status in (401, 403):
@@ -256,9 +279,11 @@ def _post(
     payload: dict,
     timeout: int,
 ) -> dict:
+
     last: Optional[ProviderError] = None
 
     for attempt in range(RETRIES + 1):
+
         try:
             response = requests.post(
                 url,
@@ -268,6 +293,7 @@ def _post(
             )
 
         except requests.Timeout as exc:
+
             last = ProviderError(
                 "network timeout",
                 error_class="timeout",
@@ -282,6 +308,7 @@ def _post(
             raise last from exc
 
         except requests.RequestException as exc:
+
             last = ProviderError(
                 f"network error: {exc.__class__.__name__}",
                 error_class="network",
@@ -296,6 +323,7 @@ def _post(
             raise last from exc
 
         if response.status_code >= 400:
+
             body = _sanitize(
                 response.text[:1200]
             )
@@ -316,7 +344,10 @@ def _post(
                 or response.status_code >= 500
             )
 
-            if retryable and attempt < RETRIES:
+            if (
+                retryable
+                and attempt < RETRIES
+            ):
                 time.sleep(
                     0.35 * (attempt + 1)
                 )
@@ -328,6 +359,7 @@ def _post(
             return response.json()
 
         except ValueError as exc:
+
             raise ProviderError(
                 "invalid JSON response",
                 status_code=response.status_code,
@@ -340,19 +372,31 @@ def _post(
 
 
 def _openai_text(data: dict) -> str:
+
     if (
-        isinstance(data.get("output_text"), str)
+        isinstance(
+            data.get("output_text"),
+            str,
+        )
         and data["output_text"].strip()
     ):
         return data["output_text"].strip()
 
     parts = []
 
-    for item in data.get("output", []) or []:
+    for item in data.get(
+        "output",
+        [],
+    ) or []:
+
         if not isinstance(item, dict):
             continue
 
-        for content in item.get("content", []) or []:
+        for content in item.get(
+            "content",
+            [],
+        ) or []:
+
             if (
                 isinstance(content, dict)
                 and isinstance(
@@ -368,38 +412,65 @@ def _openai_text(data: dict) -> str:
 
 
 def _chat_text(data: dict) -> str:
-    choices = data.get("choices") or []
+
+    choices = data.get(
+        "choices"
+    ) or []
 
     if not choices:
         return ""
 
     content = (
-        choices[0].get("message") or {}
-    ).get("content", "")
+        choices[0].get("message")
+        or {}
+    ).get(
+        "content",
+        "",
+    )
 
     if isinstance(content, str):
         return content.strip()
 
     if isinstance(content, list):
+
         return "\n".join(
-            str(x.get("text", ""))
+            str(
+                x.get(
+                    "text",
+                    "",
+                )
+            )
             for x in content
-            if isinstance(x, dict)
+            if isinstance(
+                x,
+                dict,
+            )
         ).strip()
 
     return ""
 
 
 def _gemini_text(data: dict) -> str:
+
     out = []
 
     for candidate in (
-        data.get("candidates", [])
+        data.get(
+            "candidates",
+            [],
+        )
         or []
     ):
+
         for part in (
-            candidate.get("content") or {}
-        ).get("parts", []) or []:
+            candidate.get(
+                "content"
+            )
+            or {}
+        ).get(
+            "parts",
+            [],
+        ) or []:
 
             if (
                 isinstance(part, dict)
@@ -416,10 +487,17 @@ def _gemini_text(data: dict) -> str:
 
 
 def _anthropic_text(data: dict) -> str:
+
     return "\n".join(
-        item.get("text", "")
+        item.get(
+            "text",
+            "",
+        )
         for item in (
-            data.get("content") or []
+            data.get(
+                "content"
+            )
+            or []
         )
         if (
             isinstance(item, dict)
@@ -435,7 +513,9 @@ def _prompt(
     user_prompt: str,
     shared_context: str,
     round_no: int,
+    attachment_note: str = "",
 ) -> str:
+
     return (
         "You are one seat in a multi-provider AI council. "
         "Answer independently and honestly. "
@@ -446,6 +526,7 @@ def _prompt(
         f"{shared_context.strip() or '(none)'}\n\n"
         f"CURRENT USER REQUEST:\n"
         f"{user_prompt.strip()}"
+        f"{attachment_note}"
     )
 
 
@@ -455,7 +536,9 @@ def call_official(
     model: str,
     credential: Optional[str],
     timeout: int = REQUEST_TIMEOUT,
+    attachments: Optional[list[dict]] = None,
 ) -> str:
+
     key = (credential or "").strip()
 
     if not key:
@@ -464,119 +547,347 @@ def call_official(
             error_class="not_configured",
         )
 
+    attachments = attachments or []
+
+    from attachment_utils import (
+        as_base64,
+        as_data_url,
+        extract_text,
+        is_image,
+    )
+
     if seat.kind == "openai_responses":
+
+        content = [
+            {
+                "type": "input_text",
+                "text": prompt,
+            }
+        ]
+
+        for attachment in attachments:
+
+            if is_image(attachment):
+
+                content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": as_data_url(
+                            attachment
+                        ),
+                    }
+                )
+
+            else:
+
+                content.append(
+                    {
+                        "type": "input_file",
+                        "filename": attachment.get(
+                            "name",
+                            "attachment",
+                        ),
+                        "file_data": as_base64(
+                            attachment
+                        ),
+                    }
+                )
+
+        payload = {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
+        }
+
         data = _post(
             seat.endpoint,
             {
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
             },
-            {
-                "model": model,
-                "input": prompt,
-                "max_output_tokens": MAX_OUTPUT_TOKENS,
-            },
+            payload,
             timeout,
         )
 
         text = _openai_text(data)
 
     elif seat.kind == "gemini":
+
+        parts = [
+            {
+                "text": prompt
+            }
+        ]
+
+        for attachment in attachments:
+
+            parts.append(
+                {
+                    "inlineData": {
+                        "mimeType": attachment.get(
+                            "mime",
+                            "application/octet-stream",
+                        ),
+                        "data": as_base64(
+                            attachment
+                        ),
+                    }
+                }
+            )
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": parts,
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens":
+                    MAX_OUTPUT_TOKENS
+            },
+        }
+
         data = _post(
-            seat.endpoint.format(model=model),
+            seat.endpoint.format(
+                model=model
+            ),
             {
                 "x-goog-api-key": key,
-                "Content-Type": "application/json",
+                "Content-Type":
+                    "application/json",
             },
-            {
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [
-                            {
-                                "text": prompt
-                            }
-                        ],
-                    }
-                ],
-                "generationConfig": {
-                    "maxOutputTokens": MAX_OUTPUT_TOKENS
-                },
-            },
+            payload,
             timeout,
         )
 
         text = _gemini_text(data)
 
     elif seat.kind == "anthropic":
+
+        content = [
+            {
+                "type": "text",
+                "text": prompt,
+            }
+        ]
+
+        for attachment in attachments:
+
+            if is_image(attachment):
+
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type":
+                                attachment.get(
+                                    "mime",
+                                    "image/png",
+                                ),
+                            "data":
+                                as_base64(
+                                    attachment
+                                ),
+                        },
+                    }
+                )
+
+            else:
+
+                extracted = extract_text(
+                    attachment
+                )
+
+                content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Attached file: "
+                            f"{attachment.get('name')}\n"
+                            f"{extracted or '[binary attachment; filename only]'}"
+                        ),
+                    }
+                )
+
+        payload = {
+            "model": model,
+            "max_tokens":
+                MAX_OUTPUT_TOKENS,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+        }
+
         data = _post(
             seat.endpoint,
             {
                 "x-api-key": key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
+                "anthropic-version":
+                    "2023-06-01",
+                "content-type":
+                    "application/json",
             },
-            {
-                "model": model,
-                "max_tokens": MAX_OUTPUT_TOKENS,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ],
-            },
+            payload,
             timeout,
         )
 
         text = _anthropic_text(data)
 
     elif seat.kind == "xai_responses":
+
+        content = [
+            {
+                "type": "input_text",
+                "text": prompt,
+            }
+        ]
+
+        for attachment in attachments:
+
+            if is_image(attachment):
+
+                content.append(
+                    {
+                        "type":
+                            "input_image",
+                        "image_url":
+                            as_data_url(
+                                attachment
+                            ),
+                    }
+                )
+
+            else:
+
+                extracted = extract_text(
+                    attachment
+                )
+
+                content.append(
+                    {
+                        "type":
+                            "input_text",
+                        "text": (
+                            f"Attached file: "
+                            f"{attachment.get('name')}\n"
+                            f"{extracted or '[binary attachment; filename only]'}"
+                        ),
+                    }
+                )
+
+        payload = {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+            "max_output_tokens":
+                MAX_OUTPUT_TOKENS,
+        }
+
         data = _post(
             seat.endpoint,
             {
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
+                "Authorization":
+                    f"Bearer {key}",
+                "Content-Type":
+                    "application/json",
             },
-            {
-                "model": model,
-                "input": prompt,
-                "max_output_tokens": MAX_OUTPUT_TOKENS,
-            },
+            payload,
             timeout,
         )
 
         text = _openai_text(data)
 
     elif seat.kind == "chat_completions":
+
+        content = [
+            {
+                "type": "text",
+                "text": prompt,
+            }
+        ]
+
+        for attachment in attachments:
+
+            if is_image(attachment):
+
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url":
+                                as_data_url(
+                                    attachment
+                                )
+                        },
+                    }
+                )
+
+            else:
+
+                extracted = extract_text(
+                    attachment
+                )
+
+                content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Attached file: "
+                            f"{attachment.get('name')}\n"
+                            f"{extracted or '[binary attachment; filename only]'}"
+                        ),
+                    }
+                )
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+            "max_tokens":
+                MAX_OUTPUT_TOKENS,
+        }
+
         data = _post(
             seat.endpoint,
             {
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
+                "Authorization":
+                    f"Bearer {key}",
+                "Content-Type":
+                    "application/json",
             },
-            {
-                "model": model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ],
-                "max_tokens": MAX_OUTPUT_TOKENS,
-            },
+            payload,
             timeout,
         )
 
         text = _chat_text(data)
 
     else:
+
         raise ProviderError(
             "unsupported provider contract",
             error_class="configuration",
         )
 
     if not text:
+
         raise ProviderError(
             "official provider returned no text",
             error_class="empty_response",
@@ -592,7 +903,9 @@ def call_seat(
     round_no: int,
     local_fallback: bool,
     credential: Optional[str],
+    attachments: Optional[list[dict]] = None,
 ) -> dict:
+
     started = time.perf_counter()
 
     candidates = get_model_candidates(
@@ -600,11 +913,18 @@ def call_seat(
     )
 
     attempted: list[str] = []
-    last_error: Optional[ProviderError] = None
+
+    last_error: Optional[
+        ProviderError
+    ] = None
 
     if not credential:
+
         if local_fallback:
-            from local_engine import generate_local
+
+            from local_engine import (
+                generate_local
+            )
 
             content = generate_local(
                 seat.name,
@@ -619,7 +939,10 @@ def call_seat(
                 "local",
                 "local",
                 content,
-                "No official credential configured.",
+                (
+                    "class=not_configured; "
+                    "No official credential configured."
+                ),
                 started,
                 attempted,
             )
@@ -638,10 +961,14 @@ def call_seat(
             attempted,
         )
 
-    for index, model in enumerate(candidates):
+    for index, model in enumerate(
+        candidates
+    ):
+
         attempted.append(model)
 
         try:
+
             content = call_official(
                 seat,
                 _prompt(
@@ -651,6 +978,7 @@ def call_seat(
                 ),
                 model,
                 credential,
+                attachments=attachments,
             )
 
             return _result(
@@ -665,12 +993,14 @@ def call_seat(
             )
 
         except ProviderError as exc:
+
             last_error = exc
 
             if (
                 exc.error_class
                 == "model_not_found_or_invalid"
-                and index < len(candidates) - 1
+                and index
+                < len(candidates) - 1
             ):
                 continue
 
@@ -681,7 +1011,10 @@ def call_seat(
     )
 
     if local_fallback:
-        from local_engine import generate_local
+
+        from local_engine import (
+            generate_local
+        )
 
         content = generate_local(
             seat.name,
@@ -717,9 +1050,26 @@ def call_seat(
     )
 
 
+def diagnostic_seat(
+    seat: Seat,
+    credential: Optional[str],
+) -> dict:
+
+    return call_seat(
+        seat,
+        "Reply with exactly: DIAGNOSTIC_OK",
+        "",
+        0,
+        False,
+        credential,
+        [],
+    )
+
+
 def _diagnostic(
     exc: Optional[ProviderError],
 ) -> str:
+
     if exc is None:
         return (
             "class=provider_error; "
@@ -749,6 +1099,7 @@ def _result(
     started: float,
     attempted: list[str],
 ) -> dict:
+
     return {
         "seat": seat.key,
         "name": seat.name,
@@ -759,7 +1110,8 @@ def _result(
         "content": content,
         "error": error,
         "latency": round(
-            time.perf_counter() - started,
+            time.perf_counter()
+            - started,
             3,
         ),
         "attempted_models": attempted,
