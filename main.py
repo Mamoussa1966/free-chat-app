@@ -21,7 +21,8 @@ from providers import (
     transcribe_audio_gemini,
 )
 
-APP_VERSION = "V21.18-SIX-ROOM-TEXT-VOICE-PROVIDER-CATALOG-HARDENED"
+
+APP_VERSION = "V21.21-SIX-ROOM-TEXT-VOICE-PRODUCTION-HARDENED"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -55,8 +56,9 @@ def _init_state() -> None:
     if "rounds" not in st.session_state:
         st.session_state.rounds = 1
 
-    if "local_fallback" not in st.session_state:
-        st.session_state.local_fallback = True
+    # Local fallback is mandatory:
+    # the free/no-key path must never stop the room.
+    st.session_state.local_fallback = True
 
     if "folder_nonce" not in st.session_state:
         st.session_state.folder_nonce = 0
@@ -64,8 +66,8 @@ def _init_state() -> None:
     if "voice_nonce" not in st.session_state:
         st.session_state.voice_nonce = 0
 
-    if "last_voice_fingerprint" not in st.session_state:
-        st.session_state.last_voice_fingerprint = ""
+    if "voice_fingerprints" not in st.session_state:
+        st.session_state.voice_fingerprints = {}
 
     if "voice_audio_store" not in st.session_state:
         st.session_state.voice_audio_store = {}
@@ -75,12 +77,23 @@ def _init_state() -> None:
 
 
 def _active_chat() -> dict:
-    for chat in st.session_state.chats:
-        if chat["id"] == st.session_state.active_chat_id:
+    chats = st.session_state.get("chats")
+
+    if not isinstance(chats, list):
+        chats = []
+        st.session_state.chats = chats
+
+    active_id = st.session_state.get("active_chat_id")
+
+    for chat in chats:
+        if isinstance(chat, dict) and chat.get("id") == active_id:
+            chat.setdefault("messages", [])
+            chat.setdefault("title", "محادثة جديدة")
+            chat.setdefault("created_at", _now())
             return chat
 
     chat = _new_chat()
-    st.session_state.chats.insert(0, chat)
+    chats.insert(0, chat)
     st.session_state.active_chat_id = chat["id"]
     return chat
 
@@ -106,7 +119,9 @@ def _prune_voice_store() -> None:
         kept[key] = blob
         total += len(blob)
 
-    st.session_state.voice_audio_store = dict(reversed(list(kept.items())))
+    st.session_state.voice_audio_store = dict(
+        reversed(list(kept.items()))
+    )
 
 
 def _title_from_prompt(prompt: str) -> str:
@@ -140,7 +155,7 @@ def _shared_context(
             if attachment_context:
                 lines.append(
                     "USER ATTACHMENT CONTEXT (untrusted): "
-                    + attachment_context
+                    f"{attachment_context}"
                 )
 
         elif item.get("role") == "assistant":
@@ -158,7 +173,6 @@ def _shared_context(
                 )
 
     context = "\n\n".join(lines)
-
     return context[-max_chars:]
 
 
@@ -167,18 +181,22 @@ def _worker_failure(
     exc: Exception,
     model_candidates: dict | None = None,
 ) -> dict:
+    candidates = model_candidates or {}
+
+    seat_models = candidates.get(seat.key)
+
+    if seat_models:
+        model = seat_models[0]
+    else:
+        model = seat.default_model
+
     return {
         "seat": seat.key,
         "name": seat.name,
         "label": seat.label,
         "status": "FAILED",
         "mode": "internal",
-        "model": (
-            model_candidates or {}
-        ).get(
-            seat.key,
-            (seat.default_model,),
-        )[0],
+        "model": model,
         "content": "",
         "error": (
             "class=internal_worker_error; "
@@ -200,7 +218,6 @@ def _run_round(
     model_candidates: dict,
     current_user_message_id: str,
 ) -> list[dict]:
-
     snapshot = _shared_context(
         chat,
         exclude_message_id=current_user_message_id,
@@ -212,7 +229,6 @@ def _run_round(
         max_workers=len(SEATS),
         thread_name_prefix="council",
     ) as pool:
-
         futures = {
             pool.submit(
                 call_seat,
@@ -233,7 +249,6 @@ def _run_round(
 
             try:
                 results[seat.key] = future.result()
-
             except Exception as exc:
                 results[seat.key] = _worker_failure(
                     seat,
@@ -241,10 +256,7 @@ def _run_round(
                     model_candidates,
                 )
 
-    return [
-        results[seat.key]
-        for seat in SEATS
-    ]
+    return [results[seat.key] for seat in SEATS]
 
 
 def _run_council(
@@ -257,11 +269,9 @@ def _run_council(
     model_candidates: dict,
     current_user_message_id: str,
 ) -> list[dict]:
-
     all_results = []
 
     for round_no in range(1, rounds + 1):
-
         round_results = _run_round(
             user_prompt,
             chat,
@@ -276,7 +286,6 @@ def _run_council(
         all_results.extend(round_results)
 
         for result in round_results:
-
             if (
                 result["status"] in ("SUCCESS", "LOCAL")
                 and result["content"]
@@ -293,10 +302,7 @@ def _run_council(
                         "model": result["model"],
                         "official_error": result.get("error"),
                         "attempted_models": list(
-                            result.get(
-                                "attempted_models",
-                                [],
-                            )
+                            result.get("attempted_models", [])
                         ),
                         "created_at": _now(),
                     }
@@ -309,14 +315,12 @@ def _run_provider_diagnostics(
     credentials: dict,
     model_candidates: dict,
 ) -> list[dict]:
-
     results: dict[str, dict] = {}
 
     with ThreadPoolExecutor(
         max_workers=len(SEATS),
         thread_name_prefix="diagnostic",
     ) as pool:
-
         futures = {
             pool.submit(
                 diagnostic_seat,
@@ -332,7 +336,6 @@ def _run_provider_diagnostics(
 
             try:
                 results[seat.key] = future.result()
-
             except Exception as exc:
                 results[seat.key] = _worker_failure(
                     seat,
@@ -340,21 +343,15 @@ def _run_provider_diagnostics(
                     model_candidates,
                 )
 
-    return [
-        results[seat.key]
-        for seat in SEATS
-    ]
+    return [results[seat.key] for seat in SEATS]
 
 
 def _render_sidebar(
     rounds: int,
-    local_fallback: bool,
     credentials: dict,
     model_candidates: dict,
 ) -> tuple[int, bool]:
-
     with st.sidebar:
-
         st.header("⚙️ إعدادات المجلس")
 
         rounds = st.slider(
@@ -365,13 +362,17 @@ def _render_sidebar(
             1,
         )
 
-        local_fallback = st.checkbox(
-            "تفعيل Local Engine كبديل محلي معلن",
-            value=local_fallback,
-        )
+        # Production invariant:
+        # Local Engine fallback is always enabled.
+        local_fallback = True
 
         st.session_state.rounds = rounds
-        st.session_state.local_fallback = local_fallback
+        st.session_state.local_fallback = True
+
+        st.caption(
+            "🛡️ Local Engine fallback إلزامي لضمان استمرار "
+            "الطبقة المجانية عند غياب/فشل API."
+        )
 
         st.divider()
 
@@ -386,7 +387,6 @@ def _render_sidebar(
             "🔍 فحص المزودين الخمسة الآن",
             use_container_width=True,
         ):
-
             with st.spinner(
                 "تشخيص ChatGPT وGemini وClaude وGrok وKimi بالتوازي…"
             ):
@@ -418,23 +418,19 @@ def _render_sidebar(
         c1, c2 = st.columns(2)
 
         with c1:
-
             if st.button(
                 "💾 حفظ الاسم",
                 use_container_width=True,
             ):
-
                 if rename.strip():
                     chat["title"] = rename.strip()[:80]
                     st.rerun()
 
         with c2:
-
             if st.button(
                 "➕ جديد",
                 use_container_width=True,
             ):
-
                 new_chat = _new_chat()
 
                 st.session_state.chats.insert(
@@ -456,19 +452,62 @@ def _render_sidebar(
         st.subheader("📚 السجل")
 
         for item in list(st.session_state.chats):
-
-            label = item["title"]
-
-            if item["id"] == st.session_state.active_chat_id:
-                label = "🟢 " + label
-
             if st.button(
-                label,
-                key=f"load_chat_{item['id']}",
+                (
+                    f"{'🟢' if item['id'] == st.session_state.active_chat_id else '⚪'} "
+                    f"{item['title']}"
+                ),
+                key=f"load_{item['id']}",
                 use_container_width=True,
             ):
-
                 st.session_state.active_chat_id = item["id"]
+                st.session_state.last_results = []
+                st.rerun()
+
+            st.caption(
+                f"{len(item['messages'])} رسالة • "
+                f"{item['created_at']}"
+            )
+
+        c3, c4 = st.columns(2)
+
+        with c3:
+            if st.button(
+                "🗑️ حذف الحالية",
+                use_container_width=True,
+            ):
+                if len(st.session_state.chats) == 1:
+                    fresh = _new_chat()
+
+                    st.session_state.chats = [fresh]
+                    st.session_state.active_chat_id = (
+                        fresh["id"]
+                    )
+
+                else:
+                    st.session_state.chats = [
+                        x
+                        for x in st.session_state.chats
+                        if x["id"] != chat["id"]
+                    ]
+
+                    st.session_state.active_chat_id = (
+                        st.session_state.chats[0]["id"]
+                    )
+
+                st.session_state.last_results = []
+                st.rerun()
+
+        with c4:
+            if st.button(
+                "🧹 مسح الكل",
+                use_container_width=True,
+            ):
+                fresh = _new_chat()
+
+                st.session_state.chats = [fresh]
+                st.session_state.active_chat_id = fresh["id"]
+
                 st.session_state.last_results = []
                 st.session_state.last_diagnostics = []
 
@@ -476,99 +515,123 @@ def _render_sidebar(
 
         st.divider()
 
-        if st.button(
-            "🗑️ حذف المحادثة الحالية",
-            use_container_width=True,
-        ):
+        st.subheader("🔌 الاعتمادات والنماذج")
 
-            current_id = st.session_state.active_chat_id
+        for seat in SEATS:
+            models = (
+                model_candidates.get(seat.key)
+                or (
+                    seat.default_model,
+                    *seat.fallback_models,
+                )
+            )
 
-            st.session_state.chats = [
-                item
-                for item in st.session_state.chats
-                if item["id"] != current_id
-            ]
+            icon = (
+                "🟢"
+                if credentials.get(seat.key)
+                else "⚪"
+            )
 
-            if not st.session_state.chats:
-                new_chat = _new_chat()
-                st.session_state.chats = [new_chat]
-                st.session_state.active_chat_id = new_chat["id"]
+            st.markdown(
+                f"{icon} **{seat.name}**"
+            )
 
-            else:
-                st.session_state.active_chat_id = (
-                    st.session_state.chats[0]["id"]
+            st.caption(
+                f"Primary: `{models[0]}`"
+            )
+
+            if len(models) > 1:
+                st.caption(
+                    "Fallback: "
+                    + ", ".join(
+                        f"`{m}`"
+                        for m in models[1:]
+                    )
                 )
 
-            st.session_state.last_results = []
-            st.session_state.last_diagnostics = []
-
-            st.rerun()
-
-        if st.button(
-            "🧹 مسح السجل بالكامل",
-            use_container_width=True,
-        ):
-
-            new_chat = _new_chat()
-
-            st.session_state.chats = [new_chat]
-            st.session_state.active_chat_id = new_chat["id"]
-
-            st.session_state.last_results = []
-            st.session_state.last_diagnostics = []
-
-            st.rerun()
-
-        st.divider()
-
-        configured = configured_count(credentials)
-
-        st.metric(
-            "المزودون المهيؤون",
-            f"{configured}/5",
+        st.caption(
+            f"اعتمادات موجودة: "
+            f"{configured_count(credentials)}/5"
         )
 
         st.caption(
-            "مفاتيح API تُقرأ من Secrets فقط ولا تُعرض في الواجهة."
+            "🔑 وجود المفتاح لا يثبت نجاح API "
+            "ولا وجود رصيد/ائتمان."
+        )
+
+        st.caption(
+            "المفاتيح لا تُعرض في الواجهة "
+            "ولا تُحفظ في History."
         )
 
     return rounds, local_fallback
 
 
-def _voice_player(text: str) -> None:
+def _voice_player(
+    text: str,
+    label: str = "🔊 استمع",
+) -> None:
+    """Client-side browser TTS; no audio is uploaded by this player."""
 
-    if not text:
-        return
+    from streamlit.components.v1 import html as components_html
 
-    safe_text = html.escape(
-        text[:12000]
+    safe_text = json.dumps(
+        str(text or ""),
+        ensure_ascii=False,
     )
 
-    component = f"""
-    <div style="margin: 6px 0;">
-        <button
-            onclick="speechSynthesis.cancel();
-            speechSynthesis.speak(
-                new SpeechSynthesisUtterance(
-                    document.getElementById('tts_text').innerText
-                )
-            );"
-        >
-            🔊 قراءة الرد
-        </button>
+    safe_label = html.escape(
+        label,
+        quote=True,
+    )
 
-        <span
-            id="tts_text"
-            style="display:none;"
-        >
-            {safe_text}
-        </span>
-    </div>
-    """
+    components_html(
+        f"""
+        <div style="font-family:sans-serif;margin:2px 0 8px 0;">
+          <button
+            id="speakBtn"
+            style="
+              padding:6px 10px;
+              border-radius:8px;
+              border:1px solid #888;
+              background:transparent;
+              cursor:pointer;
+            "
+          >{safe_label}</button>
 
-    st.components.v1.html(
-        component,
-        height=45,
+          <script>
+            const btn =
+              document.getElementById('speakBtn');
+
+            const text = {safe_text};
+
+            btn.onclick = () => {{
+              if (!('speechSynthesis' in window)) {{
+                btn.textContent =
+                  'المتصفح لا يدعم الصوت';
+                return;
+              }}
+
+              window.speechSynthesis.cancel();
+
+              const utterance =
+                new SpeechSynthesisUtterance(text);
+
+              utterance.lang =
+                /[\\u0600-\\u06FF]/.test(text)
+                  ? 'ar-SA'
+                  : 'en-US';
+
+              utterance.rate = 1.0;
+
+              window.speechSynthesis.speak(
+                utterance
+              );
+            }};
+          </script>
+        </div>
+        """,
+        height=48,
     )
 
 
@@ -577,13 +640,13 @@ def _render_user_room(
     credentials: dict,
     model_candidates: dict,
 ) -> tuple[str, bytes, str, str] | None:
+    voice_submission = None
 
     with st.container(
         height=500,
         border=True,
     ):
-
-        st.subheader("👤 المستخدم")
+        st.subheader("👤 أنت")
 
         user_messages = [
             m
@@ -593,13 +656,138 @@ def _render_user_room(
 
         if not user_messages:
             st.caption(
-                "اكتب رسالة في صندوق الإدخال أسفل المجلس."
+                "اكتب رسالة أو سجّل رسالة صوتية، "
+                "أو أرفق صورة/ملف/مجلد."
             )
 
+        st.markdown("**🎙️ صوت داخل الغرفة**")
+
+        st.caption(
+            "سجّل رسالتك الصوتية ثم أرسلها للمجلس. "
+            "سيتم تحويلها إلى نص عبر Gemini 3.5 Transcribe "
+            "قبل توزيعها على المقاعد الخمسة."
+        )
+
+        audio = st.audio_input(
+            "🎙️ تسجيل رسالة صوتية",
+            sample_rate=16000,
+            key=(
+                "voice_input_"
+                f"{st.session_state.voice_nonce}"
+            ),
+        )
+
+        if audio:
+            audio_bytes = bytes(
+                audio.getvalue()
+            )
+
+            mime = str(
+                getattr(
+                    audio,
+                    "type",
+                    None,
+                )
+                or "audio/wav"
+            )
+
+            st.audio(
+                audio_bytes,
+                format=mime,
+            )
+
+            if st.button(
+                "🎤 إرسال الصوت للمجلس السداسي",
+                type="primary",
+                use_container_width=True,
+                key=(
+                    "send_voice_"
+                    f"{st.session_state.voice_nonce}"
+                ),
+            ):
+                import hashlib
+
+                fingerprint = hashlib.sha256(
+                    audio_bytes
+                ).hexdigest()
+
+                if len(audio_bytes) > MAX_VOICE_BYTES:
+                    st.error(
+                        "الرسالة الصوتية أكبر من "
+                        "الحد المسموح 8 MB."
+                    )
+
+                elif fingerprint in (
+                    st.session_state.voice_fingerprints
+                    .get(chat["id"], set())
+                ):
+                    st.warning(
+                        "هذه الرسالة الصوتية "
+                        "تم إرسالها بالفعل."
+                    )
+
+                else:
+                    with st.spinner(
+                        "تحويل الصوت إلى نص عبر "
+                        "Gemini 3.5 Transcribe…"
+                    ):
+                        transcription = (
+                            transcribe_audio_gemini(
+                                audio_bytes,
+                                mime,
+                                credentials.get("gemini"),
+                                None,
+                            )
+                        )
+
+                    if transcription["status"] == "SUCCESS":
+                        text = transcription["text"].strip()
+
+                        if text:
+                            st.session_state.last_voice_error = ""
+
+                            voice_submission = (
+                                text,
+                                audio_bytes,
+                                mime,
+                                fingerprint,
+                            )
+
+                        else:
+                            st.error(
+                                "تم التقاط الصوت، "
+                                "لكن لم ينتج عنه نص صالح."
+                            )
+
+                    else:
+                        st.session_state.last_voice_error = str(
+                            transcription.get(
+                                "error",
+                                "unknown error",
+                            )
+                        )
+
+                        st.error(
+                            "تعذر تحويل الرسالة الصوتية "
+                            "إلى نص عبر Gemini. "
+                            f"{st.session_state.last_voice_error}"
+                        )
+
+        if st.session_state.get(
+            "last_voice_error"
+        ):
+            with st.expander(
+                "⚠️ آخر خطأ في تحويل الصوت",
+                expanded=False,
+            ):
+                st.code(
+                    st.session_state.last_voice_error
+                )
+
+        st.divider()
+
         for message in user_messages:
-
             with st.chat_message("user"):
-
                 content = message.get(
                     "content",
                     "",
@@ -609,10 +797,9 @@ def _render_user_room(
                     st.write(content)
 
                 if message.get("voice"):
-
                     st.caption(
-                        "🎙️ رسالة صوتية — تم تحويلها إلى نص "
-                        "قبل إرسالها للمجلس."
+                        "🎙️ رسالة صوتية — تم تحويلها "
+                        "إلى نص قبل إرسالها للمجلس."
                     )
 
                     key = message.get(
@@ -621,15 +808,11 @@ def _render_user_room(
 
                     audio_bytes = (
                         st.session_state
-                        .get(
-                            "voice_audio_store",
-                            {},
-                        )
+                        .get("voice_audio_store", {})
                         .get(key)
                     )
 
                     if audio_bytes:
-
                         st.audio(
                             audio_bytes,
                             format=message.get(
@@ -642,14 +825,572 @@ def _render_user_room(
                     "attachments",
                     [],
                 ):
-
                     st.caption(
-                        f"📎 "
-                        f"{attachment.get('name', 'attachment')} · "
+                        f"📎 {attachment.get('name', 'attachment')} · "
                         f"{attachment.get('mime', 'file')} · "
                         f"{attachment.get('size', 0)} bytes"
                     )
 
+    return voice_submission
+
+
+def _render_ai_room(
+    chat: dict,
+    seat,
+    model_candidates: dict,
+) -> None:
+    with st.container(
+        height=500,
+        border=True,
+    ):
+        st.subheader(seat.label)
+
+        models = (
+            model_candidates.get(seat.key)
+            or (
+                seat.default_model,
+                *seat.fallback_models,
+            )
+        )
+
+        st.caption(
+            f"Primary: `{models[0]}`"
+        )
+
+        messages = [
+            m
+            for m in chat["messages"]
+            if m.get("seat") == seat.name
+        ]
+
+        if not messages:
+            st.caption("بانتظار أول جولة…")
+            return
+
+        for message in messages:
+            if message.get("mode") == "official":
+                badge = "Official API"
+
+                st.markdown(
+                    f"**Round {message.get('round', '?')} "
+                    f"· 🟢 {badge} · "
+                    f"`{message.get('model', '')}`**"
+                )
+
+            else:
+                badge = "Local Engine"
+
+                st.markdown(
+                    f"**Round {message.get('round', '?')} "
+                    f"· 🟡 {badge} · `local`**"
+                )
+
+                error = message.get(
+                    "official_error"
+                )
+
+                if error:
+                    with st.expander(
+                        "سبب عدم استخدام Official API",
+                        expanded=False,
+                    ):
+                        st.code(error)
+
+                        attempted = (
+                            message.get(
+                                "attempted_models"
+                            )
+                            or []
+                        )
+
+                        if attempted:
+                            st.caption(
+                                "النماذج التي تمت محاولتها: "
+                                + ", ".join(attempted)
+                            )
+
+            response_text = message.get(
+                "content",
+                "",
+            )
+
+            st.markdown(response_text)
+
+            _voice_player(response_text)
+
+            st.divider()
+
+
+def _render_six_rooms(
+    chat: dict,
+    model_candidates: dict,
+    credentials: dict,
+) -> tuple[str, bytes, str, str] | None:
+    rows = [
+        (None, SEATS[0]),
+        (SEATS[1], SEATS[2]),
+        (SEATS[3], SEATS[4]),
+    ]
+
+    voice_submission = None
+
+    for left, right in rows:
+        cols = st.columns(
+            2,
+            gap="medium",
+        )
+
+        with cols[0]:
+            if left is None:
+                voice_submission = _render_user_room(
+                    chat,
+                    credentials,
+                    model_candidates,
+                )
+            else:
+                _render_ai_room(
+                    chat,
+                    left,
+                    model_candidates,
+                )
+
+        with cols[1]:
+            _render_ai_room(
+                chat,
+                right,
+                model_candidates,
+            )
+
+    return voice_submission
+
+
+def _render_result_line(
+    result: dict,
+    diagnostic_only: bool = False,
+) -> None:
+    if result["status"] == "SUCCESS":
+        prefix = (
+            "🟢"
+            if diagnostic_only
+            else "✅"
+        )
+
+        st.success(
+            f"{prefix} {result['label']} — "
+            f"Official API — "
+            f"`{result['model']}` — "
+            f"{result['latency']}s"
+        )
+
+        return
+
+    with st.expander(
+        f"🔴 {result['label']} — Official API failed",
+        expanded=diagnostic_only,
+    ):
+        st.write(
+            result.get("error")
+            or "تعذر الحصول على رد رسمي."
+        )
+
+        st.write(
+            "Attempted models:",
+            ", ".join(
+                result.get(
+                    "attempted_models",
+                    [],
+                )
+            )
+            or "none",
+        )
+
+
+def _render_diagnostics(
+    results: list[dict],
+    title: str = "🔎 التشخيص والنتائج",
+) -> None:
+    official = sum(
+        r["status"] == "SUCCESS"
+        for r in results
+    )
+
+    local = sum(
+        r["status"] == "LOCAL"
+        for r in results
+    )
+
+    failed = sum(
+        r["status"] == "FAILED"
+        for r in results
+    )
+
+    st.subheader(title)
+
+    st.info(
+        f"آخر عملية: {official + local}/5 استجابات "
+        f"• رسمي: {official} "
+        f"• محلي: {local} "
+        f"• فشل: {failed}"
+    )
+
+    if local:
+        st.caption(
+            "🟡 المقاعد المحلية ليست ردودًا من المزودين الرسميين؛ "
+            "سبب التحويل ظاهر داخل كل غرفة."
+        )
+
+    for result in results:
+        if result["status"] == "SUCCESS":
+            _render_result_line(result)
+
+        elif result["status"] == "LOCAL":
+            with st.expander(
+                f"🟡 {result['label']} — Local Engine"
+            ):
+                st.write(
+                    result.get("error")
+                    or "تم استخدام Local Engine."
+                )
+
+                st.write(
+                    "Attempted models:",
+                    ", ".join(
+                        result.get(
+                            "attempted_models",
+                            [],
+                        )
+                    )
+                    or "none",
+                )
+
+        else:
+            _render_result_line(result)
+
+
+def _render_provider_diagnostics(
+    results: list[dict],
+) -> None:
+    if not results:
+        return
+
+    st.subheader(
+        "🧪 الفحص المستقل للمزودين"
+    )
+
+    st.caption(
+        "هذا الاختبار لا يستخدم Local Engine؛ "
+        "كل نتيجة هنا تخص API الرسمي مباشرة."
+    )
+
+    for result in results:
+        _render_result_line(
+            result,
+            diagnostic_only=True,
+        )
+
+
+def _render_attachment_picker() -> list[dict]:
+    nonce = st.session_state.folder_nonce
+
+    with st.expander(
+        "📁 إرفاق مجلد",
+        expanded=False,
+    ):
+        st.caption(
+            "اختر مجلدًا كاملًا؛ ستُرسل ملفاته "
+            "مع الرسالة التالية. "
+            "الحد: 20 ملفًا / 25 MB إجمالًا."
+        )
+
+        folder = st.file_uploader(
+            "📁 اختر مجلدًا",
+            accept_multiple_files="directory",
+            key=f"chat_folder_{nonce}",
+            help=(
+                "يرفع الملفات الموجودة داخل المجلد "
+                "ومجلداته الفرعية عندما يدعم المتصفح ذلك."
+            ),
+        )
+
+    return list(folder or [])
+
+
+def _submission_files(
+    submission,
+    folder_files: list[object],
+) -> list[dict] | None:
+    files = []
+
+    if submission is not None:
+        files.extend(
+            list(
+                getattr(
+                    submission,
+                    "files",
+                    [],
+                )
+                or []
+            )
+        )
+
+    files.extend(folder_files)
+
+    if not files:
+        return []
+
+    try:
+        return normalize_uploaded_files(files)
+
+    except ValueError as exc:
+        st.error(str(exc))
+        return None
+
+
+def run_app() -> None:
+    _init_state()
+
+    credentials = capture_credentials()
+    model_candidates = capture_model_candidates()
+
+    rounds, local_fallback = _render_sidebar(
+        st.session_state.rounds,
+        credentials,
+        model_candidates,
+    )
+
+    chat = _active_chat()
+
+    st.title(
+        "🏛️ AI Council — "
+        "Six-Room Shared Context Arena"
+    )
+
+    st.caption(
+        f"{APP_VERSION} • "
+        "المستخدم + خمسة مقاعد • "
+        "سياق مشترك • "
+        "استدعاءات متوازية • "
+        f"Provider: {PROVIDER_VERSION}"
+    )
+
+    st.caption(
+        "🔒 سياق الجولات السابقة يُوسم حسب المصدر، "
+        "والطلب الحالي لا يُكرر داخل سياق الجولة "
+        "الثانية وما بعدها."
+    )
+
+    st.markdown(
+        "**العقد التشغيلي:** رسالة واحدة تُرسل "
+        "بالتوازي إلى ChatGPT وGemini وClaude وGrok وKimi. "
+        "لا يظهر وسم Official API إلا بعد نجاح "
+        "طلب API رسمي مصادق عليه."
+    )
+
+    voice_submission = _render_six_rooms(
+        chat,
+        model_candidates,
+        credentials,
+    )
+
+    folder_files = _render_attachment_picker()
+
+    submission = st.chat_input(
+        "اكتب موضوع النقاش أو أرفق صورة/ملف…",
+        accept_file="multiple",
+        file_type=None,
+        max_upload_size=10,
+        key="council_chat_input",
+    )
+
+    prompt = ""
+    attachments = []
+    voice_audio = None
+    voice_mime = "audio/wav"
+    voice_fingerprint = ""
+
+    if voice_submission:
+        (
+            transcript,
+            voice_audio,
+            voice_mime,
+            voice_fingerprint,
+        ) = voice_submission
+
+        typed_prompt = (
+            getattr(
+                submission,
+                "text",
+                "",
+            )
+            or ""
+        ).strip() if submission is not None else ""
+
+        if typed_prompt and transcript:
+            prompt = (
+                f"{typed_prompt}\n\n"
+                "[تفريغ الرسالة الصوتية]:\n"
+                f"{transcript}"
+            )
+
+        else:
+            prompt = typed_prompt or transcript
+
+        attachments = (
+            _submission_files(
+                submission,
+                folder_files,
+            )
+            if submission is not None
+            else _submission_files(
+                None,
+                folder_files,
+            )
+        )
+
+        if attachments is None:
+            return
+
+    elif submission:
+        prompt = (
+            getattr(
+                submission,
+                "text",
+                "",
+            )
+            or ""
+        ).strip()
+
+        attachments = _submission_files(
+            submission,
+            folder_files,
+        )
+
+        if attachments is None:
+            return
+
+    if prompt or attachments:
+        if not prompt:
+            prompt = (
+                "حلّل المرفقات المرفقة "
+                "واذكر أهم ما تحتويه."
+            )
+
+        if not chat["messages"]:
+            chat["title"] = _title_from_prompt(
+                prompt
+            )
+
+        user_message_id = uuid.uuid4().hex
+
+        attachment_context = "\n".join(
+            f"- {a.get('name')} "
+            f"({a.get('mime')}, "
+            f"{a.get('size', 0)} bytes)"
+            for a in attachments
+        )[:6000]
+
+        user_message = {
+            "role": "user",
+            "id": user_message_id,
+            "content": prompt,
+            "attachments": public_metadata(
+                attachments
+            ),
+            "attachment_context": attachment_context,
+            "created_at": _now(),
+        }
+
+        if voice_audio is not None:
+            user_message["voice"] = True
+
+            user_message[
+                "voice_audio_key"
+            ] = user_message_id
+
+            user_message[
+                "voice_mime"
+            ] = voice_mime
+
+            store = st.session_state.setdefault(
+                "voice_audio_store",
+                {},
+            )
+
+            store[user_message_id] = voice_audio
+
+            _prune_voice_store()
+
+        chat["messages"].append(
+            user_message
+        )
+
+        st.session_state.last_diagnostics = []
+
+        with st.spinner(
+            "المجلس السداسي ينفذ الجولة بالتوازي…"
+        ):
+            results = _run_council(
+                prompt,
+                chat,
+                rounds,
+                local_fallback,
+                credentials,
+                attachments,
+                model_candidates,
+                user_message_id,
+            )
+
+        st.session_state.last_results = results
+
+        if voice_fingerprint:
+            fingerprints = (
+                st.session_state.setdefault(
+                    "voice_fingerprints",
+                    {},
+                )
+            )
+
+            chat_fingerprints = (
+                fingerprints.setdefault(
+                    chat["id"],
+                    set(),
+                )
+            )
+
+            chat_fingerprints.add(
+                voice_fingerprint
+            )
+
+            # Keep per-chat replay protection bounded.
+            if len(chat_fingerprints) > 20:
+                fingerprints[
+                    chat["id"]
+                ] = set(
+                    list(chat_fingerprints)[-20:]
+                )
+
+        st.session_state.folder_nonce += 1
+        st.session_state.voice_nonce += 1
+
+        st.rerun()
+
+    if st.session_state.last_diagnostics:
         st.divider()
 
-        st.subheader("🎙️ رسالة
+        _render_provider_diagnostics(
+            st.session_state.last_diagnostics
+        )
+
+    if st.session_state.last_results:
+        st.divider()
+
+        _render_diagnostics(
+            st.session_state.last_results
+        )
+
+
+# Streamlit Cloud compatibility:
+# if the deployment is configured to run main.py directly,
+# execute the application instead of exposing only run_app.
+if __name__ == "__main__":
+    run_app()
