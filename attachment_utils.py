@@ -8,12 +8,10 @@ import re
 import zipfile
 from typing import Iterable
 
-
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_BYTES = 25 * 1024 * 1024
 MAX_FILES = 20
 MAX_TEXT_CHARS = 30_000
-
 
 TEXT_EXTENSIONS = {
     ".txt",
@@ -55,7 +53,6 @@ TEXT_EXTENSIONS = {
     ".ps1",
 }
 
-
 IMAGE_MIMES = {
     "image/png",
     "image/jpeg",
@@ -66,7 +63,6 @@ IMAGE_MIMES = {
 
 
 def _safe_name(name: str) -> str:
-
     name = os.path.basename(
         name or "attachment"
     )
@@ -83,28 +79,22 @@ def _safe_name(name: str) -> str:
 def normalize_uploaded_files(
     files: Iterable[object],
 ) -> list[dict]:
-
     result: list[dict] = []
-
     total = 0
 
-    seen: set[
-        tuple[str, int, bytes]
-    ] = set()
+    seen: set[bytes] = set()
 
     for uploaded in files:
-
         if len(result) >= MAX_FILES:
             raise ValueError(
-                f"عدد المرفقات يتجاوز "
-                f"الحد المسموح {MAX_FILES} ملفًا."
+                f"عدد المرفقات يتجاوز الحد "
+                f"المسموح {MAX_FILES} ملفًا."
             )
 
         try:
             data = bytes(
                 uploaded.getvalue()
             )
-
         except Exception:
             raise ValueError(
                 "تعذر قراءة أحد المرفقات."
@@ -139,13 +129,9 @@ def normalize_uploaded_files(
             )
         )
 
-        fingerprint = (
-            name.lower(),
-            len(data),
-            hashlib.sha256(
-                data
-            ).digest(),
-        )
+        fingerprint = hashlib.sha256(
+            data
+        ).digest()
 
         if fingerprint in seen:
             continue
@@ -176,20 +162,15 @@ def normalize_uploaded_files(
     return result
 
 
-def is_image(att: dict) -> bool:
-
+def is_image(
+    att: dict,
+) -> bool:
     mime = str(
-        att.get(
-            "mime",
-            "",
-        )
+        att.get("mime", "")
     ).lower()
 
     ext = os.path.splitext(
-        att.get(
-            "name",
-            "",
-        )
+        att.get("name", "")
     )[1].lower()
 
     return (
@@ -208,17 +189,13 @@ def is_image(att: dict) -> bool:
 def as_data_url(
     att: dict,
 ) -> str:
-
     mime = (
         att.get("mime")
         or "application/octet-stream"
     )
 
     encoded = base64.b64encode(
-        att.get(
-            "data",
-            b"",
-        )
+        att.get("data", b"")
     ).decode("ascii")
 
     return (
@@ -229,19 +206,14 @@ def as_data_url(
 def as_base64(
     att: dict,
 ) -> str:
-
     return base64.b64encode(
-        att.get(
-            "data",
-            b"",
-        )
+        att.get("data", b"")
     ).decode("ascii")
 
 
 def extract_text(
     att: dict,
 ) -> str:
-
     name = att.get(
         "name",
         "",
@@ -265,14 +237,12 @@ def extract_text(
             )
         ).startswith("text/")
     ):
-
         for encoding in (
             "utf-8",
             "utf-8-sig",
             "cp1256",
             "latin-1",
         ):
-
             try:
                 return data.decode(
                     encoding
@@ -282,19 +252,19 @@ def extract_text(
                 pass
 
     if ext == ".docx":
-
         try:
-
             with zipfile.ZipFile(
                 io.BytesIO(data)
             ) as zf:
-
-                xml = zf.read(
+                with zf.open(
                     "word/document.xml"
-                ).decode(
-                    "utf-8",
-                    "ignore",
-                )
+                ) as member:
+                    xml = member.read(
+                        MAX_TEXT_CHARS * 8
+                    ).decode(
+                        "utf-8",
+                        "ignore",
+                    )
 
             text = re.sub(
                 r"<[^>]+>",
@@ -308,7 +278,9 @@ def extract_text(
                 text,
             ).strip()
 
-            return text[:MAX_TEXT_CHARS]
+            return text[
+                :MAX_TEXT_CHARS
+            ]
 
         except Exception:
             return ""
@@ -320,16 +292,12 @@ def attachment_summary(
     attachments: list[dict],
     max_chars: int = MAX_TEXT_CHARS,
 ) -> str:
-
     if not attachments:
         return ""
 
-    lines = [
-        "ATTACHMENTS:"
-    ]
+    lines = ["ATTACHMENTS:"]
 
     for att in attachments:
-
         lines.append(
             f"- {att.get('name')} "
             f"({att.get('mime')}, "
@@ -339,9 +307,9 @@ def attachment_summary(
         text = extract_text(att)
 
         if text:
-
             lines.append(
-                f"  EXTRACTED TEXT:\n{text}"
+                "  EXTRACTED TEXT:\n"
+                f"{text}"
             )
 
     return "\n".join(
@@ -352,7 +320,6 @@ def attachment_summary(
 def public_metadata(
     attachments: list[dict],
 ) -> list[dict]:
-
     return [
         {
             "name": a.get("name"),
