@@ -1,20 +1,34 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+)
 from datetime import datetime, timezone
+import os
 
 import streamlit as st
 
-from providers import SEATS, call_seat, get_seat_config
+from providers import (
+    SEATS,
+    call_seat,
+    get_seat_config,
+)
 
 
-APP_VERSION = "V21.2-FINAL"
+APP_VERSION = "V21.3-FINAL-HARDENED"
+
 MAX_CONTEXT_CHARS = 50000
 MAX_HISTORY_CHATS = 100
+MAX_VISIBLE_HISTORY = 20
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(
+        timezone.utc
+    ).isoformat(
+        timespec="seconds"
+    )
 
 
 def _default_title() -> str:
@@ -25,25 +39,51 @@ def _make_chat() -> dict:
     now = _now()
 
     return {
-        "id": now.replace(":", "").replace("+00:00", "Z"),
-        "title": _default_title(),
-        "created_at": now,
-        "updated_at": now,
-        "messages": [],
+        "id":
+            now.replace(
+                ":",
+                "",
+            ).replace(
+                "+00:00",
+                "Z",
+            ),
+
+        "title":
+            _default_title(),
+
+        "created_at":
+            now,
+
+        "updated_at":
+            now,
+
+        "messages":
+            [],
     }
 
 
 def _ensure_state() -> None:
-    if "chat" not in st.session_state:
-        st.session_state.chat = _make_chat()
-
-    if "history_chats" not in st.session_state:
-        st.session_state.history_chats = []
-
-    if "title_draft" not in st.session_state:
-        st.session_state.title_draft = (
-            st.session_state.chat["title"]
+    if (
+        "chat"
+        not in st.session_state
+        or not isinstance(
+            st.session_state.chat,
+            dict,
         )
+    ):
+        st.session_state.chat = (
+            _make_chat()
+        )
+
+    if (
+        "history_chats"
+        not in st.session_state
+        or not isinstance(
+            st.session_state.history_chats,
+            list,
+        )
+    ):
+        st.session_state.history_chats = []
 
 
 def _context(
@@ -54,15 +94,28 @@ def _context(
     chunks: list[str] = []
 
     for item in messages:
-        sender = item.get("sender", "Unknown")
-        content = item.get("content", "")
+        sender = str(
+            item.get(
+                "sender",
+                "Unknown",
+            )
+        )
+
+        content = str(
+            item.get(
+                "content",
+                "",
+            )
+        )
 
         if content:
             chunks.append(
                 f"{sender}: {content}"
             )
 
-    text = "\n\n".join(chunks)
+    text = "\n\n".join(
+        chunks
+    )
 
     return text[-max_chars:]
 
@@ -72,18 +125,45 @@ def _credential_state() -> dict[str, dict]:
 
     for seat in SEATS:
         try:
-            state[seat.name] = get_seat_config(seat)
+            state[seat.name] = (
+                get_seat_config(seat)
+            )
+
         except Exception:
             state[seat.name] = {
-                "credential": None,
-                "workspace_id": None,
+                "credential":
+                    None,
+                "workspace_id":
+                    None,
             }
 
     return state
 
 
+def _has_chat_content(
+    chat: dict,
+) -> bool:
+
+    messages = chat.get(
+        "messages",
+        [],
+    )
+
+    return (
+        bool(messages)
+        or chat.get("title")
+        not in (
+            None,
+            "",
+            _default_title(),
+        )
+    )
+
+
 def _save_current_chat() -> None:
-    chat = dict(st.session_state.chat)
+    chat = dict(
+        st.session_state.chat
+    )
 
     chat["messages"] = list(
         st.session_state.chat.get(
@@ -94,33 +174,55 @@ def _save_current_chat() -> None:
 
     chat["updated_at"] = _now()
 
+    if not _has_chat_content(
+        chat
+    ):
+        st.session_state.history_chats = [
+            item
+            for item
+            in st.session_state.history_chats
+            if item.get("id")
+            != chat.get("id")
+        ]
+
+        return
+
     existing = [
         item
-        for item in st.session_state.history_chats
-        if item.get("id") != chat.get("id")
+        for item
+        in st.session_state.history_chats
+        if item.get("id")
+        != chat.get("id")
     ]
 
-    existing.insert(0, chat)
+    existing.insert(
+        0,
+        chat,
+    )
 
     st.session_state.history_chats = (
         existing[:MAX_HISTORY_CHATS]
     )
 
 
-def _set_title(title: str) -> bool:
+def _set_title(
+    title: str,
+) -> bool:
 
     cleaned = " ".join(
         (title or "").split()
-    ).strip()
+    ).strip()[:120]
 
     if not cleaned:
         return False
 
-    cleaned = cleaned[:120]
+    st.session_state.chat[
+        "title"
+    ] = cleaned
 
-    st.session_state.chat["title"] = cleaned
-    st.session_state.chat["updated_at"] = _now()
-    st.session_state.title_draft = cleaned
+    st.session_state.chat[
+        "updated_at"
+    ] = _now()
 
     _save_current_chat()
 
@@ -128,49 +230,73 @@ def _set_title(title: str) -> bool:
 
 
 def _new_chat() -> None:
+    _save_current_chat()
+
+    st.session_state.chat = (
+        _make_chat()
+    )
+
+
+def _load_chat(
+    chat: dict,
+) -> None:
+
+    fallback = _make_chat()
+
+    st.session_state.chat = {
+        "id":
+            chat.get(
+                "id",
+                fallback["id"],
+            ),
+
+        "title":
+            chat.get(
+                "title"
+            )
+            or _default_title(),
+
+        "created_at":
+            chat.get(
+                "created_at",
+                _now(),
+            ),
+
+        "updated_at":
+            chat.get(
+                "updated_at",
+                _now(),
+            ),
+
+        "messages":
+            list(
+                chat.get(
+                    "messages",
+                    [],
+                )
+            ),
+    }
+
+
+def _clear_current_chat() -> None:
+    st.session_state.chat[
+        "messages"
+    ] = []
+
+    st.session_state.chat[
+        "title"
+    ] = _default_title()
+
+    st.session_state.chat[
+        "updated_at"
+    ] = _now()
 
     _save_current_chat()
 
-    st.session_state.chat = _make_chat()
 
-    st.session_state.title_draft = (
-        st.session_state.chat["title"]
-    )
-
-
-def _load_chat(chat: dict) -> None:
-
-    st.session_state.chat = {
-        "id": chat.get(
-            "id",
-            _make_chat()["id"],
-        ),
-        "title": (
-            chat.get("title")
-            or _default_title()
-        ),
-        "created_at": chat.get(
-            "created_at",
-            _now(),
-        ),
-        "updated_at": chat.get(
-            "updated_at",
-            _now(),
-        ),
-        "messages": list(
-            chat.get(
-                "messages",
-                [],
-            )
-        ),
-    }
-
-    st.session_state.title_draft = (
-        st.session_state.chat["title"]
-    )
-
-
-def _auto_title_from_prompt(prompt: str) -> None:
+def _auto_title_from_prompt(
+    prompt: str,
+) -> None:
 
     if (
         st.session_state.chat["title"]
@@ -183,13 +309,9 @@ def _auto_title_from_prompt(prompt: str) -> None:
     ).strip()
 
     if title:
-        st.session_state.chat["title"] = (
-            title[:80]
-        )
-
-        st.session_state.title_draft = (
-            st.session_state.chat["title"]
-        )
+        st.session_state.chat[
+            "title"
+        ] = title[:80]
 
 
 def run_room(
@@ -201,9 +323,21 @@ def run_room(
 
     results: list[dict] = []
 
-    working_messages = list(messages)
+    working_messages = list(
+        messages
+    )
 
-    credentials = _credential_state()
+    credentials = (
+        _credential_state()
+    )
+
+    rounds = max(
+        1,
+        min(
+            int(rounds),
+            4,
+        ),
+    )
 
     for round_no in range(
         1,
@@ -231,12 +365,18 @@ def run_room(
                     credentials.get(
                         seat.name,
                         {},
-                    ).get("credential"),
+                    ).get(
+                        "credential"
+                    ),
                     credentials.get(
                         seat.name,
                         {},
-                    ).get("workspace_id"),
-                ): seat
+                    ).get(
+                        "workspace_id"
+                    ),
+                ):
+                    seat
+
                 for seat in SEATS
             }
 
@@ -244,33 +384,46 @@ def run_room(
                 futures
             ):
 
-                seat = futures[future]
+                seat = futures[
+                    future
+                ]
 
                 try:
-                    result = future.result()
+                    result = (
+                        future.result()
+                    )
 
                 except Exception as exc:
-
                     result = {
-                        "seat": seat.name,
-                        "label": (
+                        "seat":
+                            seat.name,
+
+                        "label":
                             f"❌ {seat.name} "
-                            "— Worker Error"
-                        ),
-                        "provider": (
-                            seat.provider_id
-                        ),
-                        "model": (
-                            seat.default_model
-                        ),
-                        "status": "FAILED",
-                        "mode": "NONE",
-                        "round": round_no,
-                        "content": (
-                            "حدث خطأ داخلي أثناء "
-                            f"تشغيل مقعد {seat.name}."
-                        ),
-                        "error": str(exc)[:1200],
+                            "— Worker Error",
+
+                        "provider":
+                            seat.provider_id,
+
+                        "model":
+                            seat.default_model,
+
+                        "status":
+                            "FAILED",
+
+                        "mode":
+                            "NONE",
+
+                        "round":
+                            round_no,
+
+                        "content":
+                            "حدث خطأ داخلي "
+                            f"أثناء تشغيل مقعد "
+                            f"{seat.name}.",
+
+                        "error":
+                            str(exc)[:1200],
                     }
 
                 round_results.append(
@@ -278,38 +431,47 @@ def run_room(
                 )
 
         order = {
-            seat.name: i
-            for i, seat in enumerate(SEATS)
+            seat.name: index
+            for index, seat
+            in enumerate(SEATS)
         }
 
         round_results.sort(
-            key=lambda item: order.get(
-                item.get("seat"),
-                999,
-            )
+            key=lambda item:
+                order.get(
+                    item.get("seat"),
+                    999,
+                )
         )
 
         for item in round_results:
 
-            if item.get("status") == "SUCCESS":
-
+            if (
+                item.get("status")
+                == "SUCCESS"
+            ):
                 working_messages.append(
                     {
-                        "sender": item.get(
-                            "label",
+                        "sender":
                             item.get(
-                                "seat",
-                                "Unknown",
+                                "label",
+                                item.get(
+                                    "seat",
+                                    "Unknown",
+                                ),
                             ),
-                        ),
-                        "content": item.get(
-                            "content",
-                            "",
-                        ),
+
+                        "content":
+                            item.get(
+                                "content",
+                                "",
+                            ),
                     }
                 )
 
-            results.append(item)
+            results.append(
+                item
+            )
 
     return results
 
@@ -326,10 +488,40 @@ def _render_sidebar() -> tuple[int, bool]:
             "📝 اسم المحادثة"
         )
 
-        st.text_input(
+        chat_id = str(
+            st.session_state.chat.get(
+                "id",
+                "new",
+            )
+        )
+
+        title_hash = abs(
+            hash(
+                st.session_state.chat.get(
+                    "title",
+                    "",
+                )
+            )
+        )
+
+        title_widget_key = (
+            f"title_draft_"
+            f"{chat_id}_"
+            f"{title_hash}"
+        )
+
+        title_value = st.text_input(
             "الاسم",
-            key="title_draft",
-            label_visibility="collapsed",
+
+            value=st.session_state.chat.get(
+                "title",
+                _default_title(),
+            ),
+
+            key=title_widget_key,
+
+            label_visibility=
+                "collapsed",
         )
 
         if st.button(
@@ -338,20 +530,20 @@ def _render_sidebar() -> tuple[int, bool]:
         ):
 
             if _set_title(
-                st.session_state.title_draft
+                title_value
             ):
-
                 st.success(
                     "تم حفظ اسم المحادثة."
                 )
 
             else:
-
                 st.warning(
                     "اكتب اسمًا صالحًا للمحادثة."
                 )
 
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns(
+            2
+        )
 
         with col1:
 
@@ -359,7 +551,6 @@ def _render_sidebar() -> tuple[int, bool]:
                 "🆕 جديدة",
                 use_container_width=True,
             ):
-
                 _new_chat()
                 st.rerun()
 
@@ -369,17 +560,7 @@ def _render_sidebar() -> tuple[int, bool]:
                 "🗑️ مسح",
                 use_container_width=True,
             ):
-
-                st.session_state.chat[
-                    "messages"
-                ] = []
-
-                st.session_state.chat[
-                    "updated_at"
-                ] = _now()
-
-                _save_current_chat()
-
+                _clear_current_chat()
                 st.rerun()
 
         rounds = st.slider(
@@ -390,7 +571,8 @@ def _render_sidebar() -> tuple[int, bool]:
         )
 
         local_fallback = st.checkbox(
-            "تفعيل Local Engine كبديل محلي معلن",
+            "تفعيل Local Engine "
+            "كبديل محلي معلن",
             value=False,
         )
 
@@ -400,7 +582,11 @@ def _render_sidebar() -> tuple[int, bool]:
             "المقاعد الرسمية"
         )
 
-        credentials = _credential_state()
+        credentials = (
+            _credential_state()
+        )
+
+        configured_count = 0
 
         for seat in SEATS:
 
@@ -413,6 +599,9 @@ def _render_sidebar() -> tuple[int, bool]:
                 )
             )
 
+            if configured:
+                configured_count += 1
+
             icon = (
                 "🔑"
                 if configured
@@ -424,11 +613,18 @@ def _render_sidebar() -> tuple[int, bool]:
             )
 
             st.caption(
-                f"Model: {seat.default_model}"
+                f"Model: "
+                f"{seat.default_model}"
             )
 
         st.caption(
-            "🔑 تعني أن اعتمادًا وُجد في البيئة؛ "
+            f"الاعتمادات المكوّنة: "
+            f"{configured_count}/"
+            f"{len(SEATS)}"
+        )
+
+        st.caption(
+            "🔑 تعني وجود اعتماد في البيئة فقط؛ "
             "ولا تعني نجاح API."
         )
 
@@ -453,7 +649,7 @@ def _render_sidebar() -> tuple[int, bool]:
 
             for saved in (
                 st.session_state.history_chats[
-                    :20
+                    :MAX_VISIBLE_HISTORY
                 ]
             ):
 
@@ -466,18 +662,72 @@ def _render_sidebar() -> tuple[int, bool]:
 
                 if st.button(
                     label,
-                    key=(
-                        f"load_"
-                        f"{saved.get('id')}"
-                    ),
+                    key=f"load_"
+                    f"{saved.get('id')}",
                     use_container_width=True,
                 ):
 
-                    _load_chat(saved)
+                    _load_chat(
+                        saved
+                    )
 
                     st.rerun()
 
-    return rounds, local_fallback
+    return (
+        rounds,
+        local_fallback,
+    )
+
+
+def _render_result(
+    item: dict,
+) -> None:
+
+    label = item.get(
+        "label",
+        item.get(
+            "seat",
+            "Unknown",
+        ),
+    )
+
+    content = item.get(
+        "content",
+        "",
+    )
+
+    with st.chat_message(
+        "assistant"
+    ):
+        st.markdown(
+            f"**{label}**\n\n"
+            f"{content}"
+        )
+
+    error = item.get(
+        "error",
+        "",
+    )
+
+    if error:
+
+        with st.expander(
+            "تفاصيل حالة "
+            f"{item.get('seat', 'المقعد')}"
+        ):
+
+            if (
+                item.get("mode")
+                == "LOCAL_FALLBACK"
+            ):
+                st.info(
+                    error
+                )
+
+            else:
+                st.warning(
+                    error
+                )
 
 
 def run_app() -> None:
@@ -485,7 +735,8 @@ def run_app() -> None:
     _ensure_state()
 
     st.title(
-        "🏛️ AI Council — Shared Context Arena"
+        "🏛️ AI Council — "
+        "Shared Context Arena"
     )
 
     st.caption(
@@ -503,17 +754,25 @@ def run_app() -> None:
         _render_sidebar()
     )
 
-    for item in (
-        st.session_state.chat["messages"]
-    ):
+    messages = (
+        st.session_state.chat.get(
+            "messages",
+            [],
+        )
+    )
+
+    for item in messages:
 
         role = (
             "user"
-            if item.get("role") == "user"
+            if item.get("role")
+            == "user"
             else "assistant"
         )
 
-        with st.chat_message(role):
+        with st.chat_message(
+            role
+        ):
 
             st.markdown(
                 f"**{item.get('sender', '')}**\n\n"
@@ -532,15 +791,22 @@ def run_app() -> None:
     if not prompt:
         return
 
-    _auto_title_from_prompt(prompt)
+    _auto_title_from_prompt(
+        prompt
+    )
 
     st.session_state.chat[
         "messages"
     ].append(
         {
-            "role": "user",
-            "sender": "👤 أنت",
-            "content": prompt,
+            "role":
+                "user",
+
+            "sender":
+                "👤 أنت",
+
+            "content":
+                prompt,
         }
     )
 
@@ -548,10 +814,12 @@ def run_app() -> None:
         "updated_at"
     ] = _now()
 
-    with st.chat_message("user"):
-
+    with st.chat_message(
+        "user"
+    ):
         st.markdown(
-            f"**👤 أنت**\n\n{prompt}"
+            f"**👤 أنت**\n\n"
+            f"{prompt}"
         )
 
     with st.spinner(
@@ -560,11 +828,42 @@ def run_app() -> None:
 
         results = run_room(
             prompt,
+
             st.session_state.chat[
                 "messages"
             ],
+
             rounds,
+
             local_fallback,
+        )
+
+    success_count = sum(
+        item.get("status")
+        == "SUCCESS"
+        for item in results
+    )
+
+    official_count = sum(
+        item.get("mode")
+        == "OFFICIAL_API"
+        for item in results
+    )
+
+    fallback_count = sum(
+        item.get("mode")
+        == "LOCAL_FALLBACK"
+        for item in results
+    )
+
+    if results:
+
+        st.info(
+            f"نتائج هذه العملية: "
+            f"{success_count}/"
+            f"{len(results)} ناجحة • "
+            f"رسمي: {official_count} • "
+            f"محلي: {fallback_count}"
         )
 
     for item in results:
@@ -586,33 +885,20 @@ def run_app() -> None:
             "messages"
         ].append(
             {
-                "role": "assistant",
-                "sender": label,
-                "content": content,
+                "role":
+                    "assistant",
+
+                "sender":
+                    label,
+
+                "content":
+                    content,
             }
         )
 
-        with st.chat_message(
-            "assistant"
-        ):
-
-            st.markdown(
-                f"**{label}**\n\n{content}"
-            )
-
-        error = item.get(
-            "error",
-            "",
+        _render_result(
+            item
         )
-
-        if error:
-
-            with st.expander(
-                "تفاصيل حالة "
-                f"{item.get('seat', 'المقعد')}"
-            ):
-
-                st.warning(error)
 
     st.session_state.chat[
         "updated_at"
