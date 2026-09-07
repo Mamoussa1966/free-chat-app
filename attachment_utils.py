@@ -8,53 +8,18 @@ import re
 import zipfile
 from typing import Iterable
 
-
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_BYTES = 25 * 1024 * 1024
 MAX_FILES = 20
 MAX_TEXT_CHARS = 30_000
 
-
 TEXT_EXTENSIONS = {
-    ".txt",
-    ".md",
-    ".markdown",
-    ".csv",
-    ".tsv",
-    ".json",
-    ".xml",
-    ".yaml",
-    ".yml",
-    ".py",
-    ".js",
-    ".ts",
-    ".jsx",
-    ".tsx",
-    ".java",
-    ".kt",
-    ".kts",
-    ".go",
-    ".rs",
-    ".c",
-    ".h",
-    ".cpp",
-    ".hpp",
-    ".cs",
-    ".php",
-    ".rb",
-    ".swift",
-    ".sql",
-    ".html",
-    ".css",
-    ".scss",
-    ".ini",
-    ".toml",
-    ".log",
-    ".sh",
-    ".bat",
-    ".ps1",
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml",
+    ".yaml", ".yml", ".py", ".js", ".ts", ".jsx", ".tsx", ".java",
+    ".kt", ".kts", ".go", ".rs", ".c", ".h", ".cpp", ".hpp",
+    ".cs", ".php", ".rb", ".swift", ".sql", ".html", ".css", ".scss",
+    ".ini", ".toml", ".log", ".sh", ".bat", ".ps1",
 }
-
 
 IMAGE_MIMES = {
     "image/png",
@@ -77,6 +42,27 @@ def _safe_name(name: str) -> str:
     )
 
     return name[:240]
+
+
+def _safe_mime(value: object) -> str:
+    mime = str(
+        value
+        or "application/octet-stream"
+    ).strip().lower()
+
+    mime = mime.split(
+        ";",
+        1,
+    )[0].strip()
+
+    if not re.fullmatch(
+        r"[a-z0-9!#$&^_.+\-]+/"
+        r"[a-z0-9!#$&^_.+\-]+",
+        mime,
+    ):
+        return "application/octet-stream"
+
+    return mime[:120]
 
 
 def normalize_uploaded_files(
@@ -109,17 +95,16 @@ def normalize_uploaded_files(
             raise ValueError(
                 f"الملف "
                 f"{getattr(uploaded, 'name', 'attachment')} "
-                f"أكبر من الحد المسموح 10 MB."
+                "أكبر من الحد المسموح 10 MB."
             )
 
-        mime = str(
+        mime = _safe_mime(
             getattr(
                 uploaded,
                 "type",
                 None,
             )
-            or "application/octet-stream"
-        ).strip().lower()
+        )
 
         name = _safe_name(
             str(
@@ -145,8 +130,9 @@ def normalize_uploaded_files(
             > MAX_TOTAL_BYTES
         ):
             raise ValueError(
-                "إجمالي المرفقات يتجاوز الحد "
-                "المسموح 25 MB للرسالة الواحدة."
+                "إجمالي المرفقات يتجاوز "
+                "الحد المسموح 25 MB "
+                "للرسالة الواحدة."
             )
 
         result.append(
@@ -163,7 +149,9 @@ def normalize_uploaded_files(
     return result
 
 
-def is_image(att: dict) -> bool:
+def is_image(
+    att: dict,
+) -> bool:
     mime = str(
         att.get("mime", "")
     ).lower()
@@ -174,8 +162,7 @@ def is_image(att: dict) -> bool:
 
     return (
         mime in IMAGE_MIMES
-        or ext
-        in {
+        or ext in {
             ".png",
             ".jpg",
             ".jpeg",
@@ -185,14 +172,19 @@ def is_image(att: dict) -> bool:
     )
 
 
-def as_data_url(att: dict) -> str:
+def as_data_url(
+    att: dict,
+) -> str:
     mime = (
         att.get("mime")
         or "application/octet-stream"
     )
 
     encoded = base64.b64encode(
-        att.get("data", b"")
+        att.get(
+            "data",
+            b"",
+        )
     ).decode("ascii")
 
     return (
@@ -200,14 +192,25 @@ def as_data_url(att: dict) -> str:
     )
 
 
-def as_base64(att: dict) -> str:
+def as_base64(
+    att: dict,
+) -> str:
     return base64.b64encode(
-        att.get("data", b"")
+        att.get(
+            "data",
+            b"",
+        )
     ).decode("ascii")
 
 
-def extract_text(att: dict) -> str:
-    name = att.get("name", "")
+def extract_text(
+    att: dict,
+) -> str:
+    name = att.get(
+        "name",
+        "",
+    )
+
     ext = os.path.splitext(
         name
     )[1].lower()
@@ -220,7 +223,10 @@ def extract_text(att: dict) -> str:
     if (
         ext in TEXT_EXTENSIONS
         or str(
-            att.get("mime", "")
+            att.get(
+                "mime",
+                "",
+            )
         ).startswith("text/")
     ):
         for encoding in (
@@ -233,6 +239,7 @@ def extract_text(att: dict) -> str:
                 return data.decode(
                     encoding
                 )[:MAX_TEXT_CHARS]
+
             except UnicodeDecodeError:
                 pass
 
@@ -244,11 +251,14 @@ def extract_text(att: dict) -> str:
                 with zf.open(
                     "word/document.xml"
                 ) as member:
-                    xml = member.read(
-                        MAX_TEXT_CHARS * 8
-                    ).decode(
-                        "utf-8",
-                        "ignore",
+                    xml = (
+                        member.read(
+                            MAX_TEXT_CHARS * 8
+                        )
+                        .decode(
+                            "utf-8",
+                            "ignore",
+                        )
                     )
 
             text = re.sub(
@@ -291,7 +301,8 @@ def attachment_summary(
 
         if text:
             lines.append(
-                f"  EXTRACTED TEXT:\n{text}"
+                "  EXTRACTED TEXT:\n"
+                f"{text}"
             )
 
     return "\n".join(lines)[-max_chars:]
@@ -304,7 +315,10 @@ def public_metadata(
         {
             "name": a.get("name"),
             "mime": a.get("mime"),
-            "size": a.get("size", 0),
+            "size": a.get(
+                "size",
+                0,
+            ),
         }
         for a in attachments
     ]
