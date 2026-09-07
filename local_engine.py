@@ -1,62 +1,32 @@
 # -*- coding: utf-8 -*-
-
+"""Deterministic local fallback. No third-party dependencies."""
 from __future__ import annotations
 
 import re
 
-
 ROLE_ACTIONS = {
-    "openai": (
-        "افصل الحقائق عن الافتراضات "
-        "واختبر الاتساق المنطقي."
-    ),
-    "gemini": (
-        "قارن البدائل وكشف الافتراضات "
-        "قبل إصدار النتيجة."
-    ),
-    "anthropic": (
-        "ابحث عن الثغرات وحدود الاستنتاج "
-        "والأدلة الناقصة."
-    ),
-    "xai": (
-        "اختبر المخاطر والبدائل "
-        "ونقاط الفشل المحتملة."
-    ),
-    "kimi": (
-        "نظم الأفكار وحولها إلى قرار "
-        "عملي قابل للفحص."
-    ),
+    "openai": "افصل الحقائق عن الافتراضات واختبر الاتساق المنطقي.",
+    "gemini": "قارن البدائل واكشف الافتراضات قبل إصدار النتيجة.",
+    "anthropic": "ابحث عن الثغرات وحدود الاستنتاج والأدلة الناقصة.",
+    "xai": "اختبر المخاطر والبدائل ونقاط الفشل المحتملة.",
+    "kimi": "نظم الأفكار وحولها إلى قرار عملي قابل للفحص.",
 }
 
 
-def _clean(
-    value: str,
-    limit: int = 2400,
-) -> str:
-
-    return str(
-        value or ""
-    ).strip()[:limit].strip()
+def _clean(value: str, limit: int = 2400) -> str:
+    return str(value or "").strip()[:limit].strip()
 
 
-def _keywords(
-    text: str,
-) -> list[str]:
-
+def _keywords(text: str) -> list[str]:
     words = re.findall(
         r"[\u0600-\u06FFA-Za-z0-9_]{4,}",
-        _clean(
-            text,
-            3000,
-        ),
+        _clean(text, 3000),
     )
 
     result: list[str] = []
 
     for word in words:
-
         if word not in result:
-
             result.append(word)
 
     return result[:8]
@@ -71,25 +41,15 @@ def generate_local(
     tone: str = "علمية دقيقة",
     peer_text: str = "",
 ) -> str:
+    del tone, peer_text
 
-    q = _clean(
-        query,
-        3000,
-    )
-
-    ctx = _clean(
-        context,
-        1800,
-    )
-
+    q = _clean(query, 3000)
+    ctx = _clean(context, 1800)
     keys = _keywords(q)
 
     action = ROLE_ACTIONS.get(
         agent_id,
-        _clean(
-            instruction,
-            700,
-        ),
+        _clean(instruction, 700),
     )
 
     key_text = (
@@ -100,39 +60,23 @@ def generate_local(
 
     return "\n".join(
         [
-            (
-                f"### {role or agent_id} "
-                "— Local Fallback"
-            ),
+            f"### {role or agent_id} — Local Fallback",
             "",
             f"**السؤال:** {q or 'غير محدد'}",
             f"**المحاور:** {key_text}",
             f"**منهج الدور:** {action}",
             "",
             "**النتيجة الأولية:**",
-            (
-                "هذا تحليل محلي مستقل يستخدم "
-                "المعطيات المتاحة فقط. لا يمثل "
-                "هذا الرد نموذجًا تجاريًا أصليًا."
-            ),
+            "هذا تحليل محلي مستقل يستخدم المعطيات المتاحة فقط. "
+            "لا يمثل هذا الرد نموذجًا تجاريًا أصليًا.",
             "",
             "**السياق المختصر:**",
-            (
-                ctx
-                or "لا يوجد سياق سابق كافٍ."
-            ),
+            ctx or "لا يوجد سياق سابق كافٍ.",
             "",
             "**خطوات التحقق:**",
             "1. تحديد معيار نجاح واضح.",
             "2. اختبار أهم افتراض أو مخاطرة.",
-            (
-                "3. عدم اعتماد القرار النهائي "
-                "قبل التحقق من الدليل المطلوب."
-            ),
+            "3. عدم اعتماد القرار النهائي قبل التحقق من الدليل المطلوب.",
             "",
-            (
-                "> المصدر: Local Engine — "
-                "محرك محلي مستقل."
-            ),
+            "> المصدر: Local Engine — محرك محلي مستقل.",
         ]
-    )
