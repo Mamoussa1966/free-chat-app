@@ -1,848 +1,248 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+)
 from datetime import datetime, timezone
-import hashlib
+import re
 import uuid
 
 import streamlit as st
 
 from providers import (
-    PROVIDERS,
     SEATS,
+    VERSION as PROVIDER_VERSION,
     call_seat,
+    capture_credentials,
+    configured_count,
     get_model_candidates,
-    get_seat_credential,
 )
 
 
-APP_VERSION = "V21.5-CONTRACT-HARDENED"
-
-MAX_CONTEXT_CHARS = 50000
-MAX_HISTORY_ITEMS = 120
-
-DEFAULT_CHAT_TITLE = "محادثة جديدة"
+APP_VERSION = "V21.7-SIX-ROOM-COUNCIL"
 
 
-def _now_iso() -> str:
+def _now() -> str:
     return datetime.now(
         timezone.utc
-    ).isoformat(
-        timespec="seconds"
-    )
+    ).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _new_chat(
-    title: str = DEFAULT_CHAT_TITLE,
-) -> dict:
-
-    now = _now_iso()
-
+def _new_chat() -> dict:
     return {
         "id": uuid.uuid4().hex,
-        "title": title,
-        "created_at": now,
-        "updated_at": now,
+        "title": "محادثة جديدة",
+        "created_at": _now(),
         "messages": [],
     }
 
 
-def _ensure_chat_state() -> None:
-
-    if (
-        "chats" not in st.session_state
-        or not isinstance(
-            st.session_state.chats,
-            dict,
-        )
-    ):
-
+def _init_state() -> None:
+    if "chats" not in st.session_state:
         chat = _new_chat()
+        st.session_state.chats = [chat]
+        st.session_state.active_chat_id = chat["id"]
 
-        st.session_state.chats = {
-            chat["id"]: chat
-        }
+    if "last_results" not in st.session_state:
+        st.session_state.last_results = []
 
-        st.session_state.current_chat_id = (
+
+def _active_chat() -> dict:
+    for chat in st.session_state.chats:
+        if (
             chat["id"]
-        )
+            == st.session_state.active_chat_id
+        ):
+            return chat
 
-    if (
-        "current_chat_id"
-        not in st.session_state
-        or st.session_state.current_chat_id
-        not in st.session_state.chats
-    ):
+    chat = _new_chat()
 
-        newest = sorted(
-            st.session_state.chats.values(),
-            key=lambda item: item.get(
-                "updated_at",
-                "",
-            ),
-            reverse=True,
-        )
-
-        if newest:
-
-            st.session_state.current_chat_id = (
-                newest[0]["id"]
-            )
-
-        else:
-
-            chat = _new_chat()
-
-            st.session_state.chats = {
-                chat["id"]: chat
-            }
-
-            st.session_state.current_chat_id = (
-                chat["id"]
-            )
-
-
-def _current_chat() -> dict:
-
-    _ensure_chat_state()
-
-    return st.session_state.chats[
-        st.session_state.current_chat_id
-    ]
-
-
-def _touch(chat: dict) -> None:
-    chat["updated_at"] = _now_iso()
-
-
-def _trim_messages(
-    messages: list[dict],
-) -> list[dict]:
-
-    if len(messages) <= MAX_HISTORY_ITEMS:
-        return messages
-
-    return messages[
-        -MAX_HISTORY_ITEMS:
-    ]
-
-
-def _context(
-    history: list[dict],
-    max_chars: int = MAX_CONTEXT_CHARS,
-) -> str:
-
-    chunks = []
-
-    for item in history:
-
-        sender = str(
-            item.get(
-                "sender",
-                "Unknown",
-            )
-        )
-
-        content = str(
-            item.get(
-                "content",
-                "",
-            )
-        )
-
-        chunks.append(
-            f"{sender}: {content}"
-        )
-
-    return "\n\n".join(chunks)[
-        -max_chars:
-    ]
-
-
-def _safe_key_fragment(
-    value: str,
-) -> str:
-
-    return hashlib.sha256(
-        value.encode("utf-8")
-    ).hexdigest()[:12]
-
-
-def _configured(seat) -> bool:
-    return bool(
-        get_seat_credential(seat)
+    st.session_state.chats.insert(
+        0,
+        chat,
     )
 
+    st.session_state.active_chat_id = (
+        chat["id"]
+    )
 
-def _auto_title(
+    return chat
+
+
+def _title_from_prompt(
     prompt: str,
 ) -> str:
-
-    clean = " ".join(
-        str(prompt).split()
-    )
-
-    if len(clean) <= 54:
-        return clean or DEFAULT_CHAT_TITLE
+    clean = re.sub(
+        r"\s+",
+        " ",
+        prompt,
+    ).strip()
 
     return (
-        clean[:54].rstrip()
-        + "…"
+        clean[:48]
+        + ("…" if len(clean) > 48 else "")
+        or "محادثة جديدة"
     )
 
 
-def _format_time(
-    value: str,
+def _shared_context(
+    chat: dict,
+    max_chars: int = 30000,
 ) -> str:
+    lines = []
 
-    try:
-
-        dt = datetime.fromisoformat(
-            value.replace(
-                "Z",
-                "+00:00",
-            )
-        )
-
-        return dt.astimezone().strftime(
-            "%Y-%m-%d %H:%M"
-        )
-
-    except Exception:
-
-        return value[:16]
-
-
-def _create_new_chat() -> None:
-
-    chat = _new_chat()
-
-    st.session_state.chats[
-        chat["id"]
-    ] = chat
-
-    st.session_state.current_chat_id = (
-        chat["id"]
-    )
-
-
-def _delete_chat(
-    chat_id: str,
-) -> None:
-
-    st.session_state.chats.pop(
-        chat_id,
-        None,
-    )
-
-    if not st.session_state.chats:
-
-        _create_new_chat()
-
-        return
-
-    if (
-        st.session_state.current_chat_id
-        == chat_id
+    for index, item in enumerate(
+        chat["messages"]
     ):
-
-        newest = max(
-            st.session_state.chats.values(),
-            key=lambda item: item.get(
-                "updated_at",
-                "",
-            ),
-        )
-
-        st.session_state.current_chat_id = (
-            newest["id"]
-        )
-
-
-def _clear_all_chats() -> None:
-
-    chat = _new_chat()
-
-    st.session_state.chats = {
-        chat["id"]: chat
-    }
-
-    st.session_state.current_chat_id = (
-        chat["id"]
-    )
-
-
-def _render_history_manager() -> None:
-
-    chat = _current_chat()
-
-    title_key = (
-        "chat_title_"
-        + _safe_key_fragment(
-            chat["id"]
-            + "|"
-            + chat.get(
-                "title",
-                "",
-            )
-        )
-    )
-
-    st.subheader(
-        "💬 المحادثة الحالية"
-    )
-
-    title_value = st.text_input(
-        "اسم المحادثة",
-        value=chat.get(
-            "title",
-            DEFAULT_CHAT_TITLE,
-        ),
-        key=title_key,
-        max_chars=120,
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        if st.button(
-            "💾 حفظ الاسم",
-            use_container_width=True,
-            key="save_chat_title",
+        if (
+            index
+            == len(chat["messages"]) - 1
+            and item.get("role") == "user"
         ):
-
-            clean_title = (
-                " ".join(
-                    title_value.split()
-                ).strip()
-                or DEFAULT_CHAT_TITLE
-            )
-
-            chat["title"] = clean_title
-
-            _touch(chat)
-
-            st.success(
-                "تم حفظ اسم المحادثة."
-            )
-
-            st.rerun()
-
-    with col2:
-
-        if st.button(
-            "🆕 محادثة جديدة",
-            use_container_width=True,
-            key="new_chat",
-        ):
-
-            _create_new_chat()
-
-            st.rerun()
-
-    st.divider()
-
-    st.subheader(
-        "📚 السجل"
-    )
-
-    saved = sorted(
-        st.session_state.chats.values(),
-        key=lambda item: item.get(
-            "updated_at",
-            "",
-        ),
-        reverse=True,
-    )
-
-    if not saved:
-
-        st.caption(
-            "لا توجد محادثات محفوظة في هذه الجلسة."
-        )
-
-    else:
-
-        for saved_chat in saved:
-
-            cid = saved_chat["id"]
-
-            is_current = (
-                cid
-                == st.session_state.current_chat_id
-            )
-
-            title = (
-                saved_chat.get("title")
-                or DEFAULT_CHAT_TITLE
-            )
-
-            message_count = len(
-                saved_chat.get(
-                    "messages",
-                    [],
-                )
-            )
-
-            marker = (
-                "🟢"
-                if is_current
-                else "⚪"
-            )
-
-            st.markdown(
-                f"{marker} **{title}**"
-            )
-
-            st.caption(
-                f"{message_count} رسالة • "
-                f"{_format_time(saved_chat.get('updated_at', ''))}"
-            )
-
-            c1, c2 = st.columns(2)
-
-            with c1:
-
-                if st.button(
-                    "📂 استدعاء",
-                    key=f"load_{cid}",
-                    use_container_width=True,
-                ):
-
-                    st.session_state.current_chat_id = (
-                        cid
-                    )
-
-                    st.rerun()
-
-            with c2:
-
-                if st.button(
-                    "🗑️ حذف",
-                    key=f"delete_{cid}",
-                    use_container_width=True,
-                ):
-
-                    _delete_chat(cid)
-
-                    st.rerun()
-
-    st.divider()
-
-    if st.button(
-        "🧹 مسح كل السجل",
-        use_container_width=True,
-        key="clear_all_chats",
-    ):
-
-        _clear_all_chats()
-
-        st.rerun()
-
-    st.caption(
-        "السجل الحالي محفوظ داخل جلسة Streamlit الحالية فقط. "
-        "لا يتم تخزين مفاتيح API أو إرسال السجل إلى مزود خارجي."
-    )
-
-
-def run_room(
-    user_prompt: str,
-    history: list[dict],
-    rounds: int,
-    local_fallback: bool,
-    model_overrides: dict[str, str] | None = None,
-) -> list[dict]:
-
-    results: list[dict] = []
-
-    working_history = list(
-        history
-    )
-
-    model_overrides = (
-        model_overrides or {}
-    )
-
-    seat_snapshot = {}
-
-    for seat in SEATS:
-
-        candidates = (
-            get_model_candidates(
-                seat
-            )
-        )
-
-        selected = (
-            model_overrides.get(
-                seat.name
-            )
-            or candidates[0]
-        )
-
-        seat_snapshot[
-            seat.name
-        ] = {
-            "credential": get_seat_credential(
-                seat
-            ),
-            "model": selected,
-            "candidates": candidates,
-        }
-
-    order = {
-        seat.name: index
-        for index, seat in enumerate(
-            SEATS
-        )
-    }
-
-    for round_no in range(
-        1,
-        rounds + 1,
-    ):
-
-        snapshot = _context(
-            working_history
-        )
-
-        round_results = []
-
-        with ThreadPoolExecutor(
-            max_workers=len(SEATS),
-            thread_name_prefix="provider",
-        ) as pool:
-
-            futures = {
-                pool.submit(
-                    call_seat,
-                    seat,
-                    user_prompt,
-                    snapshot,
-                    round_no,
-                    local_fallback,
-                    seat_snapshot[
-                        seat.name
-                    ]["credential"],
-                    seat_snapshot[
-                        seat.name
-                    ]["model"],
-                ): seat
-                for seat in SEATS
-            }
-
-            for future in as_completed(
-                futures
-            ):
-
-                seat = futures[
-                    future
-                ]
-
-                try:
-
-                    round_results.append(
-                        future.result()
-                    )
-
-                except Exception as exc:
-
-                    round_results.append(
-                        {
-                            "seat": seat.name,
-                            "status": "FAILED",
-                            "mode": "INTERNAL",
-                            "label": (
-                                f"🔴 {seat.name} "
-                                "— Internal failure"
-                            ),
-                            "model": (
-                                seat_snapshot[
-                                    seat.name
-                                ]["model"]
-                            ),
-                            "content": (
-                                "حدث فشل داخلي "
-                                "معزول في هذا المقعد."
-                            ),
-                            "error": (
-                                f"{exc.__class__.__name__}: "
-                                f"{str(exc)[:500]}"
-                            ),
-                            "latency": 0.0,
-                            "attempted_models": [],
-                        }
-                    )
-
-        round_results.sort(
-            key=lambda item:
-            order.get(
-                item.get(
-                    "seat"
-                ),
-                999,
-            )
-        )
-
-        for item in round_results:
-
-            if (
-                item.get("status")
-                == "SUCCESS"
-            ):
-
-                working_history.append(
-                    {
-                        "sender": item[
-                            "label"
-                        ],
-                        "content": item.get(
-                            "content",
-                            "",
-                        ),
-                    }
-                )
-
-            results.append(item)
-
-    return results
-
-
-def _render_result(
-    item: dict,
-) -> None:
-
-    status = item.get(
-        "status",
-        "FAILED",
-    )
-
-    icon = (
-        "✅"
-        if status == "SUCCESS"
-        else "❌"
-    )
-
-    label = item.get(
-        "label",
-        item.get(
-            "seat",
-            "Unknown",
-        ),
-    )
-
-    model = item.get(
-        "model",
-        "unknown",
-    )
-
-    latency = item.get(
-        "latency",
-        0.0,
-    )
-
-    with st.chat_message(
-        "assistant"
-    ):
-
-        st.markdown(
-            f"**{icon} {label}**"
-        )
-
-        if status == "SUCCESS":
-
-            st.markdown(
-                item.get(
+            continue
+
+        if item.get("role") == "user":
+            lines.append(
+                "USER: "
+                + item.get(
                     "content",
                     "",
                 )
             )
 
-        else:
-
-            st.error(
-                item.get(
-                    "content",
-                    "فشل غير محدد.",
-                )
+        elif item.get("role") == "assistant":
+            lines.append(
+                f"{item.get('seat', 'AI')}: "
+                f"{item.get('content', '')}"
             )
 
-        with st.expander(
-            f"تفاصيل تشخيص {item.get('seat', 'المقعد')}",
-            expanded=False,
-        ):
-
-            st.write(
-                f"**Mode:** "
-                f"`{item.get('mode', 'unknown')}`"
-            )
-
-            st.write(
-                f"**Model:** `{model}`"
-            )
-
-            st.write(
-                f"**Latency:** "
-                f"`{latency:.2f}s`"
-            )
-
-            attempted = (
-                item.get(
-                    "attempted_models"
-                )
-                or []
-            )
-
-            if attempted:
-
-                st.write(
-                    "**Models tried:** "
-                    f"`{', '.join(attempted)}`"
-                )
-
-            error = item.get(
-                "error"
-            )
-
-            if error:
-
-                st.code(
-                    str(error),
-                    language="text",
-                )
-
-            else:
-
-                st.write(
-                    "لا يوجد خطأ مسجل."
-                )
+    return "\n\n".join(lines)[-max_chars:]
 
 
-def _render_contract_table() -> None:
-
-    with st.expander(
-        "🔍 عقود APIs الخمسة",
-        expanded=False,
-    ):
-
-        rows = []
-
-        for seat in SEATS:
-
-            meta = PROVIDERS[
-                seat.provider_id
-            ]
-
-            rows.append(
-                {
-                    "Seat": seat.name,
-                    "Provider": seat.provider_id,
-                    "Endpoint": meta[
-                        "endpoint"
-                    ],
-                    "Kind": meta[
-                        "kind"
-                    ],
-                    "Models": ", ".join(
-                        get_model_candidates(
-                            seat
-                        )
-                    ),
-                    "Credential": (
-                        "configured"
-                        if _configured(
-                            seat
-                        )
-                        else "missing"
-                    ),
-                }
-            )
-
-        st.dataframe(
-            rows,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.caption(
-            "تُعرض هنا عقود النقل البرمجية فقط. "
-            "وجود المفتاح لا يعني أن الحساب يملك صلاحية أو رصيد النموذج."
-        )
-
-
-def _run_hello_diagnostic(
+def _run_round(
+    user_prompt: str,
+    chat: dict,
+    round_no: int,
     local_fallback: bool,
-) -> None:
+    credentials: dict,
+) -> list[dict]:
+    snapshot = _shared_context(chat)
+    results: dict[str, dict] = {}
 
-    prompt = (
-        "Hello. Return one short sentence "
-        "confirming that this API contract "
-        "can generate text."
-    )
+    with ThreadPoolExecutor(
+        max_workers=len(SEATS),
+        thread_name_prefix="council",
+    ) as pool:
 
-    with st.spinner(
-        "اختبار Hello للمقاعد الخمسة..."
+        futures = {
+            pool.submit(
+                call_seat,
+                seat,
+                user_prompt,
+                snapshot,
+                round_no,
+                local_fallback,
+                credentials.get(
+                    seat.key
+                ),
+            ): seat
+            for seat in SEATS
+        }
+
+        for future in as_completed(
+            futures
+        ):
+            seat = futures[future]
+
+            try:
+                results[
+                    seat.key
+                ] = future.result()
+
+            except Exception as exc:
+                results[
+                    seat.key
+                ] = {
+                    "seat": seat.key,
+                    "name": seat.name,
+                    "label": seat.label,
+                    "status": "FAILED",
+                    "mode": "internal",
+                    "model": get_model_candidates(
+                        seat
+                    )[0],
+                    "content": "",
+                    "error": (
+                        "class="
+                        "internal_worker_error; "
+                        f"{exc.__class__.__name__}"
+                    ),
+                    "latency": 0,
+                    "attempted_models": [],
+                    "official_authenticated": False,
+                }
+
+    return [
+        results[seat.key]
+        for seat in SEATS
+    ]
+
+
+def _run_council(
+    user_prompt: str,
+    chat: dict,
+    rounds: int,
+    local_fallback: bool,
+    credentials: dict,
+) -> list[dict]:
+    all_results = []
+
+    for round_no in range(
+        1,
+        rounds + 1,
     ):
-
-        results = run_room(
-            prompt,
-            [],
-            1,
+        round_results = _run_round(
+            user_prompt,
+            chat,
+            round_no,
             local_fallback,
+            credentials,
         )
 
-    official_success = sum(
-        1
-        for item in results
-        if (
-            item.get("status")
-            == "SUCCESS"
-            and item.get("mode")
-            == "OFFICIAL_API"
+        all_results.extend(
+            round_results
         )
-    )
 
-    local_success = sum(
-        1
-        for item in results
-        if (
-            item.get("status")
-            == "SUCCESS"
-            and item.get("mode")
-            == "LOCAL_FALLBACK"
-        )
-    )
+        for result in round_results:
+            if (
+                result["status"]
+                in ("SUCCESS", "LOCAL")
+                and result["content"]
+            ):
+                chat["messages"].append(
+                    {
+                        "role": "assistant",
+                        "seat": result["name"],
+                        "label": result["label"],
+                        "content": result["content"],
+                        "round": round_no,
+                        "mode": result["mode"],
+                        "model": result["model"],
+                        "created_at": _now(),
+                    }
+                )
 
-    st.info(
-        f"اختبار Hello: "
-        f"{official_success + local_success}/5 ناجحة • "
-        f"رسمي: {official_success} • "
-        f"محلي: {local_success}"
-    )
-
-    for item in results:
-        _render_result(item)
+    return all_results
 
 
-def run_app() -> None:
-
-    _ensure_chat_state()
-
-    chat = _current_chat()
-
-    st.title(
-        "🏛️ AI Council — Shared Context Arena"
-    )
-
-    st.caption(
-        f"{APP_VERSION} • "
-        "المستخدم + خمسة مقاعد أصلية • "
-        "سياق مشترك • API Contract Hardening"
-    )
+def _render_sidebar(
+    rounds: int,
+    local_fallback: bool,
+    credentials: dict,
+) -> tuple[int, bool]:
 
     with st.sidebar:
-
         st.header(
             "⚙️ إعدادات المجلس"
         )
@@ -851,237 +251,500 @@ def run_app() -> None:
             "عدد الجولات",
             1,
             4,
+            rounds,
             1,
         )
 
         local_fallback = st.checkbox(
-            "تفعيل Local Engine "
-            "كبديل محلي معلن",
-            False,
+            "تفعيل Local Engine كبديل محلي معلن",
+            value=local_fallback,
         )
-
-        st.divider()
-
-        _render_history_manager()
 
         st.divider()
 
         st.subheader(
-            "المقاعد الرسمية"
+            "💬 المحادثة الحالية"
         )
 
-        configured_count = 0
+        chat = _active_chat()
+
+        st.caption(
+            f"اسم المحادثة: "
+            f"{chat['title']}"
+        )
+
+        rename = st.text_input(
+            "إعادة تسمية",
+            value="",
+            key="rename_chat_input",
+        )
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button(
+                "💾 حفظ الاسم",
+                use_container_width=True,
+            ):
+                if rename.strip():
+                    chat["title"] = (
+                        rename.strip()[:80]
+                    )
+                    st.rerun()
+
+        with c2:
+            if st.button(
+                "➕ جديد",
+                use_container_width=True,
+            ):
+                new_chat = _new_chat()
+
+                st.session_state.chats.insert(
+                    0,
+                    new_chat,
+                )
+
+                st.session_state.active_chat_id = (
+                    new_chat["id"]
+                )
+
+                st.session_state.last_results = []
+
+                st.rerun()
+
+        st.divider()
+
+        st.subheader("📚 السجل")
+
+        for item in list(
+            st.session_state.chats
+        ):
+            if st.button(
+                (
+                    "🟢"
+                    if item["id"]
+                    == st.session_state.active_chat_id
+                    else "⚪"
+                )
+                + f" {item['title']}",
+                key=f"load_{item['id']}",
+                use_container_width=True,
+            ):
+                st.session_state.active_chat_id = (
+                    item["id"]
+                )
+
+                st.session_state.last_results = []
+
+                st.rerun()
+
+            st.caption(
+                f"{len(item['messages'])} رسالة "
+                f"• {item['created_at']}"
+            )
+
+        c3, c4 = st.columns(2)
+
+        with c3:
+            if st.button(
+                "🗑️ حذف الحالية",
+                use_container_width=True,
+            ):
+                if len(
+                    st.session_state.chats
+                ) == 1:
+                    fresh = _new_chat()
+
+                    st.session_state.chats = [
+                        fresh
+                    ]
+
+                    st.session_state.active_chat_id = (
+                        fresh["id"]
+                    )
+
+                else:
+                    st.session_state.chats = [
+                        x
+                        for x in st.session_state.chats
+                        if x["id"]
+                        != chat["id"]
+                    ]
+
+                    st.session_state.active_chat_id = (
+                        st.session_state.chats[0]["id"]
+                    )
+
+                st.session_state.last_results = []
+
+                st.rerun()
+
+        with c4:
+            if st.button(
+                "🧹 مسح الكل",
+                use_container_width=True,
+            ):
+                fresh = _new_chat()
+
+                st.session_state.chats = [
+                    fresh
+                ]
+
+                st.session_state.active_chat_id = (
+                    fresh["id"]
+                )
+
+                st.session_state.last_results = []
+
+                st.rerun()
+
+        st.divider()
+
+        st.subheader(
+            "🔌 الاعتمادات والنماذج"
+        )
 
         for seat in SEATS:
-
-            configured = _configured(
+            models = get_model_candidates(
                 seat
             )
 
-            configured_count += int(
-                configured
+            icon = (
+                "🟢"
+                if credentials.get(seat.key)
+                else "⚪"
             )
 
-            candidates = (
-                get_model_candidates(
-                    seat
-                )
-            )
-
-            st.write(
-                f"{'🔑' if configured else '⚪'} "
-                f"{seat.name}"
+            st.markdown(
+                f"{icon} **{seat.name}**"
             )
 
             st.caption(
-                f"Primary: {candidates[0]}"
+                f"Primary: `{models[0]}`"
             )
 
-            if len(candidates) > 1:
-
+            if len(models) > 1:
                 st.caption(
-                    "Fallback models: "
+                    "Fallback: "
                     + ", ".join(
-                        candidates[1:]
+                        f"`{m}`"
+                        for m in models[1:]
                     )
                 )
 
         st.caption(
-            f"الاعتمادات المكوّنة: "
-            f"{configured_count}/{len(SEATS)}"
+            f"اعتمادات موجودة: "
+            f"{configured_count(credentials)}/5"
         )
 
         st.caption(
-            "🔑 تعني وجود اعتماد في البيئة فقط؛ "
-            "ولا تعني نجاح API أو وجود رصيد."
+            "🔑 وجود المفتاح لا يثبت نجاح API "
+            "ولا وجود رصيد/ائتمان."
         )
 
         st.caption(
-            "لا يتم عرض أو حفظ مفاتيح API. "
-            "الأخطاء تُنقّى من الأسرار قبل عرضها."
+            "المفاتيح لا تُعرض في الواجهة "
+            "ولا تُحفظ في History."
         )
 
-        st.caption(
-            "Local Engine مستقل ولا ينتحل هوية "
-            "أي مزود رسمي."
-        )
+    return rounds, local_fallback
 
-        _render_contract_table()
 
-        if st.button(
-            "🔬 اختبار Hello للمقاعد الخمسة",
-            use_container_width=True,
-            key="hello_diagnostic",
-        ):
+def _render_user_room(
+    chat: dict,
+) -> None:
 
-            st.session_state[
-                "run_hello_diagnostic"
-            ] = True
-
-            st.rerun()
-
-    if st.session_state.pop(
-        "run_hello_diagnostic",
-        False,
+    with st.container(
+        height=500,
+        border=True,
     ):
+        st.subheader("👤 أنت")
 
-        _run_hello_diagnostic(
-            local_fallback
-        )
+        user_messages = [
+            m
+            for m in chat["messages"]
+            if m.get("role") == "user"
+        ]
 
-    for item in chat.get(
-        "messages",
-        [],
-    ):
-
-        role = (
-            "user"
-            if item.get("role")
-            == "user"
-            else "assistant"
-        )
-
-        with st.chat_message(
-            role
-        ):
-
-            st.markdown(
-                f"**{item.get('sender', '')}**\n\n"
-                f"{item.get('content', '')}"
+        if not user_messages:
+            st.caption(
+                "اكتب رسالة واحدة "
+                "من خانة الإدخال السفلية."
             )
 
-    prompt = st.chat_input(
-        "اكتب موضوع النقاش على المجلس..."
-    )
+        for message in user_messages:
+            st.chat_message(
+                "user"
+            ).write(
+                message.get(
+                    "content",
+                    "",
+                )
+            )
 
-    if not prompt:
-        return
 
-    if (
-        chat.get("title")
-        == DEFAULT_CHAT_TITLE
+def _render_ai_room(
+    chat: dict,
+    seat,
+) -> None:
+
+    with st.container(
+        height=500,
+        border=True,
     ):
-
-        chat["title"] = _auto_title(
-            prompt
+        st.subheader(
+            seat.label
         )
 
-    chat["messages"].append(
-        {
-            "role": "user",
-            "sender": "👤 أنت",
-            "content": prompt,
-        }
+        models = get_model_candidates(
+            seat
+        )
+
+        st.caption(
+            f"Primary: `{models[0]}`"
+        )
+
+        messages = [
+            m
+            for m in chat["messages"]
+            if m.get("seat")
+            == seat.name
+        ]
+
+        if not messages:
+            st.caption(
+                "بانتظار أول جولة…"
+            )
+            return
+
+        for message in messages:
+            badge = (
+                "Official API"
+                if message.get(
+                    "mode"
+                )
+                == "official"
+                else "Local Engine"
+            )
+
+            st.markdown(
+                f"**Round "
+                f"{message.get('round', '?')} "
+                f"· {badge} "
+                f"· `{message.get('model', '')}`**"
+            )
+
+            st.markdown(
+                message.get(
+                    "content",
+                    "",
+                )
+            )
+
+            st.divider()
+
+
+def _render_six_rooms(
+    chat: dict,
+) -> None:
+
+    rows = [
+        (None, SEATS[0]),
+        (SEATS[1], SEATS[2]),
+        (SEATS[3], SEATS[4]),
+    ]
+
+    for left, right in rows:
+        cols = st.columns(
+            2,
+            gap="medium",
+        )
+
+        with cols[0]:
+            (
+                _render_user_room(chat)
+                if left is None
+                else _render_ai_room(
+                    chat,
+                    left,
+                )
+            )
+
+        with cols[1]:
+            _render_ai_room(
+                chat,
+                right,
+            )
+
+
+def _render_diagnostics(
+    results: list[dict],
+) -> None:
+
+    official = sum(
+        r["status"] == "SUCCESS"
+        for r in results
     )
 
-    chat["messages"] = _trim_messages(
-        chat["messages"]
+    local = sum(
+        r["status"] == "LOCAL"
+        for r in results
     )
 
-    _touch(chat)
-
-    with st.chat_message(
-        "user"
-    ):
-
-        st.markdown(
-            f"**👤 أنت**\n\n{prompt}"
-        )
-
-    with st.spinner(
-        "المجلس يفحص المقاعد الخمسة..."
-    ):
-
-        results = run_room(
-            prompt,
-            chat["messages"],
-            rounds,
-            local_fallback,
-        )
-
-    official_success = sum(
-        1
-        for item in results
-        if (
-            item.get("status")
-            == "SUCCESS"
-            and item.get("mode")
-            == "OFFICIAL_API"
-        )
-    )
-
-    local_success = sum(
-        1
-        for item in results
-        if (
-            item.get("status")
-            == "SUCCESS"
-            and item.get("mode")
-            == "LOCAL_FALLBACK"
-        )
-    )
-
-    total_success = (
-        official_success
-        + local_success
+    failed = sum(
+        r["status"] == "FAILED"
+        for r in results
     )
 
     st.info(
-        f"نتائج هذه العملية: "
-        f"{total_success}/"
-        f"{len(SEATS) * rounds} ناجحة • "
-        f"رسمي: {official_success} • "
-        f"محلي: {local_success}"
+        f"آخر عملية: "
+        f"{official + local}/5 استجابات "
+        f"• رسمي: {official} "
+        f"• محلي: {local} "
+        f"• فشل: {failed}"
     )
 
-    for item in results:
+    for result in results:
+        if result["status"] == "SUCCESS":
+            st.success(
+                f"✅ {result['label']} "
+                f"— Official API "
+                f"— `{result['model']}` "
+                f"— {result['latency']}s"
+            )
 
-        if (
-            item.get("status")
-            == "SUCCESS"
-        ):
+        elif result["status"] == "LOCAL":
+            with st.expander(
+                f"🟡 {result['label']} "
+                f"— Local Engine"
+            ):
+                st.write(
+                    result.get(
+                        "error"
+                    )
+                    or "تم استخدام Local Engine."
+                )
+
+                st.write(
+                    "Attempted models:",
+                    ", ".join(
+                        result.get(
+                            "attempted_models",
+                            [],
+                        )
+                    )
+                    or "none",
+                )
+
+        else:
+            with st.expander(
+                f"❌ {result['label']} "
+                f"— Official API failed"
+            ):
+                st.write(
+                    result.get(
+                        "error"
+                    )
+                    or "تعذر الحصول على رد رسمي."
+                )
+
+                st.write(
+                    "Attempted models:",
+                    ", ".join(
+                        result.get(
+                            "attempted_models",
+                            [],
+                        )
+                    )
+                    or "none",
+                )
+
+
+def run_app() -> None:
+    _init_state()
+
+    credentials = capture_credentials()
+
+    rounds, local_fallback = (
+        _render_sidebar(
+            1,
+            True,
+            credentials,
+        )
+    )
+
+    chat = _active_chat()
+
+    st.title(
+        "🏛️ AI Council — "
+        "Six-Room Shared Context Arena"
+    )
+
+    st.caption(
+        f"{APP_VERSION} "
+        f"• المستخدم + خمسة مقاعد "
+        f"• سياق مشترك "
+        f"• استدعاءات متوازية "
+        f"• Provider: {PROVIDER_VERSION}"
+    )
+
+    st.markdown(
+        "**العقد التشغيلي:** "
+        "رسالة واحدة تُرسل بالتوازي إلى "
+        "ChatGPT وGemini وClaude وGrok وKimi. "
+        "لا يظهر وسم Official API إلا بعد نجاح "
+        "طلب API رسمي مصادق عليه."
+    )
+
+    _render_six_rooms(chat)
+
+    prompt = st.chat_input(
+        "اكتب موضوع النقاش على المجلس…"
+    )
+
+    if prompt:
+        prompt = prompt.strip()
+
+        if prompt:
+            if not chat["messages"]:
+                chat["title"] = (
+                    _title_from_prompt(
+                        prompt
+                    )
+                )
 
             chat["messages"].append(
                 {
-                    "role": "assistant",
-                    "sender": item.get(
-                        "label",
-                        item.get(
-                            "seat",
-                            "Unknown",
-                        ),
-                    ),
-                    "content": item.get(
-                        "content",
-                        "",
-                    ),
+                    "role": "user",
+                    "content": prompt,
+                    "created_at": _now(),
                 }
             )
 
-        _render_result(item)
+            with st.spinner(
+                "المجلس ينفذ الجولة بالتوازي…"
+            ):
+                results = _run_council(
+                    prompt,
+                    chat,
+                    rounds,
+                    local_fallback,
+                    credentials,
+                )
 
-    chat["messages"] = _trim_messages(
-        chat["messages"]
-    )
+            st.session_state.last_results = (
+                results
+            )
 
-    _touch(chat)
+            st.rerun()
+
+    if st.session_state.last_results:
+        st.divider()
+
+        st.subheader(
+            "🔎 التشخيص والنتائج"
+        )
+
+        _render_diagnostics(
+            st.session_state.last_results
+        )
