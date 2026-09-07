@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 
-VERSION = "V21.15-LOCAL-ENGINE"
+VERSION = "V21.17-LOCAL-ENGINE"
 
 
 ROLE_ACTIONS = {
@@ -34,7 +34,6 @@ def _clean(
     text: str,
     limit: int = 900,
 ) -> str:
-
     text = re.sub(
         r"\s+",
         " ",
@@ -50,7 +49,6 @@ def generate_local(
     shared_context: str = "",
     round_no: int = 1,
 ) -> str:
-
     action = ROLE_ACTIONS.get(
         seat_name,
         "حلّل الطلب بصورة مستقلة.",
@@ -63,15 +61,13 @@ def generate_local(
     )
 
     return (
-        "هذا رد من Local Engine المعلن، "
+        f"هذا رد من Local Engine المعلن، "
         f"وليس من {seat_name} الرسمي.\n\n"
         f"الدور: {action}\n"
-        f"الجولة: {round_no}. "
-        f"{context_note}\n\n"
+        f"الجولة: {round_no}. {context_note}\n\n"
         f"الطلب: {_clean(user_prompt)}\n\n"
-        "الاستنتاج المحلي: لا يمكن إثبات "
-        "هوية مزود تجاري أو تنفيذ API رسمي "
-        "من هذا المسار. استخدم هذا الرد "
-        "كمسودة/خطة، ثم تحقّق من النتيجة "
-        "الرسمية عند توفر API صالح."
+        "الاستنتاج المحلي: لا يمكن إثبات هوية "
+        "مزود تجاري أو تنفيذ API رسمي من هذا المسار. "
+        "استخدم هذا الرد كمسودة/خطة، ثم تحقّق من "
+        "النتيجة الرسمية عند توفر API صالح."
     )
