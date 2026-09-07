@@ -16,12 +16,16 @@ from providers import (
 )
 
 
-APP_VERSION = "V21.3-FINAL-HARDENED"
+APP_VERSION = "V21.3.1-FINAL-SYNTAX-SAFE"
 
 MAX_CONTEXT_CHARS = 50000
 MAX_HISTORY_CHATS = 100
 MAX_VISIBLE_HISTORY = 20
 
+
+# ---------------------------------------------------------------------------
+# Time / chat helpers
+# ---------------------------------------------------------------------------
 
 def _now() -> str:
     return datetime.now(
@@ -39,45 +43,31 @@ def _make_chat() -> dict:
     now = _now()
 
     return {
-        "id":
-            now.replace(
-                ":",
-                "",
-            ).replace(
-                "+00:00",
-                "Z",
-            ),
-
-        "title":
-            _default_title(),
-
-        "created_at":
-            now,
-
-        "updated_at":
-            now,
-
-        "messages":
-            [],
+        "id": (
+            now
+            .replace(":", "")
+            .replace("+00:00", "Z")
+        ),
+        "title": _default_title(),
+        "created_at": now,
+        "updated_at": now,
+        "messages": [],
     }
 
 
 def _ensure_state() -> None:
+
     if (
-        "chat"
-        not in st.session_state
+        "chat" not in st.session_state
         or not isinstance(
             st.session_state.chat,
             dict,
         )
     ):
-        st.session_state.chat = (
-            _make_chat()
-        )
+        st.session_state.chat = _make_chat()
 
     if (
-        "history_chats"
-        not in st.session_state
+        "history_chats" not in st.session_state
         or not isinstance(
             st.session_state.history_chats,
             list,
@@ -94,6 +84,7 @@ def _context(
     chunks: list[str] = []
 
     for item in messages:
+
         sender = str(
             item.get(
                 "sender",
@@ -113,32 +104,38 @@ def _context(
                 f"{sender}: {content}"
             )
 
-    text = "\n\n".join(
-        chunks
-    )
+    text = "\n\n".join(chunks)
 
     return text[-max_chars:]
 
 
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+
 def _credential_state() -> dict[str, dict]:
+
     state: dict[str, dict] = {}
 
     for seat in SEATS:
+
         try:
-            state[seat.name] = (
-                get_seat_config(seat)
+            state[seat.name] = get_seat_config(
+                seat
             )
 
         except Exception:
             state[seat.name] = {
-                "credential":
-                    None,
-                "workspace_id":
-                    None,
+                "credential": None,
+                "workspace_id": None,
             }
 
     return state
 
+
+# ---------------------------------------------------------------------------
+# Chat persistence in session
+# ---------------------------------------------------------------------------
 
 def _has_chat_content(
     chat: dict,
@@ -149,9 +146,8 @@ def _has_chat_content(
         [],
     )
 
-    return (
-        bool(messages)
-        or chat.get("title")
+    return bool(messages) or (
+        chat.get("title")
         not in (
             None,
             "",
@@ -161,6 +157,7 @@ def _has_chat_content(
 
 
 def _save_current_chat() -> None:
+
     chat = dict(
         st.session_state.chat
     )
@@ -174,13 +171,11 @@ def _save_current_chat() -> None:
 
     chat["updated_at"] = _now()
 
-    if not _has_chat_content(
-        chat
-    ):
+    if not _has_chat_content(chat):
+
         st.session_state.history_chats = [
             item
-            for item
-            in st.session_state.history_chats
+            for item in st.session_state.history_chats
             if item.get("id")
             != chat.get("id")
         ]
@@ -189,8 +184,7 @@ def _save_current_chat() -> None:
 
     existing = [
         item
-        for item
-        in st.session_state.history_chats
+        for item in st.session_state.history_chats
         if item.get("id")
         != chat.get("id")
     ]
@@ -216,9 +210,7 @@ def _set_title(
     if not cleaned:
         return False
 
-    st.session_state.chat[
-        "title"
-    ] = cleaned
+    st.session_state.chat["title"] = cleaned
 
     st.session_state.chat[
         "updated_at"
@@ -232,9 +224,7 @@ def _set_title(
 def _new_chat() -> None:
     _save_current_chat()
 
-    st.session_state.chat = (
-        _make_chat()
-    )
+    st.session_state.chat = _make_chat()
 
 
 def _load_chat(
@@ -244,41 +234,33 @@ def _load_chat(
     fallback = _make_chat()
 
     st.session_state.chat = {
-        "id":
+        "id": chat.get(
+            "id",
+            fallback["id"],
+        ),
+        "title": (
+            chat.get("title")
+            or _default_title()
+        ),
+        "created_at": chat.get(
+            "created_at",
+            _now(),
+        ),
+        "updated_at": chat.get(
+            "updated_at",
+            _now(),
+        ),
+        "messages": list(
             chat.get(
-                "id",
-                fallback["id"],
-            ),
-
-        "title":
-            chat.get(
-                "title"
+                "messages",
+                [],
             )
-            or _default_title(),
-
-        "created_at":
-            chat.get(
-                "created_at",
-                _now(),
-            ),
-
-        "updated_at":
-            chat.get(
-                "updated_at",
-                _now(),
-            ),
-
-        "messages":
-            list(
-                chat.get(
-                    "messages",
-                    [],
-                )
-            ),
+        ),
     }
 
 
 def _clear_current_chat() -> None:
+
     st.session_state.chat[
         "messages"
     ] = []
@@ -314,6 +296,10 @@ def _auto_title_from_prompt(
         ] = title[:80]
 
 
+# ---------------------------------------------------------------------------
+# Council execution
+# ---------------------------------------------------------------------------
+
 def run_room(
     user_prompt: str,
     messages: list[dict],
@@ -327,9 +313,7 @@ def run_room(
         messages
     )
 
-    credentials = (
-        _credential_state()
-    )
+    credentials = _credential_state()
 
     rounds = max(
         1,
@@ -374,9 +358,7 @@ def run_room(
                     ).get(
                         "workspace_id"
                     ),
-                ):
-                    seat
-
+                ): seat
                 for seat in SEATS
             }
 
@@ -384,46 +366,33 @@ def run_room(
                 futures
             ):
 
-                seat = futures[
-                    future
-                ]
+                seat = futures[future]
 
                 try:
-                    result = (
-                        future.result()
-                    )
+                    result = future.result()
 
                 except Exception as exc:
+
                     result = {
-                        "seat":
-                            seat.name,
-
-                        "label":
+                        "seat": seat.name,
+                        "label": (
                             f"❌ {seat.name} "
-                            "— Worker Error",
-
-                        "provider":
-                            seat.provider_id,
-
-                        "model":
-                            seat.default_model,
-
-                        "status":
-                            "FAILED",
-
-                        "mode":
-                            "NONE",
-
-                        "round":
-                            round_no,
-
-                        "content":
-                            "حدث خطأ داخلي "
-                            f"أثناء تشغيل مقعد "
-                            f"{seat.name}.",
-
-                        "error":
-                            str(exc)[:1200],
+                            "— Worker Error"
+                        ),
+                        "provider": (
+                            seat.provider_id
+                        ),
+                        "model": (
+                            seat.default_model
+                        ),
+                        "status": "FAILED",
+                        "mode": "NONE",
+                        "round": round_no,
+                        "content": (
+                            "حدث خطأ داخلي أثناء "
+                            f"تشغيل مقعد {seat.name}."
+                        ),
+                        "error": str(exc)[:1200],
                     }
 
                 round_results.append(
@@ -432,16 +401,16 @@ def run_room(
 
         order = {
             seat.name: index
-            for index, seat
-            in enumerate(SEATS)
+            for index, seat in enumerate(
+                SEATS
+            )
         }
 
         round_results.sort(
-            key=lambda item:
-                order.get(
-                    item.get("seat"),
-                    999,
-                )
+            key=lambda item: order.get(
+                item.get("seat"),
+                999,
+            )
         )
 
         for item in round_results:
@@ -450,31 +419,31 @@ def run_room(
                 item.get("status")
                 == "SUCCESS"
             ):
+
                 working_messages.append(
                     {
-                        "sender":
+                        "sender": item.get(
+                            "label",
                             item.get(
-                                "label",
-                                item.get(
-                                    "seat",
-                                    "Unknown",
-                                ),
+                                "seat",
+                                "Unknown",
                             ),
-
-                        "content":
-                            item.get(
-                                "content",
-                                "",
-                            ),
+                        ),
+                        "content": item.get(
+                            "content",
+                            "",
+                        ),
                     }
                 )
 
-            results.append(
-                item
-            )
+            results.append(item)
 
     return results
 
+
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
 
 def _render_sidebar() -> tuple[int, bool]:
 
@@ -505,23 +474,21 @@ def _render_sidebar() -> tuple[int, bool]:
         )
 
         title_widget_key = (
-            f"title_draft_"
+            "title_draft_"
             f"{chat_id}_"
             f"{title_hash}"
         )
 
         title_value = st.text_input(
             "الاسم",
-
-            value=st.session_state.chat.get(
-                "title",
-                _default_title(),
+            value=(
+                st.session_state.chat.get(
+                    "title",
+                    _default_title(),
+                )
             ),
-
             key=title_widget_key,
-
-            label_visibility=
-                "collapsed",
+            label_visibility="collapsed",
         )
 
         if st.button(
@@ -541,9 +508,7 @@ def _render_sidebar() -> tuple[int, bool]:
                     "اكتب اسمًا صالحًا للمحادثة."
                 )
 
-        col1, col2 = st.columns(
-            2
-        )
+        col1, col2 = st.columns(2)
 
         with col1:
 
@@ -571,8 +536,7 @@ def _render_sidebar() -> tuple[int, bool]:
         )
 
         local_fallback = st.checkbox(
-            "تفعيل Local Engine "
-            "كبديل محلي معلن",
+            "تفعيل Local Engine كبديل محلي معلن",
             value=False,
         )
 
@@ -582,9 +546,7 @@ def _render_sidebar() -> tuple[int, bool]:
             "المقاعد الرسمية"
         )
 
-        credentials = (
-            _credential_state()
-        )
+        credentials = _credential_state()
 
         configured_count = 0
 
@@ -613,14 +575,12 @@ def _render_sidebar() -> tuple[int, bool]:
             )
 
             st.caption(
-                f"Model: "
-                f"{seat.default_model}"
+                f"Model: {seat.default_model}"
             )
 
         st.caption(
-            f"الاعتمادات المكوّنة: "
-            f"{configured_count}/"
-            f"{len(SEATS)}"
+            "الاعتمادات المكوّنة: "
+            f"{configured_count}/{len(SEATS)}"
         )
 
         st.caption(
@@ -662,15 +622,11 @@ def _render_sidebar() -> tuple[int, bool]:
 
                 if st.button(
                     label,
-                    key=f"load_"
-                    f"{saved.get('id')}",
+                    key=f"load_{saved.get('id')}",
                     use_container_width=True,
                 ):
 
-                    _load_chat(
-                        saved
-                    )
-
+                    _load_chat(saved)
                     st.rerun()
 
     return (
@@ -678,6 +634,10 @@ def _render_sidebar() -> tuple[int, bool]:
         local_fallback,
     )
 
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
 
 def _render_result(
     item: dict,
@@ -699,9 +659,9 @@ def _render_result(
     with st.chat_message(
         "assistant"
     ):
+
         st.markdown(
-            f"**{label}**\n\n"
-            f"{content}"
+            f"**{label}**\n\n{content}"
         )
 
     error = item.get(
@@ -720,23 +680,22 @@ def _render_result(
                 item.get("mode")
                 == "LOCAL_FALLBACK"
             ):
-                st.info(
-                    error
-                )
+                st.info(error)
 
             else:
-                st.warning(
-                    error
-                )
+                st.warning(error)
 
+
+# ---------------------------------------------------------------------------
+# Main application
+# ---------------------------------------------------------------------------
 
 def run_app() -> None:
 
     _ensure_state()
 
     st.title(
-        "🏛️ AI Council — "
-        "Shared Context Arena"
+        "🏛️ AI Council — Shared Context Arena"
     )
 
     st.caption(
@@ -770,12 +729,11 @@ def run_app() -> None:
             else "assistant"
         )
 
-        with st.chat_message(
-            role
-        ):
+        with st.chat_message(role):
 
             st.markdown(
-                f"**{item.get('sender', '')}**\n\n"
+                f"**{item.get('sender', '')}**"
+                "\n\n"
                 f"{item.get('content', '')}"
             )
 
@@ -799,14 +757,9 @@ def run_app() -> None:
         "messages"
     ].append(
         {
-            "role":
-                "user",
-
-            "sender":
-                "👤 أنت",
-
-            "content":
-                prompt,
+            "role": "user",
+            "sender": "👤 أنت",
+            "content": prompt,
         }
     )
 
@@ -817,9 +770,9 @@ def run_app() -> None:
     with st.chat_message(
         "user"
     ):
+
         st.markdown(
-            f"**👤 أنت**\n\n"
-            f"{prompt}"
+            f"**👤 أنت**\n\n{prompt}"
         )
 
     with st.spinner(
@@ -828,13 +781,10 @@ def run_app() -> None:
 
         results = run_room(
             prompt,
-
             st.session_state.chat[
                 "messages"
             ],
-
             rounds,
-
             local_fallback,
         )
 
@@ -860,8 +810,7 @@ def run_app() -> None:
 
         st.info(
             f"نتائج هذه العملية: "
-            f"{success_count}/"
-            f"{len(results)} ناجحة • "
+            f"{success_count}/{len(results)} ناجحة • "
             f"رسمي: {official_count} • "
             f"محلي: {fallback_count}"
         )
@@ -885,20 +834,13 @@ def run_app() -> None:
             "messages"
         ].append(
             {
-                "role":
-                    "assistant",
-
-                "sender":
-                    label,
-
-                "content":
-                    content,
+                "role": "assistant",
+                "sender": label,
+                "content": content,
             }
         )
 
-        _render_result(
-            item
-        )
+        _render_result(item)
 
     st.session_state.chat[
         "updated_at"
