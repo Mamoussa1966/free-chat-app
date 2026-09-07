@@ -1,24 +1,5 @@
 # -*- coding: utf-8 -*-
 
-"""
-AI Council V20 - Provider Gateway
-
-Five original seats:
-    1. ChatGPT / OpenAI
-    2. Gemini / Google
-    3. Claude / Anthropic
-    4. Grok / xAI
-    5. Kimi / Moonshot
-
-Security:
-- API keys are never hard-coded.
-- API keys are never returned in results/errors.
-- Streamlit secrets are resolved by the main Streamlit thread.
-- Worker threads receive only the credential they need.
-- Official provider failures are isolated per seat.
-- Local fallback is explicitly labelled.
-"""
-
 from __future__ import annotations
 
 import os
@@ -31,22 +12,29 @@ import requests
 from local_engine import generate_local
 
 
-# ---------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------
-
 def _bounded_int(
     env_name: str,
     default: int,
     minimum: int,
     maximum: int,
 ) -> int:
+
     try:
-        value = int(os.getenv(env_name, str(default)))
+        value = int(
+            os.getenv(
+                env_name,
+                str(default),
+            )
+        )
+
     except (TypeError, ValueError):
+
         value = default
 
-    return max(minimum, min(value, maximum))
+    return max(
+        minimum,
+        min(value, maximum),
+    )
 
 
 REQUEST_TIMEOUT = _bounded_int(
@@ -64,12 +52,9 @@ MAX_OUTPUT_TOKENS = _bounded_int(
 )
 
 
-# ---------------------------------------------------------------------
-# Seat definition
-# ---------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class Seat:
+
     name: str
     env_key: str
     default_model: str
@@ -78,137 +63,124 @@ class Seat:
 
 
 SEATS = (
+
     Seat(
-        name="ChatGPT",
-        env_key="OPENAI_API_KEY",
-        default_model=os.getenv(
+        "ChatGPT",
+        "OPENAI_API_KEY",
+        os.getenv(
             "OPENAI_MODEL",
             "gpt-5",
         ),
-        system=(
-            "أنت مقعد ChatGPT في مجلس ذكاء اصطناعي متعدد النماذج. "
-            "حلل السؤال بدقة، افصل الحقائق عن الافتراضات، "
-            "وقدم استدلالاً واضحاً ومفيداً."
+        (
+            "أنت مقعد ChatGPT في مجلس متعدد "
+            "النماذج. حلل بدقة، افصل الحقائق "
+            "عن الافتراضات، وقدم نتيجة قابلة للفحص."
         ),
-        provider_id="openai",
+        "openai",
     ),
+
     Seat(
-        name="Gemini",
-        env_key="GEMINI_API_KEY",
-        default_model=os.getenv(
+        "Gemini",
+        "GEMINI_API_KEY",
+        os.getenv(
             "GEMINI_MODEL",
             "gemini-3.8-flash",
         ),
-        system=(
-            "أنت مقعد Gemini في مجلس ذكاء اصطناعي متعدد النماذج. "
-            "ركز على التحليل المنطقي، كشف الافتراضات، "
-            "ومقارنة البدائل."
+        (
+            "أنت مقعد Gemini. ركز على التحليل "
+            "المنطقي، كشف الافتراضات، ومقارنة البدائل."
         ),
-        provider_id="gemini",
+        "gemini",
     ),
+
     Seat(
-        name="Claude",
-        env_key="ANTHROPIC_API_KEY",
-        default_model=os.getenv(
+        "Claude",
+        "ANTHROPIC_API_KEY",
+        os.getenv(
             "ANTHROPIC_MODEL",
             "claude-sonnet-4-6",
         ),
-        system=(
-            "أنت مقعد Claude في مجلس ذكاء اصطناعي متعدد النماذج. "
-            "راجع جودة الحجج، ابحث عن الثغرات، "
-            "واذكر حدود الاستنتاج بوضوح."
+        (
+            "أنت مقعد Claude. راجع جودة الحجج، "
+            "ابحث عن الثغرات، واذكر حدود الاستنتاج بوضوح."
         ),
-        provider_id="anthropic",
+        "anthropic",
     ),
+
     Seat(
-        name="Grok",
-        env_key="XAI_API_KEY",
-        default_model=os.getenv(
+        "Grok",
+        "XAI_API_KEY",
+        os.getenv(
             "XAI_MODEL",
-            "grok-4",
+            "grok-4.6",
         ),
-        system=(
-            "أنت مقعد Grok في مجلس ذكاء اصطناعي متعدد النماذج. "
-            "اختبر المخاطر والبدائل والافتراضات التي قد تكون غير واضحة."
+        (
+            "أنت مقعد Grok. اختبر المخاطر "
+            "والبدائل والافتراضات غير الواضحة."
         ),
-        provider_id="xai",
+        "xai",
     ),
+
     Seat(
-        name="Kimi",
-        env_key="KIMI_API_KEY",
-        default_model=os.getenv(
+        "Kimi",
+        "KIMI_API_KEY",
+        os.getenv(
             "KIMI_MODEL",
             "kimi-k2.5",
         ),
-        system=(
-            "أنت مقعد Kimi في مجلس ذكاء اصطناعي متعدد النماذج. "
-            "اجمع الأفكار في تحليل منظم ومختصر يساعد على اتخاذ القرار."
+        (
+            "أنت مقعد Kimi. اجمع الأفكار في "
+            "تحليل منظم ومختصر يساعد على اتخاذ القرار."
         ),
-        provider_id="kimi",
+        "kimi",
     ),
 )
 
 
-# ---------------------------------------------------------------------
-# Compatibility map
-# ---------------------------------------------------------------------
-
 PROVIDERS = {
-    "openai": {
-        "env": "OPENAI_API_KEY",
-        "model_env": "OPENAI_MODEL",
-    },
-    "gemini": {
-        "env": "GEMINI_API_KEY",
-        "model_env": "GEMINI_MODEL",
-    },
-    "anthropic": {
-        "env": "ANTHROPIC_API_KEY",
-        "model_env": "ANTHROPIC_MODEL",
-    },
-    "xai": {
-        "env": "XAI_API_KEY",
-        "model_env": "XAI_MODEL",
-    },
-    "kimi": {
-        "env": "KIMI_API_KEY",
-        "model_env": "KIMI_MODEL",
-    },
+    seat.provider_id: {
+        "env": seat.env_key
+    }
+    for seat in SEATS
 }
 
 
-# ---------------------------------------------------------------------
-# Secret helpers
-# ---------------------------------------------------------------------
-
 def _redact(value: Any) -> str:
+
     text = str(value or "")
 
     patterns = [
         r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+",
         r"(?i)(api[_-]?key\s*[:=]\s*)[^\s,;]+",
         r"\bsk-[A-Za-z0-9_-]+\b",
+        r"\bxai-[A-Za-z0-9_-]+\b",
     ]
 
     for pattern in patterns:
+
         text = re.sub(
             pattern,
-            lambda match: (
-                match.group(1) + "[REDACTED]"
+            lambda match:
+                (
+                    match.group(1)
+                    + "[REDACTED]"
+                )
                 if match.lastindex
-                else "[REDACTED]"
-            ),
+                else "[REDACTED]",
             text,
         )
 
-    return text[:1200]
+    return text[:1600]
 
 
 def safe_error(value: Any) -> str:
     return _redact(value)
 
 
-def _environment_secret(name: str) -> Optional[str]:
+def _environment_secret(
+    name: str,
+) -> Optional[str]:
+
     value = os.getenv(name)
 
     if value is None:
@@ -219,13 +191,9 @@ def _environment_secret(name: str) -> Optional[str]:
     return value or None
 
 
-def get_secret(name: str) -> Optional[str]:
-    """
-    Compatibility helper.
-
-    Intended to be called from the Streamlit main thread.
-    Worker threads should receive the resolved credential explicitly.
-    """
+def get_secret(
+    name: str,
+) -> Optional[str]:
 
     value = _environment_secret(name)
 
@@ -233,69 +201,164 @@ def get_secret(name: str) -> Optional[str]:
         return value
 
     try:
+
         import streamlit as st
 
         value = st.secrets.get(name)
+
         if value is not None:
+
             value = str(value).strip()
+
             return value or None
+
     except Exception:
-        pass
+
+        return None
 
     return None
 
 
-def _first_secret(*names: str) -> Optional[str]:
+def _first_secret(
+    *names: str,
+) -> Optional[str]:
+
     for name in names:
+
         value = get_secret(name)
+
         if value:
             return value
 
     return None
 
 
-def get_seat_credential(seat: Seat) -> Optional[str]:
-    """
-    Resolve a seat credential.
-
-    This function should preferably be called by the main Streamlit
-    thread before launching worker threads.
-    """
+def get_seat_config(
+    seat: Seat,
+) -> dict[str, Optional[str]]:
 
     if seat.provider_id == "gemini":
-        return _first_secret(
+
+        credential = _first_secret(
             "GEMINI_API_KEY",
             "GOOGLE_API_KEY",
         )
 
-    if seat.provider_id == "xai":
-        return _first_secret(
+    elif seat.provider_id == "xai":
+
+        credential = _first_secret(
             "XAI_API_KEY",
             "GROK_API_KEY",
         )
 
-    if seat.provider_id == "kimi":
-        return _first_secret(
+    elif seat.provider_id == "kimi":
+
+        credential = _first_secret(
             "KIMI_API_KEY",
             "MOONSHOT_API_KEY",
         )
 
-    return get_secret(seat.env_key)
+    else:
+
+        credential = get_secret(
+            seat.env_key
+        )
+
+    workspace_id = None
+
+    if seat.provider_id == "anthropic":
+
+        workspace_id = _first_secret(
+            "ANTHROPIC_WORKSPACE_ID",
+            "CLAUDE_WORKSPACE_ID",
+        )
+
+    return {
+        "credential": credential,
+        "workspace_id": workspace_id,
+    }
+
+
+def get_seat_credential(
+    seat: Seat,
+) -> Optional[str]:
+
+    return get_seat_config(
+        seat
+    )["credential"]
 
 
 def get_models() -> dict[str, str]:
+
     return {
         seat.name: seat.default_model
         for seat in SEATS
     }
 
 
-# ---------------------------------------------------------------------
-# HTTP helpers
-# ---------------------------------------------------------------------
-
 class ProviderError(RuntimeError):
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+    ):
+
+        super().__init__(message)
+
+        self.status_code = status_code
+
+
+def _classify_error(
+    exc: Exception,
+) -> str:
+
+    if (
+        isinstance(
+            exc,
+            ProviderError,
+        )
+        and exc.status_code
+    ):
+
+        code = exc.status_code
+
+        if code in (401, 403):
+
+            return (
+                f"AUTH_OR_PERMISSION_ERROR "
+                f"({code})"
+            )
+
+        if code == 404:
+
+            return (
+                "MODEL_OR_ENDPOINT_NOT_FOUND "
+                "(404)"
+            )
+
+        if code == 429:
+
+            return (
+                "RATE_LIMIT_OR_QUOTA "
+                "(429)"
+            )
+
+        if 500 <= code <= 599:
+
+            return (
+                f"PROVIDER_SERVER_ERROR "
+                f"({code})"
+            )
+
+    if isinstance(
+        exc,
+        requests.Timeout,
+    ):
+
+        return "TIMEOUT"
+
+    return "PROVIDER_ERROR"
 
 
 def _post(
@@ -305,168 +368,329 @@ def _post(
 ) -> dict[str, Any]:
 
     try:
+
         response = requests.post(
             url,
             headers=headers,
             json=payload,
             timeout=REQUEST_TIMEOUT,
         )
+
     except requests.Timeout as exc:
+
         raise ProviderError(
             "Provider request timed out."
         ) from exc
+
     except requests.RequestException as exc:
+
         raise ProviderError(
-            f"Provider connection failed: {_redact(exc)}"
+            "Provider connection failed: "
+            f"{_redact(exc)}"
         ) from exc
 
     if response.status_code >= 400:
-        body = _redact(response.text)
+
+        body = _redact(
+            response.text
+        )
+
         raise ProviderError(
-            f"Provider HTTP {response.status_code}: {body}"
+            (
+                f"HTTP {response.status_code}: "
+                f"{body}"
+            ),
+            status_code=response.status_code,
         )
 
     try:
+
         data = response.json()
+
     except ValueError as exc:
+
         raise ProviderError(
             "Provider returned invalid JSON."
         ) from exc
 
-    if not isinstance(data, dict):
+    if not isinstance(
+        data,
+        dict,
+    ):
+
         raise ProviderError(
-            "Provider returned an unexpected response."
+            "Provider returned an unexpected response shape."
         )
 
     return data
 
 
-# ---------------------------------------------------------------------
-# Response parsers
-# ---------------------------------------------------------------------
+def _openai_text(
+    data: dict[str, Any],
+) -> str:
 
-def _openai_text(data: dict[str, Any]) -> str:
-    output_text = data.get("output_text")
+    output_text = data.get(
+        "output_text"
+    )
 
-    if isinstance(output_text, str) and output_text.strip():
+    if (
+        isinstance(
+            output_text,
+            str,
+        )
+        and output_text.strip()
+    ):
+
         return output_text.strip()
-
-    output = data.get("output", [])
 
     collected: list[str] = []
 
-    if isinstance(output, list):
+    output = data.get(
+        "output",
+        [],
+    )
+
+    if isinstance(
+        output,
+        list,
+    ):
+
         for item in output:
-            if not isinstance(item, dict):
+
+            if not isinstance(
+                item,
+                dict,
+            ):
                 continue
 
-            content = item.get("content", [])
+            content = item.get(
+                "content",
+                [],
+            )
 
-            if not isinstance(content, list):
+            if not isinstance(
+                content,
+                list,
+            ):
                 continue
 
             for part in content:
-                if not isinstance(part, dict):
-                    continue
 
-                text = part.get("text")
+                if (
+                    isinstance(
+                        part,
+                        dict,
+                    )
+                    and isinstance(
+                        part.get("text"),
+                        str,
+                    )
+                ):
 
-                if isinstance(text, str) and text.strip():
-                    collected.append(text.strip())
+                    collected.append(
+                        part["text"].strip()
+                    )
 
-    return "\n".join(collected).strip()
+    return "\n".join(
+        x
+        for x in collected
+        if x
+    ).strip()
 
 
-def _chat_text(data: dict[str, Any]) -> str:
-    choices = data.get("choices", [])
+def _chat_text(
+    data: dict[str, Any],
+) -> str:
 
-    if not isinstance(choices, list) or not choices:
+    choices = data.get(
+        "choices",
+        [],
+    )
+
+    if (
+        not isinstance(
+            choices,
+            list,
+        )
+        or not choices
+    ):
+
         return ""
 
     first = choices[0]
 
-    if not isinstance(first, dict):
+    if not isinstance(
+        first,
+        dict,
+    ):
+
         return ""
 
-    message = first.get("message", {})
+    message = first.get(
+        "message",
+        {},
+    )
 
-    if not isinstance(message, dict):
+    if not isinstance(
+        message,
+        dict,
+    ):
+
         return ""
 
-    content = message.get("content")
+    content = message.get(
+        "content"
+    )
 
-    if isinstance(content, str):
+    if isinstance(
+        content,
+        str,
+    ):
+
         return content.strip()
 
-    if isinstance(content, list):
-        parts: list[str] = []
+    if isinstance(
+        content,
+        list,
+    ):
 
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-
-        return "\n".join(parts).strip()
+        return "\n".join(
+            item.get(
+                "text",
+                "",
+            )
+            for item in content
+            if (
+                isinstance(
+                    item,
+                    dict,
+                )
+                and isinstance(
+                    item.get("text"),
+                    str,
+                )
+            )
+        ).strip()
 
     return ""
 
 
-def _gemini_text(data: dict[str, Any]) -> str:
-    candidates = data.get("candidates", [])
-
-    if not isinstance(candidates, list):
-        return ""
+def _gemini_text(
+    data: dict[str, Any],
+) -> str:
 
     collected: list[str] = []
 
+    candidates = data.get(
+        "candidates",
+        [],
+    )
+
+    if not isinstance(
+        candidates,
+        list,
+    ):
+
+        return ""
+
     for candidate in candidates:
-        if not isinstance(candidate, dict):
+
+        if not isinstance(
+            candidate,
+            dict,
+        ):
+
             continue
 
-        content = candidate.get("content", {})
+        content = candidate.get(
+            "content",
+            {},
+        )
 
-        if not isinstance(content, dict):
+        if not isinstance(
+            content,
+            dict,
+        ):
+
             continue
 
-        parts = content.get("parts", [])
+        parts = content.get(
+            "parts",
+            [],
+        )
 
-        if not isinstance(parts, list):
+        if not isinstance(
+            parts,
+            list,
+        ):
+
             continue
 
         for part in parts:
-            if isinstance(part, dict):
-                text = part.get("text")
 
-                if isinstance(text, str) and text.strip():
-                    collected.append(text.strip())
+            if (
+                isinstance(
+                    part,
+                    dict,
+                )
+                and isinstance(
+                    part.get("text"),
+                    str,
+                )
+            ):
 
-    return "\n".join(collected).strip()
+                collected.append(
+                    part["text"].strip()
+                )
+
+    return "\n".join(
+        x
+        for x in collected
+        if x
+    ).strip()
 
 
-def _anthropic_text(data: dict[str, Any]) -> str:
-    content = data.get("content", [])
+def _anthropic_text(
+    data: dict[str, Any],
+) -> str:
 
-    if not isinstance(content, list):
+    content = data.get(
+        "content",
+        [],
+    )
+
+    if not isinstance(
+        content,
+        list,
+    ):
+
         return ""
 
     collected: list[str] = []
 
     for item in content:
-        if not isinstance(item, dict):
-            continue
 
-        text = item.get("text")
+        if (
+            isinstance(
+                item,
+                dict,
+            )
+            and isinstance(
+                item.get("text"),
+                str,
+            )
+        ):
 
-        if isinstance(text, str) and text.strip():
-            collected.append(text.strip())
+            collected.append(
+                item["text"].strip()
+            )
 
-    return "\n".join(collected).strip()
+    return "\n".join(
+        x
+        for x in collected
+        if x
+    ).strip()
 
-
-# ---------------------------------------------------------------------
-# Provider implementations
-# ---------------------------------------------------------------------
 
 def _openai_call(
     seat: Seat,
@@ -474,44 +698,49 @@ def _openai_call(
     credential: str,
 ) -> str:
 
-    payload = {
-        "model": seat.default_model,
-        "input": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": seat.system,
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": prompt,
-                    }
-                ],
-            },
-        ],
-        "max_output_tokens": MAX_OUTPUT_TOKENS,
-        "store": False,
-    }
-
     data = _post(
         "https://api.openai.com/v1/responses",
         {
-            "Authorization": f"Bearer {credential}",
-            "Content-Type": "application/json",
+            "Authorization": (
+                f"Bearer {credential}"
+            ),
+            "Content-Type": (
+                "application/json"
+            ),
         },
-        payload,
+        {
+            "model": seat.default_model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": seat.system,
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": prompt,
+                        }
+                    ],
+                },
+            ],
+            "max_output_tokens": (
+                MAX_OUTPUT_TOKENS
+            ),
+            "store": False,
+        },
     )
 
     text = _openai_text(data)
 
     if not text:
+
         raise ProviderError(
             "OpenAI returned an empty response."
         )
@@ -527,44 +756,48 @@ def _gemini_call(
 
     url = (
         "https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{seat.default_model}:generateContent"
+        f"v1beta/models/"
+        f"{seat.default_model}:generateContent"
     )
-
-    payload = {
-        "system_instruction": {
-            "parts": [
-                {
-                    "text": seat.system,
-                }
-            ]
-        },
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "text": prompt,
-                    }
-                ],
-            }
-        ],
-        "generationConfig": {
-            "maxOutputTokens": MAX_OUTPUT_TOKENS,
-        },
-    }
 
     data = _post(
         url,
         {
             "x-goog-api-key": credential,
-            "Content-Type": "application/json",
+            "Content-Type": (
+                "application/json"
+            ),
         },
-        payload,
+        {
+            "system_instruction": {
+                "parts": [
+                    {
+                        "text": seat.system
+                    }
+                ]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": prompt
+                        }
+                    ],
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": (
+                    MAX_OUTPUT_TOKENS
+                )
+            },
+        },
     )
 
     text = _gemini_text(data)
 
     if not text:
+
         raise ProviderError(
             "Gemini returned an empty response."
         )
@@ -576,43 +809,45 @@ def _anthropic_call(
     seat: Seat,
     prompt: str,
     credential: str,
+    workspace_id: Optional[str],
 ) -> str:
-
-    payload = {
-        "model": seat.default_model,
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "system": seat.system,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-    }
-
-    workspace_id = _first_secret(
-        "ANTHROPIC_WORKSPACE_ID",
-        "CLAUDE_WORKSPACE_ID",
-    )
 
     headers = {
         "x-api-key": credential,
         "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
+        "content-type": (
+            "application/json"
+        ),
     }
 
     if workspace_id:
-        headers["anthropic-workspace-id"] = workspace_id
+
+        headers[
+            "anthropic-workspace-id"
+        ] = workspace_id
 
     data = _post(
         "https://api.anthropic.com/v1/messages",
         headers,
-        payload,
+        {
+            "model": seat.default_model,
+            "max_tokens": (
+                MAX_OUTPUT_TOKENS
+            ),
+            "system": seat.system,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+        },
     )
 
     text = _anthropic_text(data)
 
     if not text:
+
         raise ProviderError(
             "Anthropic returned an empty response."
         )
@@ -626,33 +861,39 @@ def _xai_call(
     credential: str,
 ) -> str:
 
-    payload = {
-        "model": seat.default_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": seat.system,
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        "max_tokens": MAX_OUTPUT_TOKENS,
-    }
-
     data = _post(
-        "https://api.x.ai/v1/chat/completions",
+        "https://api.x.ai/v1/responses",
         {
-            "Authorization": f"Bearer {credential}",
-            "Content-Type": "application/json",
+            "Authorization": (
+                f"Bearer {credential}"
+            ),
+            "Content-Type": (
+                "application/json"
+            ),
         },
-        payload,
+        {
+            "model": seat.default_model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": seat.system,
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            "max_output_tokens": (
+                MAX_OUTPUT_TOKENS
+            ),
+            "store": False,
+        },
     )
 
-    text = _chat_text(data)
+    text = _openai_text(data)
 
     if not text:
+
         raise ProviderError(
             "xAI returned an empty response."
         )
@@ -666,33 +907,38 @@ def _kimi_call(
     credential: str,
 ) -> str:
 
-    payload = {
-        "model": seat.default_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": seat.system,
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        "max_tokens": MAX_OUTPUT_TOKENS,
-    }
-
     data = _post(
         "https://api.moonshot.ai/v1/chat/completions",
         {
-            "Authorization": f"Bearer {credential}",
-            "Content-Type": "application/json",
+            "Authorization": (
+                f"Bearer {credential}"
+            ),
+            "Content-Type": (
+                "application/json"
+            ),
         },
-        payload,
+        {
+            "model": seat.default_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": seat.system,
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            "max_tokens": (
+                MAX_OUTPUT_TOKENS
+            ),
+        },
     )
 
     text = _chat_text(data)
 
     if not text:
+
         raise ProviderError(
             "Kimi returned an empty response."
         )
@@ -704,44 +950,50 @@ def _official(
     seat: Seat,
     prompt: str,
     credential: str,
+    workspace_id: Optional[str] = None,
 ) -> str:
 
     if not credential:
+
         raise ProviderError(
             "No official credential configured."
         )
 
-    provider = seat.provider_id
+    if seat.provider_id == "openai":
 
-    if provider == "openai":
         return _openai_call(
             seat,
             prompt,
             credential,
         )
 
-    if provider == "gemini":
+    if seat.provider_id == "gemini":
+
         return _gemini_call(
             seat,
             prompt,
             credential,
         )
 
-    if provider == "anthropic":
+    if seat.provider_id == "anthropic":
+
         return _anthropic_call(
             seat,
             prompt,
             credential,
+            workspace_id,
         )
 
-    if provider == "xai":
+    if seat.provider_id == "xai":
+
         return _xai_call(
             seat,
             prompt,
             credential,
         )
 
-    if provider == "kimi":
+    if seat.provider_id == "kimi":
+
         return _kimi_call(
             seat,
             prompt,
@@ -749,13 +1001,10 @@ def _official(
         )
 
     raise ProviderError(
-        f"Unsupported provider: {provider}"
+        f"Unsupported provider: "
+        f"{seat.provider_id}"
     )
 
-
-# ---------------------------------------------------------------------
-# Local fallback
-# ---------------------------------------------------------------------
 
 def _local_call(
     seat: Seat,
@@ -775,10 +1024,6 @@ def _local_call(
     )
 
 
-# ---------------------------------------------------------------------
-# Public seat API
-# ---------------------------------------------------------------------
-
 def call_seat(
     seat: Seat,
     user_prompt: str,
@@ -786,12 +1031,15 @@ def call_seat(
     round_no: int = 1,
     local_fallback: bool = False,
     credential: Optional[str] = None,
+    workspace_id: Optional[str] = None,
 ) -> dict[str, Any]:
 
     prompt = (
         f"الجولة: {round_no}\n\n"
-        f"سؤال المستخدم:\n{user_prompt}\n\n"
-        f"السياق المشترك للمجلس:\n{context or 'لا يوجد سياق سابق.'}\n\n"
+        f"سؤال المستخدم:\n"
+        f"{user_prompt}\n\n"
+        "السياق المشترك للمجلس:\n"
+        f"{context or 'لا يوجد سياق سابق.'}\n\n"
         "تعليمات التنفيذ:\n"
         "- حلل السؤال من منظور مقعدك.\n"
         "- لا تفترض معلومات غير موجودة.\n"
@@ -799,19 +1047,31 @@ def call_seat(
         "- قدم نتيجة عملية قابلة للفحص.\n"
     )
 
+    official_error = ""
+
     if credential:
+
         try:
+
             text = _official(
                 seat,
                 prompt,
                 credential,
+                workspace_id,
             )
 
             return {
                 "seat": seat.name,
-                "label": f"🤖 {seat.name} — {seat.default_model}",
-                "provider": seat.provider_id,
-                "model": seat.default_model,
+                "label": (
+                    f"🤖 {seat.name} — "
+                    f"{seat.default_model}"
+                ),
+                "provider": (
+                    seat.provider_id
+                ),
+                "model": (
+                    seat.default_model
+                ),
                 "status": "SUCCESS",
                 "mode": "OFFICIAL_API",
                 "round": round_no,
@@ -820,44 +1080,23 @@ def call_seat(
             }
 
         except Exception as exc:
-            official_error = safe_error(exc)
 
-            if not local_fallback:
-                return {
-                    "seat": seat.name,
-                    "label": f"❌ {seat.name} — API",
-                    "provider": seat.provider_id,
-                    "model": seat.default_model,
-                    "status": "FAILED",
-                    "mode": "OFFICIAL_API",
-                    "round": round_no,
-                    "content": (
-                        f"تعذر الحصول على رد رسمي من {seat.name}."
-                    ),
-                    "error": official_error,
-                }
+            official_error = (
+                f"{_classify_error(exc)}: "
+                f"{safe_error(exc)}"
+            )
 
     else:
-        official_error = "لا يوجد مفتاح API رسمي مُكوّن."
 
-        if not local_fallback:
-            return {
-                "seat": seat.name,
-                "label": f"⚪ {seat.name} — غير مُهيأ",
-                "provider": seat.provider_id,
-                "model": seat.default_model,
-                "status": "UNAVAILABLE",
-                "mode": "NONE",
-                "round": round_no,
-                "content": (
-                    f"المقعد {seat.name} غير متاح لأن مفتاح API "
-                    "الرسمي غير مُكوّن."
-                ),
-                "error": official_error,
-            }
+        official_error = (
+            "NO_CREDENTIAL: "
+            "لا يوجد اعتماد API رسمي مُكوّن."
+        )
 
     if local_fallback:
+
         try:
+
             text = _local_call(
                 seat,
                 user_prompt,
@@ -867,50 +1106,76 @@ def call_seat(
 
             return {
                 "seat": seat.name,
-                "label": f"🟡 {seat.name} — Local Fallback",
-                "provider": seat.provider_id,
+                "label": (
+                    f"🟡 {seat.name} — "
+                    "Local Fallback"
+                ),
+                "provider": (
+                    seat.provider_id
+                ),
                 "model": "local_engine",
                 "status": "SUCCESS",
                 "mode": "LOCAL_FALLBACK",
                 "round": round_no,
                 "content": text,
                 "error": (
-                    f"Official API unavailable: {official_error}"
+                    "Official API unavailable: "
+                    f"{official_error}"
                 ),
             }
 
         except Exception as exc:
+
             return {
                 "seat": seat.name,
-                "label": f"❌ {seat.name} — Failed",
-                "provider": seat.provider_id,
-                "model": seat.default_model,
+                "label": (
+                    f"❌ {seat.name} — Failed"
+                ),
+                "provider": (
+                    seat.provider_id
+                ),
+                "model": "local_engine",
                 "status": "FAILED",
                 "mode": "NONE",
                 "round": round_no,
                 "content": (
-                    f"تعذر تشغيل المقعد {seat.name} "
-                    "بالـ API الرسمي وبالمحرك المحلي."
+                    f"تعذر تشغيل المقعد "
+                    f"{seat.name}."
                 ),
-                "error": safe_error(exc),
+                "error": (
+                    f"{official_error}; "
+                    "LOCAL_ERROR: "
+                    f"{safe_error(exc)}"
+                ),
             }
 
     return {
         "seat": seat.name,
-        "label": f"❌ {seat.name} — Failed",
-        "provider": seat.provider_id,
+        "label": (
+            f"❌ {seat.name} — API"
+        ),
+        "provider": (
+            seat.provider_id
+        ),
         "model": seat.default_model,
-        "status": "FAILED",
-        "mode": "NONE",
+        "status": (
+            "FAILED"
+            if credential
+            else "UNAVAILABLE"
+        ),
+        "mode": (
+            "OFFICIAL_API"
+            if credential
+            else "NONE"
+        ),
         "round": round_no,
-        "content": "فشل غير متوقع في تشغيل المقعد.",
-        "error": "Unexpected provider state.",
+        "content": (
+            f"تعذر الحصول على رد رسمي "
+            f"من {seat.name}."
+        ),
+        "error": official_error,
     }
 
-
-# ---------------------------------------------------------------------
-# Backward-compatible official API helper
-# ---------------------------------------------------------------------
 
 def call_official(
     provider_id: str,
@@ -927,26 +1192,34 @@ def call_official(
     ]
 
     if not matching:
+
         raise ProviderError(
-            f"Unknown provider: {provider_id}"
+            f"Unknown provider: "
+            f"{provider_id}"
         )
 
     original = matching[0]
 
-    if model:
-        seat = Seat(
-            name=original.name,
-            env_key=original.env_key,
-            default_model=model,
-            system=original.system,
-            provider_id=original.provider_id,
-        )
-    else:
-        seat = original
+    seat = Seat(
+        original.name,
+        original.env_key,
+        model
+        or original.default_model,
+        original.system,
+        original.provider_id,
+    )
 
-    key = credential or get_seat_credential(seat)
+    config = get_seat_config(
+        seat
+    )
+
+    key = (
+        credential
+        or config["credential"]
+    )
 
     if not key:
+
         raise ProviderError(
             "No official credential configured."
         )
@@ -955,4 +1228,5 @@ def call_official(
         seat,
         prompt,
         key,
+        config["workspace_id"],
     )
