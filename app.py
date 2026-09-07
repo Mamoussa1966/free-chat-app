@@ -3,7 +3,7 @@ import streamlit as st
 from main import run_app
 
 st.set_page_config(
-    page_title="AI Council V21.2",
+    page_title="AI Council V21.3",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
