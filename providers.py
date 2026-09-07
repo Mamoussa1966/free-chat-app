@@ -8,8 +8,7 @@ from typing import Dict, Iterable, Optional, Tuple
 
 import requests
 
-
-VERSION = "V21.11-PROVIDER-COMPATIBILITY-HARDENED"
+VERSION = "V21.12-PROVIDER-COMPATIBILITY-RETRY-HARDENED"
 
 
 def _bounded_int_env(
@@ -79,7 +78,6 @@ SEATS = (
         "https://api.openai.com/v1/responses",
         "openai_responses",
     ),
-
     Seat(
         "gemini",
         "Gemini",
@@ -100,7 +98,6 @@ SEATS = (
         "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "gemini",
     ),
-
     Seat(
         "claude",
         "Claude",
@@ -117,7 +114,6 @@ SEATS = (
         "https://api.anthropic.com/v1/messages",
         "anthropic",
     ),
-
     Seat(
         "grok",
         "Grok",
@@ -137,8 +133,13 @@ SEATS = (
         "https://api.x.ai/v1/responses",
         "xai_responses",
     ),
-
     Seat(
+        "kimi",
+        "Kimi",
+        "🔑 Kimi",
+        "KIMI_API_KEY",
+        "MOONSHOT_API_KEY",
+    ) if False else Seat(
         "kimi",
         "Kimi",
         "🔑 Kimi",
@@ -161,16 +162,13 @@ SEATS = (
 
 
 class ProviderError(RuntimeError):
-
     def __init__(
         self,
         message: str,
         status_code: Optional[int] = None,
         error_class: str = "provider",
     ) -> None:
-
         super().__init__(message)
-
         self.status_code = status_code
         self.error_class = error_class
 
@@ -178,7 +176,6 @@ class ProviderError(RuntimeError):
 def _streamlit_secret(
     name: str,
 ) -> Optional[str]:
-
     try:
         import streamlit as st
 
@@ -197,9 +194,7 @@ def _streamlit_secret(
 def _setting(
     names: Iterable[str],
 ) -> Optional[str]:
-
     for name in names:
-
         value = _streamlit_secret(name)
 
         if value:
@@ -224,7 +219,9 @@ def get_secret(
 
 def capture_credentials() -> Dict[str, Optional[str]]:
     return {
-        seat.key: get_secret(seat.env_names)
+        seat.key: get_secret(
+            seat.env_names
+        )
         for seat in SEATS
     }
 
@@ -233,7 +230,6 @@ def configured(
     seat: Seat,
     credential: Optional[str] = None,
 ) -> bool:
-
     return bool(
         credential
         if credential is not None
@@ -246,7 +242,6 @@ def configured_count(
         Dict[str, Optional[str]]
     ] = None,
 ) -> int:
-
     if credentials is None:
         return sum(
             configured(seat)
@@ -262,7 +257,6 @@ def configured_count(
 def _parse_models(
     raw: str,
 ) -> Tuple[str, ...]:
-
     values = tuple(
         x.strip()
         for x in re.split(
@@ -278,13 +272,11 @@ def _parse_models(
 def get_model_candidates(
     seat: Seat,
 ) -> Tuple[str, ...]:
-
     raw = _setting(
         seat.model_env
     )
 
     if raw:
-
         values = _parse_models(raw)
 
         if values:
@@ -301,26 +293,23 @@ def capture_model_candidates() -> Dict[
     Tuple[str, ...],
 ]:
     """
-    Capture model configuration on the
-    Streamlit script thread only.
+    Capture model configuration on the Streamlit
+    script thread only.
 
-    Worker threads receive this immutable
-    snapshot and never access st.secrets.
+    Worker threads receive this immutable snapshot
+    and never access st.secrets.
     """
-
     return {
         seat.key: get_model_candidates(seat)
         for seat in SEATS
     }
 
 
-def _sanitize(text: str) -> str:
-
+def _sanitize(
+    text: str,
+) -> str:
     text = re.sub(
-        r"(?i)"
-        r"(api[_ -]?key|authorization|bearer|"
-        r"x-api-key|x-goog-api-key)"
-        r"\s*[:=]\s*[^\s,;]+",
+        r"(?i)(api[_ -]?key|authorization|bearer|x-api-key|x-goog-api-key)\s*[:=]\s*[^\s,;]+",
         r"\1=[REDACTED]",
         text,
     )
@@ -332,9 +321,7 @@ def _sanitize(text: str) -> str:
     )
 
     text = re.sub(
-        r"(?i)"
-        r"(secret|token|password)"
-        r"\s*[:=]\s*[^\s,;]+",
+        r"(?i)(secret|token|password)\s*[:=]\s*[^\s,;]+",
         r"\1=[REDACTED]",
         text,
     )
@@ -349,7 +336,6 @@ def _classify(
     status: Optional[int],
     body: str,
 ) -> str:
-
     low = body.lower()
 
     if status in (401, 403):
@@ -381,23 +367,47 @@ def _classify(
     return "provider_error"
 
 
+def _retryable(
+    status: int,
+    body: str,
+) -> bool:
+    if status in (
+        408,
+        409,
+        425,
+    ) or status >= 500:
+        return True
+
+    if status != 429:
+        return False
+
+    low = body.lower()
+
+    persistent = (
+        "credit" in low
+        or "balance" in low
+        or "insufficient" in low
+        or "monthly spending" in low
+        or "spending limit" in low
+        or "account suspended" in low
+        or "quota exceeded" in low
+    )
+
+    return not persistent
+
+
 def _post(
     url: str,
     headers: dict,
     payload: dict,
     timeout: int,
 ) -> dict:
-
-    last: Optional[
-        ProviderError
-    ] = None
+    last: Optional[ProviderError] = None
 
     for attempt in range(
         RETRIES + 1
     ):
-
         try:
-
             response = requests.post(
                 url,
                 headers=headers,
@@ -406,25 +416,20 @@ def _post(
             )
 
         except requests.Timeout as exc:
-
             last = ProviderError(
                 "network timeout",
                 error_class="timeout",
             )
 
             if attempt < RETRIES:
-
                 time.sleep(
-                    0.35
-                    * (attempt + 1)
+                    0.35 * (attempt + 1)
                 )
-
                 continue
 
             raise last from exc
 
         except requests.RequestException as exc:
-
             last = ProviderError(
                 "network error: "
                 f"{exc.__class__.__name__}",
@@ -432,18 +437,14 @@ def _post(
             )
 
             if attempt < RETRIES:
-
                 time.sleep(
-                    0.35
-                    * (attempt + 1)
+                    0.35 * (attempt + 1)
                 )
-
                 continue
 
             raise last from exc
 
         if response.status_code >= 400:
-
             body = _sanitize(
                 response.text[:1200]
             )
@@ -458,27 +459,18 @@ def _post(
                 ),
             )
 
-            retryable = (
-                response.status_code
-                in (
-                    408,
-                    409,
-                    425,
-                    429,
-                )
-                or response.status_code >= 500
+            retryable = _retryable(
+                response.status_code,
+                body,
             )
 
             if (
                 retryable
                 and attempt < RETRIES
             ):
-
                 time.sleep(
-                    0.35
-                    * (attempt + 1)
+                    0.35 * (attempt + 1)
                 )
-
                 continue
 
             raise last
@@ -487,7 +479,6 @@ def _post(
             return response.json()
 
         except ValueError as exc:
-
             raise ProviderError(
                 "invalid JSON response",
                 status_code=response.status_code,
@@ -502,7 +493,6 @@ def _post(
 def _openai_text(
     data: dict,
 ) -> str:
-
     if (
         isinstance(
             data.get("output_text"),
@@ -516,50 +506,40 @@ def _openai_text(
 
     parts = []
 
-    for item in (
-        data.get("output", [])
-        or []
-    ):
-
+    for item in data.get(
+        "output",
+        [],
+    ) or []:
         if not isinstance(
             item,
             dict,
         ):
             continue
 
-        for content in (
-            item.get("content", [])
-            or []
-        ):
-
+        for content in item.get(
+            "content",
+            [],
+        ) or []:
             if (
-                isinstance(
-                    content,
-                    dict,
-                )
+                isinstance(content, dict)
                 and isinstance(
                     content.get("text"),
                     str,
                 )
             ):
-
                 parts.append(
                     content["text"]
                 )
 
-    return "\n".join(
-        parts
-    ).strip()
+    return "\n".join(parts).strip()
 
 
 def _chat_text(
     data: dict,
 ) -> str:
-
-    choices = (
-        data.get("choices")
-        or []
-    )
+    choices = data.get(
+        "choices"
+    ) or []
 
     if not choices:
         return ""
@@ -582,13 +562,9 @@ def _chat_text(
         content,
         list,
     ):
-
         return "\n".join(
             str(
-                x.get(
-                    "text",
-                    "",
-                )
+                x.get("text", "")
             )
             for x in content
             if isinstance(
@@ -603,67 +579,44 @@ def _chat_text(
 def _gemini_text(
     data: dict,
 ) -> str:
-
     out = []
 
-    for candidate in (
-        data.get(
-            "candidates",
-            [],
-        )
-        or []
-    ):
-
+    for candidate in data.get(
+        "candidates",
+        [],
+    ) or []:
         for part in (
-            candidate.get(
-                "content"
-            )
+            candidate.get("content")
             or {}
         ).get(
             "parts",
             [],
         ) or []:
-
             if (
-                isinstance(
-                    part,
-                    dict,
-                )
+                isinstance(part, dict)
                 and isinstance(
                     part.get("text"),
                     str,
                 )
             ):
-
                 out.append(
                     part["text"]
                 )
 
-    return "\n".join(
-        out
-    ).strip()
+    return "\n".join(out).strip()
 
 
 def _anthropic_text(
     data: dict,
 ) -> str:
-
     return "\n".join(
-        item.get(
-            "text",
-            "",
-        )
+        item.get("text", "")
         for item in (
-            data.get(
-                "content"
-            )
+            data.get("content")
             or []
         )
         if (
-            isinstance(
-                item,
-                dict,
-            )
+            isinstance(item, dict)
             and isinstance(
                 item.get("text"),
                 str,
@@ -676,21 +629,17 @@ def _prompt(
     user_prompt: str,
     shared_context: str,
     round_no: int,
-    attachment_note: str = "",
 ) -> str:
-
     return (
-        "You are one seat in a multi-provider "
-        "AI council. Answer independently "
-        "and honestly. Do not claim to be "
-        "another provider. Use the shared "
-        "context only as background. "
+        "You are one seat in a multi-provider AI council. "
+        "Answer independently and honestly. "
+        "Do not claim to be another provider. "
+        "Use the shared context only as background. "
         f"This is council round {round_no}.\n\n"
         f"SHARED CONTEXT:\n"
         f"{shared_context.strip() or '(none)'}\n\n"
         f"CURRENT USER REQUEST:\n"
         f"{user_prompt.strip()}"
-        f"{attachment_note}"
     )
 
 
@@ -700,11 +649,8 @@ def call_official(
     model: str,
     credential: Optional[str],
     timeout: int = REQUEST_TIMEOUT,
-    attachments: Optional[
-        list[dict]
-    ] = None,
+    attachments: Optional[list[dict]] = None,
 ) -> str:
-
     key = (
         credential or ""
     ).strip()
@@ -725,7 +671,6 @@ def call_official(
     )
 
     if seat.kind == "openai_responses":
-
         content = [
             {
                 "type": "input_text",
@@ -734,9 +679,7 @@ def call_official(
         ]
 
         for attachment in attachments:
-
             if is_image(attachment):
-
                 content.append(
                     {
                         "type": "input_image",
@@ -745,9 +688,7 @@ def call_official(
                         ),
                     }
                 )
-
             else:
-
                 content.append(
                     {
                         "type": "input_file",
@@ -783,7 +724,6 @@ def call_official(
         text = _openai_text(data)
 
     elif seat.kind == "gemini":
-
         parts = [
             {
                 "text": prompt
@@ -791,7 +731,6 @@ def call_official(
         ]
 
         for attachment in attachments:
-
             parts.append(
                 {
                     "inlineData": {
@@ -822,7 +761,7 @@ def call_official(
                     }
                 ],
                 "generationConfig": {
-                    "maxOutputTokens": MAX_OUTPUT_TOKENS,
+                    "maxOutputTokens": MAX_OUTPUT_TOKENS
                 },
             },
             timeout,
@@ -831,7 +770,6 @@ def call_official(
         text = _gemini_text(data)
 
     elif seat.kind == "anthropic":
-
         content = [
             {
                 "type": "text",
@@ -840,9 +778,7 @@ def call_official(
         ]
 
         for attachment in attachments:
-
             if is_image(attachment):
-
                 content.append(
                     {
                         "type": "image",
@@ -858,9 +794,7 @@ def call_official(
                         },
                     }
                 )
-
             else:
-
                 extracted = extract_text(
                     attachment
                 )
@@ -899,7 +833,6 @@ def call_official(
         text = _anthropic_text(data)
 
     elif seat.kind == "xai_responses":
-
         content = [
             {
                 "type": "input_text",
@@ -908,9 +841,7 @@ def call_official(
         ]
 
         for attachment in attachments:
-
             if is_image(attachment):
-
                 content.append(
                     {
                         "type": "input_image",
@@ -919,9 +850,7 @@ def call_official(
                         ),
                     }
                 )
-
             else:
-
                 extracted = extract_text(
                     attachment
                 )
@@ -959,7 +888,6 @@ def call_official(
         text = _openai_text(data)
 
     elif seat.kind == "chat_completions":
-
         content = [
             {
                 "type": "text",
@@ -968,9 +896,7 @@ def call_official(
         ]
 
         for attachment in attachments:
-
             if is_image(attachment):
-
                 content.append(
                     {
                         "type": "image_url",
@@ -981,9 +907,7 @@ def call_official(
                         },
                     }
                 )
-
             else:
-
                 extracted = extract_text(
                     attachment
                 )
@@ -1021,7 +945,6 @@ def call_official(
         text = _chat_text(data)
 
     else:
-
         raise ProviderError(
             "unsupported provider contract",
             error_class="configuration",
@@ -1043,14 +966,11 @@ def call_seat(
     round_no: int,
     local_fallback: bool,
     credential: Optional[str],
-    attachments: Optional[
-        list[dict]
-    ] = None,
+    attachments: Optional[list[dict]] = None,
     model_candidates: Optional[
         Tuple[str, ...]
     ] = None,
 ) -> dict:
-
     started = time.perf_counter()
 
     candidates = tuple(
@@ -1062,18 +982,13 @@ def call_seat(
     )
 
     attempted: list[str] = []
-
     last_error: Optional[
         ProviderError
     ] = None
 
     if not credential:
-
         if local_fallback:
-
-            from local_engine import (
-                generate_local
-            )
+            from local_engine import generate_local
 
             content = generate_local(
                 seat.name,
@@ -1088,10 +1003,8 @@ def call_seat(
                 "local",
                 "local",
                 content,
-                (
-                    "class=not_configured; "
-                    "No official credential configured."
-                ),
+                "class=not_configured; "
+                "No official credential configured.",
                 started,
                 attempted,
             )
@@ -1102,10 +1015,8 @@ def call_seat(
             "official",
             candidates[0],
             "",
-            (
-                "class=not_configured; "
-                "No official credential configured."
-            ),
+            "class=not_configured; "
+            "No official credential configured.",
             started,
             attempted,
         )
@@ -1113,11 +1024,9 @@ def call_seat(
     for index, model in enumerate(
         candidates
     ):
-
         attempted.append(model)
 
         try:
-
             content = call_official(
                 seat,
                 _prompt(
@@ -1142,7 +1051,6 @@ def call_seat(
             )
 
         except ProviderError as exc:
-
             last_error = exc
 
             if (
@@ -1160,10 +1068,7 @@ def call_seat(
     )
 
     if local_fallback:
-
-        from local_engine import (
-            generate_local
-        )
+        from local_engine import generate_local
 
         content = generate_local(
             seat.name,
@@ -1206,12 +1111,10 @@ def diagnostic_seat(
         Tuple[str, ...]
     ] = None,
 ) -> dict:
-
     """
     Run one minimal official API probe
     without local fallback or attachments.
     """
-
     return call_seat(
         seat,
         "Reply with exactly: DIAGNOSTIC_OK",
@@ -1227,7 +1130,6 @@ def diagnostic_seat(
 def _diagnostic(
     exc: Optional[ProviderError],
 ) -> str:
-
     if exc is None:
         return (
             "class=provider_error; "
@@ -1257,7 +1159,6 @@ def _result(
     started: float,
     attempted: list[str],
 ) -> dict:
-
     return {
         "seat": seat.key,
         "name": seat.name,
@@ -1268,8 +1169,7 @@ def _result(
         "content": content,
         "error": error,
         "latency": round(
-            time.perf_counter()
-            - started,
+            time.perf_counter() - started,
             3,
         ),
         "attempted_models": attempted,
