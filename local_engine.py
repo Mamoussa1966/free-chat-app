@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import re
 
-
-VERSION = "V21.17-LOCAL-ENGINE"
-
+VERSION = "V21.18-LOCAL-ENGINE"
 
 ROLE_ACTIONS = {
     "ChatGPT": (
-        "حلّل الطلب بوضوح، ثم قدّم "
-        "إجابة عملية قابلة للتحقق."
+        "حلّل الطلب بوضوح، ثم قدّم إجابة "
+        "عملية قابلة للتحقق."
     ),
     "Gemini": (
         "ركّز على الحقائق، البنية، "
@@ -20,8 +18,8 @@ ROLE_ACTIONS = {
         "والاتساق المنطقي."
     ),
     "Grok": (
-        "اختبر الادعاءات وابحث عن "
-        "نقاط الضعف أو التناقضات."
+        "اختبر الادعاءات وابحث عن نقاط "
+        "الضعف أو التناقضات."
     ),
     "Kimi": (
         "ركّز على التنفيذ، التفاصيل، "
@@ -61,10 +59,11 @@ def generate_local(
     )
 
     return (
-        f"هذا رد من Local Engine المعلن، "
+        "هذا رد من Local Engine المعلن، "
         f"وليس من {seat_name} الرسمي.\n\n"
         f"الدور: {action}\n"
-        f"الجولة: {round_no}. {context_note}\n\n"
+        f"الجولة: {round_no}. "
+        f"{context_note}\n\n"
         f"الطلب: {_clean(user_prompt)}\n\n"
         "الاستنتاج المحلي: لا يمكن إثبات هوية "
         "مزود تجاري أو تنفيذ API رسمي من هذا المسار. "
