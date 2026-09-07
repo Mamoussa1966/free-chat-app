@@ -1,115 +1,343 @@
-# 🏛️ AI Council V21.11
+import os
+import unittest
+from unittest.mock import patch
 
-AI Council is a Streamlit-based multi-provider AI discussion room.
+from providers import (
+    SEATS,
+    _classify,
+    _sanitize,
+    capture_model_candidates,
+    get_model_candidates,
+)
 
-The application provides one shared council room containing:
 
-1. ChatGPT — OpenAI
-2. Gemini — Google
-3. Claude — Anthropic
-4. Grok — xAI
-5. Kimi — Moonshot
+class CoreTests(unittest.TestCase):
 
-The user is the sixth participant.
+    def test_five_core_seats(self):
+        self.assertEqual(len(SEATS), 5)
 
----
+        self.assertEqual(
+            [seat.key for seat in SEATS],
+            [
+                "openai",
+                "gemini",
+                "claude",
+                "grok",
+                "kimi",
+            ],
+        )
 
-## Architecture
+    def test_seat_metadata_is_present(self):
+        for seat in SEATS:
+            self.assertTrue(seat.key)
+            self.assertTrue(seat.label)
+            self.assertTrue(seat.provider)
 
-The application is intentionally split into isolated layers:
+    def test_error_classification(self):
+        self.assertEqual(
+            _classify(
+                401,
+                "invalid api key",
+            ),
+            "authentication_or_permission",
+        )
 
-- `app.py`
-  - Streamlit entry point.
-  - Imports and calls `run_app()` from `main.py`.
+        self.assertEqual(
+            _classify(
+                403,
+                "permission denied",
+            ),
+            "authentication_or_permission",
+        )
 
-- `main.py`
-  - Application orchestration.
-  - Six-room UI.
-  - User message handling.
-  - Shared council context.
-  - Attachments.
-  - History management.
-  - Diagnostics.
-  - Parallel provider execution.
+        self.assertEqual(
+            _classify(
+                429,
+                "quota exceeded",
+            ),
+            "rate_limit_or_quota",
+        )
 
-- `providers.py`
-  - Official provider gateway.
-  - Provider-specific request/response handling.
-  - Credential isolation.
-  - Model candidate selection.
-  - Error classification.
-  - Secret redaction.
-  - Provider failure isolation.
+        self.assertEqual(
+            _classify(
+                404,
+                "model not found",
+            ),
+            "model_not_found_or_invalid",
+        )
 
-- `attachment_utils.py`
-  - Attachment validation.
-  - Filename sanitization.
-  - Size and count limits.
-  - Duplicate detection.
-  - Safe text extraction.
+    def test_sanitize_removes_bearer_token(self):
+        value = _sanitize(
+            "Authorization: "
+            "Bearer sk-abcdefghijklmnop"
+        )
 
-- `local_engine.py`
-  - Explicitly declared local fallback engine.
-  - It must never impersonate an official provider.
+        self.assertNotIn(
+            "abcdefghijklmnop",
+            value,
+        )
 
-- `requirements.txt`
-  - Runtime Python dependencies.
+        self.assertIn(
+            "REDACTED",
+            value,
+        )
 
-- `tests/`
-  - Unit and structural tests.
-  - Tests must pass before considering a release candidate.
+    def test_sanitize_removes_common_secret_patterns(self):
+        values = [
+            "api_key=abcdefghijklmnopqrstuvwxyz",
+            "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+            "token=abcdefghijklmnopqrstuvwxyz",
+        ]
 
----
+        for original in values:
+            sanitized = _sanitize(original)
 
-## Council execution model
+            self.assertNotEqual(
+                sanitized,
+                original,
+            )
 
-A user message is submitted once.
+            self.assertIn(
+                "REDACTED",
+                sanitized,
+            )
 
-The application then attempts to deliver the same logical request to the five official provider seats independently.
+    def test_openai_env_override(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_MODELS": "gpt-test-a,gpt-test-b",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                get_model_candidates(SEATS[0]),
+                (
+                    "gpt-test-a",
+                    "gpt-test-b",
+                ),
+            )
 
-Provider execution is isolated.
+    def test_gemini_env_override(self):
+        seat = next(
+            seat
+            for seat in SEATS
+            if seat.key == "gemini"
+        )
 
-Therefore:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_MODELS": "gemini-test-a,gemini-test-b",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                get_model_candidates(seat),
+                (
+                    "gemini-test-a",
+                    "gemini-test-b",
+                ),
+            )
 
-- One provider failure must not terminate the other providers.
-- A timeout from one provider must not block the entire council indefinitely.
-- Authentication failures must be reported separately.
-- Rate-limit/quota failures must be reported separately.
-- Invalid or unavailable models must be reported separately.
-- Network/provider failures must be reported separately.
-- A provider must never be marked successful merely because its API key exists.
+    def test_claude_env_override(self):
+        seat = next(
+            seat
+            for seat in SEATS
+            if seat.key == "claude"
+        )
 
-The application distinguishes between:
+        with patch.dict(
+            os.environ,
+            {
+                "CLAUDE_MODELS": "claude-test-a,claude-test-b",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                get_model_candidates(seat),
+                (
+                    "claude-test-a",
+                    "claude-test-b",
+                ),
+            )
 
-- `Official API`
-- `Local fallback`
-- `Unavailable`
-- `Failed`
+    def test_grok_env_override(self):
+        seat = next(
+            seat
+            for seat in SEATS
+            if seat.key == "grok"
+        )
 
-Credential presence is configuration state only.
+        with patch.dict(
+            os.environ,
+            {
+                "GROK_MODELS": "grok-test-a,grok-test-b",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                get_model_candidates(seat),
+                (
+                    "grok-test-a",
+                    "grok-test-b",
+                ),
+            )
 
-It is NOT proof that an API call succeeded.
+    def test_kimi_env_override(self):
+        seat = next(
+            seat
+            for seat in SEATS
+            if seat.key == "kimi"
+        )
 
----
+        with patch.dict(
+            os.environ,
+            {
+                "KIMI_MODELS": "kimi-test-a,kimi-test-b",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                get_model_candidates(seat),
+                (
+                    "kimi-test-a",
+                    "kimi-test-b",
+                ),
+            )
 
-## Credential handling
+    def test_streamlit_secret_model_override(self):
+        with patch(
+            "providers._streamlit_secret",
+            side_effect=lambda name: (
+                "gpt-secret-a,gpt-secret-b"
+                if name == "OPENAI_MODELS"
+                else None
+            ),
+        ):
+            self.assertEqual(
+                get_model_candidates(SEATS[0]),
+                (
+                    "gpt-secret-a",
+                    "gpt-secret-b",
+                ),
+            )
 
-API credentials must be supplied through Streamlit Secrets or environment variables.
+    def test_capture_model_candidates_returns_all_five_seats(self):
+        with patch(
+            "providers.get_model_candidates",
+            side_effect=lambda seat: (
+                f"{seat.key}-model-a",
+                f"{seat.key}-model-b",
+            ),
+        ):
+            snapshot = capture_model_candidates()
 
-Supported credential aliases include:
+        self.assertEqual(
+            set(snapshot.keys()),
+            {
+                "openai",
+                "gemini",
+                "claude",
+                "grok",
+                "kimi",
+            },
+        )
 
-```text
-OPENAI_API_KEY
+        for seat in SEATS:
+            self.assertEqual(
+                snapshot[seat.key],
+                (
+                    f"{seat.key}-model-a",
+                    f"{seat.key}-model-b",
+                ),
+            )
 
-GEMINI_API_KEY
-GOOGLE_API_KEY
+    def test_capture_model_candidates_is_independent_snapshot(self):
+        with patch(
+            "providers.get_model_candidates",
+            side_effect=lambda seat: (
+                f"{seat.key}-model",
+            ),
+        ):
+            snapshot = capture_model_candidates()
 
-ANTHROPIC_API_KEY
-ANTHROPIC_WORKSPACE_ID
-CLAUDE_WORKSPACE_ID
+        self.assertIsInstance(
+            snapshot,
+            dict,
+        )
 
-XAI_API_KEY
-GROK_API_KEY
+        for seat in SEATS:
+            self.assertIn(
+                seat.key,
+                snapshot,
+            )
 
-KIMI_API_KEY
-MOONSHOT_API_KEY
+            self.assertIsInstance(
+                snapshot[seat.key],
+                tuple,
+            )
+
+    def test_model_candidates_are_non_empty_for_each_seat(self):
+        for seat in SEATS:
+            candidates = get_model_candidates(seat)
+
+            self.assertIsInstance(
+                candidates,
+                tuple,
+            )
+
+            self.assertGreaterEqual(
+                len(candidates),
+                1,
+            )
+
+            for candidate in candidates:
+                self.assertIsInstance(
+                    candidate,
+                    str,
+                )
+
+                self.assertTrue(
+                    candidate.strip(),
+                )
+
+    def test_provider_keys_are_unique(self):
+        keys = [
+            seat.key
+            for seat in SEATS
+        ]
+
+        self.assertEqual(
+            len(keys),
+            len(set(keys)),
+        )
+
+    def test_provider_labels_are_non_empty(self):
+        for seat in SEATS:
+            self.assertTrue(
+                seat.label.strip()
+            )
+
+    def test_model_snapshot_contains_tuples(self):
+        snapshot = capture_model_candidates()
+
+        self.assertIsInstance(
+            snapshot,
+            dict,
+        )
+
+        for seat in SEATS:
+            self.assertIn(
+                seat.key,
+                snapshot,
+            )
+
+            self.assertIsInstance(
+                snapshot[seat.key],
+                tuple,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
