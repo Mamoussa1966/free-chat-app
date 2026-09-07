@@ -1,124 +1,115 @@
-import os
-import unittest
-from unittest.mock import patch
+# 🏛️ AI Council V21.11
 
-from providers import (
-    SEATS,
-    _classify,
-    _sanitize,
-    get_model_candidates,
-)
+AI Council is a Streamlit-based multi-provider AI discussion room.
 
+The application provides one shared council room containing:
 
-class CoreTests(unittest.TestCase):
+1. ChatGPT — OpenAI
+2. Gemini — Google
+3. Claude — Anthropic
+4. Grok — xAI
+5. Kimi — Moonshot
 
-    def test_five_core_seats(self):
+The user is the sixth participant.
 
-        self.assertEqual(
-            len(SEATS),
-            5,
-        )
+---
 
-        self.assertEqual(
-            [
-                s.key
-                for s in SEATS
-            ],
-            [
-                "openai",
-                "gemini",
-                "claude",
-                "grok",
-                "kimi",
-            ],
-        )
+## Architecture
 
-    def test_error_classification(self):
+The application is intentionally split into isolated layers:
 
-        self.assertEqual(
-            _classify(
-                401,
-                "invalid api key",
-            ),
-            "authentication_or_permission",
-        )
+- `app.py`
+  - Streamlit entry point.
+  - Imports and calls `run_app()` from `main.py`.
 
-        self.assertEqual(
-            _classify(
-                429,
-                "quota exceeded",
-            ),
-            "rate_limit_or_quota",
-        )
+- `main.py`
+  - Application orchestration.
+  - Six-room UI.
+  - User message handling.
+  - Shared council context.
+  - Attachments.
+  - History management.
+  - Diagnostics.
+  - Parallel provider execution.
 
-        self.assertEqual(
-            _classify(
-                404,
-                "model not found",
-            ),
-            "model_not_found_or_invalid",
-        )
+- `providers.py`
+  - Official provider gateway.
+  - Provider-specific request/response handling.
+  - Credential isolation.
+  - Model candidate selection.
+  - Error classification.
+  - Secret redaction.
+  - Provider failure isolation.
 
-    def test_sanitize(self):
+- `attachment_utils.py`
+  - Attachment validation.
+  - Filename sanitization.
+  - Size and count limits.
+  - Duplicate detection.
+  - Safe text extraction.
 
-        value = _sanitize(
-            "Authorization: "
-            "Bearer sk-abcdefghijklmnop"
-        )
+- `local_engine.py`
+  - Explicitly declared local fallback engine.
+  - It must never impersonate an official provider.
 
-        self.assertNotIn(
-            "abcdefghijklmnop",
-            value,
-        )
+- `requirements.txt`
+  - Runtime Python dependencies.
 
-        self.assertIn(
-            "REDACTED",
-            value,
-        )
+- `tests/`
+  - Unit and structural tests.
+  - Tests must pass before considering a release candidate.
 
-    def test_openai_env_override(self):
+---
 
-        with patch.dict(
-            os.environ,
-            {
-                "OPENAI_MODELS":
-                    "gpt-test-a,gpt-test-b"
-            },
-            clear=False,
-        ):
+## Council execution model
 
-            self.assertEqual(
-                get_model_candidates(
-                    SEATS[0]
-                ),
-                (
-                    "gpt-test-a",
-                    "gpt-test-b",
-                ),
-            )
+A user message is submitted once.
 
-    def test_streamlit_secret_model_override(self):
+The application then attempts to deliver the same logical request to the five official provider seats independently.
 
-        with patch(
-            "providers._streamlit_secret",
-            side_effect=lambda name:
-                (
-                    "gpt-secret-a,gpt-secret-b"
-                    if name == "OPENAI_MODELS"
-                    else None
-                ),
-        ):
+Provider execution is isolated.
 
-            self.assertEqual(
-                get_model_candidates(
-                    SEATS[0]
-                ),
-                (
-                    "gpt-secret-a",
-                    "gpt-secret-b",
-                ),
-            )
+Therefore:
 
+- One provider failure must not terminate the other providers.
+- A timeout from one provider must not block the entire council indefinitely.
+- Authentication failures must be reported separately.
+- Rate-limit/quota failures must be reported separately.
+- Invalid or unavailable models must be reported separately.
+- Network/provider failures must be reported separately.
+- A provider must never be marked successful merely because its API key exists.
 
-if __name__ == "__main__":
-    unittest.main()
+The application distinguishes between:
+
+- `Official API`
+- `Local fallback`
+- `Unavailable`
+- `Failed`
+
+Credential presence is configuration state only.
+
+It is NOT proof that an API call succeeded.
+
+---
+
+## Credential handling
+
+API credentials must be supplied through Streamlit Secrets or environment variables.
+
+Supported credential aliases include:
+
+```text
+OPENAI_API_KEY
+
+GEMINI_API_KEY
+GOOGLE_API_KEY
+
+ANTHROPIC_API_KEY
+ANTHROPIC_WORKSPACE_ID
+CLAUDE_WORKSPACE_ID
+
+XAI_API_KEY
+GROK_API_KEY
+
+KIMI_API_KEY
+MOONSHOT_API_KEY
