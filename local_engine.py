@@ -1,111 +1,58 @@
-# -*- coding: utf-8 -*-
-
-"""Deterministic local fallback. No third-party dependencies."""
-
 from __future__ import annotations
 
 import re
 
+VERSION = "V21.7-LOCAL-ENGINE"
 
 ROLE_ACTIONS = {
-    "openai": "افصل الحقائق عن الافتراضات واختبر الاتساق المنطقي.",
-    "gemini": "قارن البدائل واكشف الافتراضات قبل إصدار النتيجة.",
-    "anthropic": "ابحث عن الثغرات وحدود الاستنتاج والأدلة الناقصة.",
-    "xai": "اختبر المخاطر والبدائل ونقاط الفشل المحتملة.",
-    "kimi": "نظم الأفكار وحولها إلى قرار عملي قابل للفحص.",
+    "ChatGPT": "حلّل الطلب بوضوح، ثم قدّم إجابة عملية قابلة للتحقق.",
+    "Gemini": "ركّز على الحقائق، البنية، والبدائل العملية.",
+    "Claude": "راجع الافتراضات والمخاطر والاتساق المنطقي.",
+    "Grok": "اختبر الادعاءات وابحث عن نقاط الضعف أو التناقضات.",
+    "Kimi": "ركّز على التنفيذ، التفاصيل، والخطوات القابلة للتطبيق.",
 }
 
 
 def _clean(
-    value: str,
-    limit: int = 2400,
-) -> str:
-
-    return str(
-        value or ""
-    ).strip()[:limit].strip()
-
-
-def _keywords(
     text: str,
-) -> list[str]:
+    limit: int = 900,
+) -> str:
+    text = re.sub(
+        r"\s+",
+        " ",
+        str(text or ""),
+    ).strip()
 
-    words = re.findall(
-        r"[\u0600-\u06FFA-Za-z0-9_]{4,}",
-        _clean(
-            text,
-            3000,
-        ),
-    )
-
-    result: list[str] = []
-
-    for word in words:
-
-        if word not in result:
-            result.append(word)
-
-    return result[:8]
+    return text[:limit]
 
 
 def generate_local(
-    agent_id: str,
-    role: str,
-    instruction: str,
-    query: str,
-    context: str = "",
-    tone: str = "علمية دقيقة",
-    peer_text: str = "",
+    seat_name: str,
+    user_prompt: str,
+    shared_context: str = "",
+    round_no: int = 1,
 ) -> str:
 
-    del tone, peer_text
-
-    q = _clean(
-        query,
-        3000,
-    )
-
-    ctx = _clean(
-        context,
-        1800,
-    )
-
-    keys = _keywords(q)
-
     action = ROLE_ACTIONS.get(
-        agent_id,
-        _clean(
-            instruction,
-            700,
-        ),
+        seat_name,
+        "حلّل الطلب بصورة مستقلة.",
     )
 
-    key_text = (
-        "، ".join(keys)
-        if keys
-        else "الموضوع المطروح"
+    context_note = (
+        "يوجد سياق مشترك سابق."
+        if shared_context.strip()
+        else "لا يوجد سياق سابق."
     )
 
-    return "\n".join(
-        [
-            f"### {role or agent_id} — Local Fallback",
-            "",
-            f"**السؤال:** {q or 'غير محدد'}",
-            f"**المحاور:** {key_text}",
-            f"**منهج الدور:** {action}",
-            "",
-            "**النتيجة الأولية:**",
-            "هذا تحليل محلي مستقل يستخدم المعطيات المتاحة فقط. "
-            "لا يمثل هذا الرد نموذجًا تجاريًا أصليًا.",
-            "",
-            "**السياق المختصر:**",
-            ctx or "لا يوجد سياق سابق كافٍ.",
-            "",
-            "**خطوات التحقق:**",
-            "1. تحديد معيار نجاح واضح.",
-            "2. اختبار أهم افتراض أو مخاطرة.",
-            "3. عدم اعتماد القرار النهائي قبل التحقق من الدليل المطلوب.",
-            "",
-            "> المصدر: Local Engine — محرك محلي مستقل.",
-        ]
+    return (
+        f"هذا رد من Local Engine المعلن، "
+        f"وليس من {seat_name} الرسمي.\n\n"
+        f"الدور: {action}\n"
+        f"الجولة: {round_no}. "
+        f"{context_note}\n\n"
+        f"الطلب: {_clean(user_prompt)}\n\n"
+        "الاستنتاج المحلي: لا يمكن إثبات هوية "
+        "مزود تجاري أو تنفيذ API رسمي من هذا المسار. "
+        "استخدم هذا الرد كمسودة/خطة، ثم تحقّق من "
+        "النتيجة الرسمية عند توفر API صالح."
     )
