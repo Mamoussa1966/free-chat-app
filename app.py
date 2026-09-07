@@ -10,4 +10,5 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
 run_app()
