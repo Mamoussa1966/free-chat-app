@@ -18,7 +18,7 @@ from providers import (
     diagnostic_seat,
 )
 
-APP_VERSION = "V21.11-SIX-ROOM-ATTACHMENTS-RUNTIME-HARDENED"
+APP_VERSION = "V21.12-SIX-ROOM-ATTACHMENTS-OBSERVABILITY-HARDENED"
 
 
 def _now() -> str:
@@ -106,7 +106,7 @@ def _worker_failure(
         ).get(seat.key, (seat.default_model,))[0],
         "content": "",
         "error": (
-            f"class=internal_worker_error; "
+            "class=internal_worker_error; "
             f"{exc.__class__.__name__}"
         ),
         "latency": 0,
@@ -124,7 +124,6 @@ def _run_round(
     attachments: list[dict],
     model_candidates: dict,
 ) -> list[dict]:
-
     snapshot = _shared_context(chat)
     results: dict[str, dict] = {}
 
@@ -132,7 +131,6 @@ def _run_round(
         max_workers=len(SEATS),
         thread_name_prefix="council",
     ) as pool:
-
         futures = {
             pool.submit(
                 call_seat,
@@ -173,11 +171,9 @@ def _run_council(
     attachments: list[dict],
     model_candidates: dict,
 ) -> list[dict]:
-
     all_results = []
 
     for round_no in range(1, rounds + 1):
-
         round_results = _run_round(
             user_prompt,
             chat,
@@ -204,6 +200,10 @@ def _run_council(
                         "round": round_no,
                         "mode": result["mode"],
                         "model": result["model"],
+                        "official_error": result.get("error"),
+                        "attempted_models": list(
+                            result.get("attempted_models", [])
+                        ),
                         "created_at": _now(),
                     }
                 )
@@ -215,14 +215,12 @@ def _run_provider_diagnostics(
     credentials: dict,
     model_candidates: dict,
 ) -> list[dict]:
-
     results: dict[str, dict] = {}
 
     with ThreadPoolExecutor(
         max_workers=len(SEATS),
         thread_name_prefix="diagnostic",
     ) as pool:
-
         futures = {
             pool.submit(
                 diagnostic_seat,
@@ -255,9 +253,7 @@ def _render_sidebar(
     credentials: dict,
     model_candidates: dict,
 ) -> tuple[int, bool]:
-
     with st.sidebar:
-
         st.header("⚙️ إعدادات المجلس")
 
         rounds = st.slider(
@@ -279,7 +275,6 @@ def _render_sidebar(
         st.divider()
 
         st.subheader("🔬 تشخيص المزودين")
-
         st.caption(
             "يفحص كل API رسمي بشكل مستقل برسالة اختبار صغيرة، "
             "بدون Local Engine وبدون مرفقات."
@@ -289,7 +284,6 @@ def _render_sidebar(
             "🔍 فحص المزودين الخمسة الآن",
             use_container_width=True,
         ):
-
             with st.spinner(
                 "تشخيص ChatGPT وGemini وClaude وGrok وKimi بالتوازي…"
             ):
@@ -308,9 +302,7 @@ def _render_sidebar(
 
         chat = _active_chat()
 
-        st.caption(
-            f"اسم المحادثة: {chat['title']}"
-        )
+        st.caption(f"اسم المحادثة: {chat['title']}")
 
         rename = st.text_input(
             "إعادة تسمية",
@@ -352,7 +344,6 @@ def _render_sidebar(
         st.subheader("📚 السجل")
 
         for item in list(st.session_state.chats):
-
             if st.button(
                 f"{'🟢' if item['id'] == st.session_state.active_chat_id else '⚪'} "
                 f"{item['title']}",
@@ -361,12 +352,10 @@ def _render_sidebar(
             ):
                 st.session_state.active_chat_id = item["id"]
                 st.session_state.last_results = []
-                st.session_state.last_diagnostics = []
                 st.rerun()
 
             st.caption(
-                f"{len(item['messages'])} رسالة • "
-                f"{item['created_at']}"
+                f"{len(item['messages'])} رسالة • {item['created_at']}"
             )
 
         c3, c4 = st.columns(2)
@@ -376,16 +365,13 @@ def _render_sidebar(
                 "🗑️ حذف الحالية",
                 use_container_width=True,
             ):
-
                 if len(st.session_state.chats) == 1:
-
                     fresh = _new_chat()
 
                     st.session_state.chats = [fresh]
                     st.session_state.active_chat_id = fresh["id"]
 
                 else:
-
                     st.session_state.chats = [
                         x
                         for x in st.session_state.chats
@@ -397,8 +383,6 @@ def _render_sidebar(
                     )
 
                 st.session_state.last_results = []
-                st.session_state.last_diagnostics = []
-
                 st.rerun()
 
         with c4:
@@ -406,7 +390,6 @@ def _render_sidebar(
                 "🧹 مسح الكل",
                 use_container_width=True,
             ):
-
                 fresh = _new_chat()
 
                 st.session_state.chats = [fresh]
@@ -422,13 +405,9 @@ def _render_sidebar(
         st.subheader("🔌 الاعتمادات والنماذج")
 
         for seat in SEATS:
-
             models = (
                 model_candidates.get(seat.key)
-                or (
-                    seat.default_model,
-                    *seat.fallback_models,
-                )
+                or (seat.default_model, *seat.fallback_models)
             )
 
             icon = (
@@ -460,22 +439,21 @@ def _render_sidebar(
         )
 
         st.caption(
-            "🔑 وجود المفتاح لا يثبت نجاح API "
-            "ولا وجود رصيد/ائتمان."
+            "🔑 وجود المفتاح لا يثبت نجاح API ولا وجود رصيد/ائتمان."
         )
 
         st.caption(
-            "المفاتيح لا تُعرض في الواجهة "
-            "ولا تُحفظ في History."
+            "المفاتيح لا تُعرض في الواجهة ولا تُحفظ في History."
         )
 
     return rounds, local_fallback
 
 
 def _render_user_room(chat: dict) -> None:
-
-    with st.container(height=500, border=True):
-
+    with st.container(
+        height=500,
+        border=True,
+    ):
         st.subheader("👤 أنت")
 
         user_messages = [
@@ -491,13 +469,8 @@ def _render_user_room(chat: dict) -> None:
             )
 
         for message in user_messages:
-
             with st.chat_message("user"):
-
-                content = message.get(
-                    "content",
-                    "",
-                )
+                content = message.get("content", "")
 
                 if content:
                     st.write(content)
@@ -506,7 +479,6 @@ def _render_user_room(chat: dict) -> None:
                     "attachments",
                     [],
                 ):
-
                     st.caption(
                         f"📎 {attachment.get('name', 'attachment')} "
                         f"· {attachment.get('mime', 'file')} "
@@ -519,17 +491,15 @@ def _render_ai_room(
     seat,
     model_candidates: dict,
 ) -> None:
-
-    with st.container(height=500, border=True):
-
+    with st.container(
+        height=500,
+        border=True,
+    ):
         st.subheader(seat.label)
 
         models = (
             model_candidates.get(seat.key)
-            or (
-                seat.default_model,
-                *seat.fallback_models,
-            )
+            or (seat.default_model, *seat.fallback_models)
         )
 
         st.caption(
@@ -547,18 +517,43 @@ def _render_ai_room(
             return
 
         for message in messages:
+            if message.get("mode") == "official":
+                badge = "Official API"
 
-            badge = (
-                "Official API"
-                if message.get("mode") == "official"
-                else "Local Engine"
-            )
+                st.markdown(
+                    f"**Round {message.get('round', '?')} "
+                    f"· 🟢 {badge} "
+                    f"· `{message.get('model', '')}`**"
+                )
 
-            st.markdown(
-                f"**Round {message.get('round', '?')} "
-                f"· {badge} "
-                f"· `{message.get('model', '')}`**"
-            )
+            else:
+                badge = "Local Engine"
+
+                st.markdown(
+                    f"**Round {message.get('round', '?')} "
+                    f"· 🟡 {badge} "
+                    f"· `local`**"
+                )
+
+                error = message.get("official_error")
+
+                if error:
+                    with st.expander(
+                        "سبب عدم استخدام Official API",
+                        expanded=False,
+                    ):
+                        st.code(error)
+
+                        attempted = (
+                            message.get("attempted_models")
+                            or []
+                        )
+
+                        if attempted:
+                            st.caption(
+                                "النماذج التي تمت محاولتها: "
+                                + ", ".join(attempted)
+                            )
 
             st.markdown(
                 message.get("content", "")
@@ -571,7 +566,6 @@ def _render_six_rooms(
     chat: dict,
     model_candidates: dict,
 ) -> None:
-
     rows = [
         (None, SEATS[0]),
         (SEATS[1], SEATS[2]),
@@ -579,21 +573,21 @@ def _render_six_rooms(
     ]
 
     for left, right in rows:
-
         cols = st.columns(
             2,
             gap="medium",
         )
 
         with cols[0]:
-            if left is None:
+            (
                 _render_user_room(chat)
-            else:
-                _render_ai_room(
+                if left is None
+                else _render_ai_room(
                     chat,
                     left,
                     model_candidates,
                 )
+            )
 
         with cols[1]:
             _render_ai_room(
@@ -607,9 +601,7 @@ def _render_result_line(
     result: dict,
     diagnostic_only: bool = False,
 ) -> None:
-
     if result["status"] == "SUCCESS":
-
         prefix = (
             "🟢"
             if diagnostic_only
@@ -626,11 +618,9 @@ def _render_result_line(
         return
 
     with st.expander(
-        f"🔴 {result['label']} "
-        f"— Official API failed",
+        f"🔴 {result['label']} — Official API failed",
         expanded=diagnostic_only,
     ):
-
         st.write(
             result.get("error")
             or "تعذر الحصول على رد رسمي."
@@ -639,10 +629,7 @@ def _render_result_line(
         st.write(
             "Attempted models:",
             ", ".join(
-                result.get(
-                    "attempted_models",
-                    [],
-                )
+                result.get("attempted_models", [])
             )
             or "none",
         )
@@ -652,7 +639,6 @@ def _render_diagnostics(
     results: list[dict],
     title: str = "🔎 التشخيص والنتائج",
 ) -> None:
-
     official = sum(
         r["status"] == "SUCCESS"
         for r in results
@@ -671,24 +657,27 @@ def _render_diagnostics(
     st.subheader(title)
 
     st.info(
-        f"آخر عملية: {official + local}/5 استجابات "
+        f"آخر عملية: "
+        f"{official + local}/5 استجابات "
         f"• رسمي: {official} "
         f"• محلي: {local} "
         f"• فشل: {failed}"
     )
 
+    if local:
+        st.caption(
+            "🟡 المقاعد المحلية ليست ردودًا من المزودين الرسميين؛ "
+            "سبب التحويل ظاهر داخل كل غرفة."
+        )
+
     for result in results:
-
         if result["status"] == "SUCCESS":
-
             _render_result_line(result)
 
         elif result["status"] == "LOCAL":
-
             with st.expander(
                 f"🟡 {result['label']} — Local Engine"
             ):
-
                 st.write(
                     result.get("error")
                     or "تم استخدام Local Engine."
@@ -697,23 +686,18 @@ def _render_diagnostics(
                 st.write(
                     "Attempted models:",
                     ", ".join(
-                        result.get(
-                            "attempted_models",
-                            [],
-                        )
+                        result.get("attempted_models", [])
                     )
                     or "none",
                 )
 
         else:
-
             _render_result_line(result)
 
 
 def _render_provider_diagnostics(
     results: list[dict],
 ) -> None:
-
     if not results:
         return
 
@@ -734,18 +718,15 @@ def _render_provider_diagnostics(
 
 
 def _render_attachment_picker() -> list[dict]:
-
     nonce = st.session_state.folder_nonce
 
     with st.expander(
         "📁 إرفاق مجلد",
         expanded=False,
     ):
-
         st.caption(
-            "اختر مجلدًا كاملًا؛ ستُرسل ملفاته "
-            "مع الرسالة التالية. الحد: "
-            "20 ملفًا / 25 MB إجمالًا."
+            "اختر مجلدًا كاملًا؛ ستُرسل ملفاته مع الرسالة التالية. "
+            "الحد: 20 ملفًا / 25 MB إجمالًا."
         )
 
         folder = st.file_uploader(
@@ -753,8 +734,8 @@ def _render_attachment_picker() -> list[dict]:
             accept_multiple_files="directory",
             key=f"chat_folder_{nonce}",
             help=(
-                "يرفع الملفات الموجودة داخل المجلد "
-                "ومجلداته الفرعية عندما يدعم المتصفح ذلك."
+                "يرفع الملفات الموجودة داخل المجلد ومجلداته الفرعية "
+                "عندما يدعم المتصفح ذلك."
             ),
         )
 
@@ -765,7 +746,6 @@ def _submission_files(
     submission,
     folder_files: list[object],
 ) -> list[dict] | None:
-
     files = []
 
     if submission is not None:
@@ -794,7 +774,6 @@ def _submission_files(
 
 
 def run_app() -> None:
-
     _init_state()
 
     credentials = capture_credentials()
@@ -814,16 +793,18 @@ def run_app() -> None:
     )
 
     st.caption(
-        f"{APP_VERSION} • المستخدم + خمسة مقاعد "
-        f"• سياق مشترك • استدعاءات متوازية "
+        f"{APP_VERSION} "
+        "• المستخدم + خمسة مقاعد "
+        "• سياق مشترك "
+        "• استدعاءات متوازية "
         f"• Provider: {PROVIDER_VERSION}"
     )
 
     st.markdown(
         "**العقد التشغيلي:** رسالة واحدة تُرسل بالتوازي "
         "إلى ChatGPT وGemini وClaude وGrok وKimi. "
-        "لا يظهر وسم Official API إلا بعد نجاح "
-        "طلب API رسمي مصادق عليه."
+        "لا يظهر وسم Official API إلا بعد نجاح طلب API "
+        "رسمي مصادق عليه."
     )
 
     _render_six_rooms(
@@ -842,7 +823,6 @@ def run_app() -> None:
     )
 
     if submission:
-
         prompt = (
             getattr(
                 submission,
@@ -861,7 +841,6 @@ def run_app() -> None:
             return
 
         if prompt or attachments:
-
             if not prompt:
                 prompt = (
                     "حلّل المرفقات المرفقة "
@@ -905,17 +884,13 @@ def run_app() -> None:
             st.rerun()
 
     if st.session_state.last_diagnostics:
-
         st.divider()
-
         _render_provider_diagnostics(
             st.session_state.last_diagnostics
         )
 
     if st.session_state.last_results:
-
         st.divider()
-
         _render_diagnostics(
             st.session_state.last_results
         )
