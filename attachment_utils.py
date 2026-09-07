@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import os
 import re
@@ -84,6 +85,7 @@ def normalize_uploaded_files(
 ) -> list[dict]:
 
     result: list[dict] = []
+
     total = 0
 
     seen: set[
@@ -93,7 +95,6 @@ def normalize_uploaded_files(
     for uploaded in files:
 
         if len(result) >= MAX_FILES:
-
             raise ValueError(
                 f"عدد المرفقات يتجاوز "
                 f"الحد المسموح {MAX_FILES} ملفًا."
@@ -104,17 +105,15 @@ def normalize_uploaded_files(
                 uploaded.getvalue()
             )
 
-        except Exception as exc:
-
+        except Exception:
             raise ValueError(
                 "تعذر قراءة أحد المرفقات."
-            ) from exc
+            )
 
         if not data:
             continue
 
         if len(data) > MAX_FILE_BYTES:
-
             raise ValueError(
                 f"الملف "
                 f"{getattr(uploaded, 'name', 'attachment')} "
@@ -143,7 +142,9 @@ def normalize_uploaded_files(
         fingerprint = (
             name.lower(),
             len(data),
-            data[:32],
+            hashlib.sha256(
+                data
+            ).digest(),
         )
 
         if fingerprint in seen:
@@ -155,7 +156,6 @@ def normalize_uploaded_files(
             total + len(data)
             > MAX_TOTAL_BYTES
         ):
-
             raise ValueError(
                 "إجمالي المرفقات يتجاوز "
                 "الحد المسموح 25 MB "
@@ -205,7 +205,9 @@ def is_image(att: dict) -> bool:
     )
 
 
-def as_data_url(att: dict) -> str:
+def as_data_url(
+    att: dict,
+) -> str:
 
     mime = (
         att.get("mime")
@@ -224,7 +226,9 @@ def as_data_url(att: dict) -> str:
     )
 
 
-def as_base64(att: dict) -> str:
+def as_base64(
+    att: dict,
+) -> str:
 
     return base64.b64encode(
         att.get(
@@ -234,7 +238,9 @@ def as_base64(att: dict) -> str:
     ).decode("ascii")
 
 
-def extract_text(att: dict) -> str:
+def extract_text(
+    att: dict,
+) -> str:
 
     name = att.get(
         "name",
@@ -335,11 +341,12 @@ def attachment_summary(
         if text:
 
             lines.append(
-                "  EXTRACTED TEXT:\n"
-                f"{text}"
+                f"  EXTRACTED TEXT:\n{text}"
             )
 
-    return "\n".join(lines)[-max_chars:]
+    return "\n".join(
+        lines
+    )[-max_chars:]
 
 
 def public_metadata(
@@ -348,12 +355,8 @@ def public_metadata(
 
     return [
         {
-            "name": a.get(
-                "name"
-            ),
-            "mime": a.get(
-                "mime"
-            ),
+            "name": a.get("name"),
+            "mime": a.get("mime"),
             "size": a.get(
                 "size",
                 0,
