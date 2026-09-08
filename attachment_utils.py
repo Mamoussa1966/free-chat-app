@@ -22,11 +22,7 @@ TEXT_EXTENSIONS = {
 }
 
 IMAGE_MIMES = {
-    "image/png",
-    "image/jpeg",
-    "image/jpg",
-    "image/webp",
-    "image/gif",
+    "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif",
 }
 
 
@@ -39,13 +35,8 @@ def _safe_name(name: str) -> str:
 def _safe_mime(value: object) -> str:
     mime = str(value or "application/octet-stream").strip().lower()
     mime = mime.split(";", 1)[0].strip()
-
-    if not re.fullmatch(
-        r"[a-z0-9!#$&^_.+\-]+/[a-z0-9!#$&^_.+\-]+",
-        mime,
-    ):
+    if not re.fullmatch(r"[a-z0-9!#$&^_.+\-]+/[a-z0-9!#$&^_.+\-]+", mime):
         return "application/octet-stream"
-
     return mime[:120]
 
 
@@ -57,53 +48,28 @@ def normalize_uploaded_files(files: Iterable[object]) -> list[dict]:
     for uploaded in files:
         try:
             data = bytes(uploaded.getvalue())
-        except Exception as exc:
-            raise ValueError("تعذر قراءة أحد المرفقات.") from exc
-
+        except Exception:
+            raise ValueError("تعذر قراءة أحد المرفقات.")
         if not data:
             continue
-
         if len(data) > MAX_FILE_BYTES:
-            raise ValueError(
-                f"الملف {getattr(uploaded, 'name', 'attachment')} "
-                "أكبر من الحد المسموح 10 MB."
-            )
+            raise ValueError(f"الملف {getattr(uploaded, 'name', 'attachment')} أكبر من الحد المسموح 10 MB.")
 
         mime = _safe_mime(getattr(uploaded, "type", None))
-        name = _safe_name(
-            str(getattr(uploaded, "name", "attachment"))
-        )
-
+        name = _safe_name(str(getattr(uploaded, "name", "attachment")))
         fingerprint = hashlib.sha256(data).digest()
-
-        # إزالة التكرارات قبل تطبيق حد عدد الملفات.
         if fingerprint in seen:
             continue
-
         seen.add(fingerprint)
 
-        # الحد يطبق على الملفات الفريدة فعليًا.
+        # Count unique payloads, not repeated copies of the same file.
         if len(result) >= MAX_FILES:
-            raise ValueError(
-                f"عدد المرفقات الفريدة يتجاوز الحد المسموح "
-                f"{MAX_FILES} ملفًا."
-            )
+            raise ValueError(f"عدد المرفقات الفريدة يتجاوز الحد المسموح {MAX_FILES} ملفًا.")
 
         if total + len(data) > MAX_TOTAL_BYTES:
-            raise ValueError(
-                "إجمالي المرفقات يتجاوز الحد المسموح "
-                "25 MB للرسالة الواحدة."
-            )
+            raise ValueError("إجمالي المرفقات يتجاوز الحد المسموح 25 MB للرسالة الواحدة.")
 
-        result.append(
-            {
-                "name": name,
-                "mime": mime,
-                "size": len(data),
-                "data": data,
-            }
-        )
-
+        result.append({"name": name, "mime": mime, "size": len(data), "data": data})
         total += len(data)
 
     return result
@@ -112,26 +78,17 @@ def normalize_uploaded_files(files: Iterable[object]) -> list[dict]:
 def is_image(att: dict) -> bool:
     mime = str(att.get("mime", "")).lower()
     ext = os.path.splitext(att.get("name", ""))[1].lower()
-
-    return (
-        mime in IMAGE_MIMES
-        or ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-    )
+    return mime in IMAGE_MIMES or ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 
 def as_data_url(att: dict) -> str:
     mime = att.get("mime") or "application/octet-stream"
-    encoded = base64.b64encode(
-        att.get("data", b"")
-    ).decode("ascii")
-
+    encoded = base64.b64encode(att.get("data", b"")).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 
 
 def as_base64(att: dict) -> str:
-    return base64.b64encode(
-        att.get("data", b"")
-    ).decode("ascii")
+    return base64.b64encode(att.get("data", b"")).decode("ascii")
 
 
 def extract_text(att: dict) -> str:
@@ -139,16 +96,8 @@ def extract_text(att: dict) -> str:
     ext = os.path.splitext(name)[1].lower()
     data = att.get("data", b"")
 
-    if (
-        ext in TEXT_EXTENSIONS
-        or str(att.get("mime", "")).startswith("text/")
-    ):
-        for encoding in (
-            "utf-8",
-            "utf-8-sig",
-            "cp1256",
-            "latin-1",
-        ):
+    if ext in TEXT_EXTENSIONS or str(att.get("mime", "")).startswith("text/"):
+        for encoding in ("utf-8", "utf-8-sig", "cp1256", "latin-1"):
             try:
                 return data.decode(encoding)[:MAX_TEXT_CHARS]
             except UnicodeDecodeError:
@@ -158,53 +107,27 @@ def extract_text(att: dict) -> str:
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 with zf.open("word/document.xml") as member:
-                    xml = member.read(
-                        MAX_TEXT_CHARS * 8
-                    ).decode("utf-8", "ignore")
-
+                    xml = member.read(MAX_TEXT_CHARS * 8).decode("utf-8", "ignore")
             text = re.sub(r"<[^>]+>", " ", xml)
             text = re.sub(r"\s+", " ", text).strip()
-
             return text[:MAX_TEXT_CHARS]
-
         except Exception:
             return ""
 
     return ""
 
 
-def attachment_summary(
-    attachments: list[dict],
-    max_chars: int = MAX_TEXT_CHARS,
-) -> str:
+def attachment_summary(attachments: list[dict], max_chars: int = MAX_TEXT_CHARS) -> str:
     if not attachments:
         return ""
-
     lines = ["ATTACHMENTS:"]
-
     for att in attachments:
-        lines.append(
-            f"- {att.get('name')} "
-            f"({att.get('mime')}, "
-            f"{att.get('size', 0)} bytes)"
-        )
-
+        lines.append(f"- {att.get('name')} ({att.get('mime')}, {att.get('size', 0)} bytes)")
         text = extract_text(att)
-
         if text:
-            lines.append(
-                f"  EXTRACTED TEXT:\n{text}"
-            )
-
+            lines.append(f"  EXTRACTED TEXT:\n{text}")
     return "\n".join(lines)[-max_chars:]
 
 
 def public_metadata(attachments: list[dict]) -> list[dict]:
-    return [
-        {
-            "name": a.get("name"),
-            "mime": a.get("mime"),
-            "size": a.get("size", 0),
-        }
-        for a in attachments
-    ]
+    return [{"name": a.get("name"), "mime": a.get("mime"), "size": a.get("size", 0)} for a in attachments]
