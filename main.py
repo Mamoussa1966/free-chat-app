@@ -22,7 +22,7 @@ from providers import (
     transcribe_audio_gemini,
 )
 
-APP_VERSION = "V22-FREE-CASCADE-10-NO-LOCAL"
+APP_VERSION = "V22.1-FREE-CASCADE-10-NO-LOCAL-FINAL-HOTFIX2"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -129,7 +129,7 @@ def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None) 
         "label": seat.label,
         "status": "FAILED",
         "mode": "internal",
-        "model": ((model_candidates or {}).get(seat.key) or ("",))[0],
+        "model": ((model_candidates or {}).get(seat.key) or (seat.default_model,))[0],
         "content": "",
         "error": f"class=internal_worker_error; {exc.__class__.__name__}",
         "latency": 0,
@@ -211,8 +211,8 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.divider()
         st.subheader("🔬 تشخيص المزودين")
         st.caption("يفحص كل API رسمي بشكل مستقل برسالة اختبار صغيرة، بدون Local Engine وبدون مرفقات.")
-        if st.button("🔍 فحص المزودين الخمسة الآن", use_container_width=True):
-            with st.spinner("تشخيص ChatGPT وGemini وClaude وGrok وKimi بالتوازي…"):
+        if st.button("🔍 فحص جميع المزودين الـ20 الآن", use_container_width=True):
+            with st.spinner("تشخيص جميع المزودين الـ20 بالتوازي…"):
                 st.session_state.last_diagnostics = _run_provider_diagnostics(credentials, model_candidates)
             st.rerun()
 
@@ -269,6 +269,8 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.divider()
         st.subheader("🔌 الاعتمادات والنماذج")
         for seat in SEATS:
+            # The displayed cascade is exactly the immutable Secret snapshot.
+            # Never append hidden/default/paid models in the UI.
             models = model_candidates.get(seat.key) or ()
             icon = "🟢" if credentials.get(seat.key) else "⚪"
             st.markdown(f"{icon} **{seat.name}**")
@@ -276,7 +278,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)))
             else:
                 st.caption("Free cascade: غير مُكوّن — أضف *_FREE_MODELS في Secrets")
-        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/5")
+        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(SEATS)}")
         st.caption("🔑 وجود المفتاح لا يثبت نجاح API. كل نموذج في السلسلة يجب أن يكون Free API فعليًا لحسابك.")
         st.caption("المفاتيح لا تُعرض في الواجهة ولا تُحفظ في History.")
     return rounds
@@ -322,7 +324,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict) -> 
         st.markdown("**🎙️ صوت داخل الغرفة**")
         st.caption(
             "سجّل رسالتك الصوتية ثم أرسلها للمجلس. "
-            "سيتم تحويلها إلى نص عبر Gemini 3.5 Transcribe قبل توزيعها على المقاعد الخمسة."
+            "سيتم تحويلها إلى نص عبر Gemini قبل توزيعها بالتوازي على جميع المقاعد المهيأة."
         )
         audio = st.audio_input(
             "🎙️ تسجيل رسالة صوتية",
@@ -334,7 +336,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict) -> 
             mime = str(getattr(audio, "type", None) or "audio/wav")
             st.audio(audio_bytes, format=mime)
             if st.button(
-                "🎤 إرسال الصوت للمجلس السداسي",
+                "🎤 إرسال الصوت للمجلس",
                 type="primary",
                 use_container_width=True,
                 key=f"send_voice_{st.session_state.voice_nonce}",
@@ -346,7 +348,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict) -> 
                 elif fingerprint in st.session_state.voice_fingerprints.get(chat["id"], set()):
                     st.warning("هذه الرسالة الصوتية تم إرسالها بالفعل.")
                 else:
-                    with st.spinner("تحويل الصوت إلى نص عبر Gemini 3.5 Transcribe…"):
+                    with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
                         transcription = transcribe_audio_gemini(
                             audio_bytes,
                             mime,
@@ -425,24 +427,14 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.divider()
 
 
-def _render_six_rooms(chat: dict, model_candidates: dict, credentials: dict) -> tuple[str, bytes, str, str] | None:
-    rows = [(None, SEATS[0]), (SEATS[1], SEATS[2]), (SEATS[3], SEATS[4])]
-    voice_submission = None
-
-    for left, right in rows:
-        cols = st.columns(2, gap="medium")
-        with cols[0]:
-            if left is None:
-                voice_submission = _render_user_room(
-                    chat,
-                    credentials,
-                    model_candidates,
-                )
-            else:
-                _render_ai_room(chat, left, model_candidates)
-        with cols[1]:
-            _render_ai_room(chat, right, model_candidates)
-
+def _render_rooms(chat: dict, model_candidates: dict, credentials: dict) -> tuple[str, bytes, str, str] | None:
+    voice_submission = _render_user_room(chat, credentials, model_candidates)
+    seats = list(SEATS)
+    for start in range(0, len(seats), 3):
+        cols = st.columns(3, gap="medium")
+        for col, seat in zip(cols, seats[start:start + 3]):
+            with col:
+                _render_ai_room(chat, seat, model_candidates)
     return voice_submission
 
 
@@ -460,6 +452,11 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         with st.expander("تفاصيل التشخيص", expanded=diagnostic_only):
             st.write(result.get("error") or "تم توثيق المفتاح، لكن لا يوجد نموذج Free مُكوّن.")
         return
+    if status == "NO_FREE_MODEL_CONFIGURED":
+        st.warning(
+            f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب للمزود."
+        )
+        return
     with st.expander(f"🔴 {result['label']} — Official API failed", expanded=diagnostic_only):
         st.write(result.get("error") or "تعذر الحصول على رد رسمي.")
         st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
@@ -471,7 +468,7 @@ def _render_diagnostics(results: list[dict], title: str = "🔎 التشخيص �
     failed = sum(r.get("status") == "FAILED" for r in results)
     st.subheader(title)
     st.info(
-        f"آخر عملية: {official}/5 استجابات رسمية • موثّق API: {authenticated}/5 • فشل: {failed} • Local Engine: غير مستخدم"
+        f"آخر عملية: {official}/{len(SEATS)} استجابات رسمية • موثّق API: {authenticated}/{len(SEATS)} • فشل: {failed} • Local Engine: غير مستخدم"
     )
     for result in results:
         _render_result_line(result)
@@ -520,15 +517,15 @@ def run_app() -> None:
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
 
-    st.title("🏛️ AI Council — Six-Room Shared Context Arena")
-    st.caption(f"{APP_VERSION} • المستخدم + خمسة مقاعد • سياق مشترك • استدعاءات متوازية • Provider: {PROVIDER_VERSION}")
+    st.title("🏛️ AI Council — 20-Provider Free Cascade")
+    st.caption(f"{APP_VERSION} • المستخدم + {len(SEATS)} مزودًا • سياق مشترك • استدعاءات متوازية • Provider: {PROVIDER_VERSION}")
     st.caption("🔒 سياق الجولات السابقة يُوسم حسب المصدر، والطلب الحالي لا يُكرر داخل سياق الجولة الثانية وما بعدها.")
     st.markdown(
-        "**العقد التشغيلي:** رسالة واحدة تُرسل بالتوازي إلى ChatGPT وGemini وClaude وGrok وKimi. "
-        "كل مقعد يجرب Free #1 ثم Free #2 … حتى Free #10. لا يوجد Local Engine ولا نموذج مدفوع افتراضيًا."
+        "**العقد التشغيلي:** رسالة واحدة تُرسل بالتوازي إلى جميع المزودين المهيأين. "
+        "كل مزود يجرب Free #1 ثم Free #2 … حتى Free #10. لا يوجد Local Engine ولا نموذج مدفوع افتراضيًا."
     )
 
-    voice_submission = _render_six_rooms(
+    voice_submission = _render_rooms(
         chat,
         model_candidates,
         credentials,
@@ -598,7 +595,7 @@ def run_app() -> None:
         chat["messages"].append(user_message)
         st.session_state.last_diagnostics = []
 
-        with st.spinner("المجلس السداسي ينفذ الجولة بالتوازي…"):
+        with st.spinner("المجلس ينفذ الجولة بالتوازي…"):
             results = _run_council(
                 prompt,
                 chat,
