@@ -1,115 +1,62 @@
-# 🏛️ AI Council V21.11
+# AI Council V22.1 — 20-Provider Free API Cascade
 
-AI Council is a Streamlit-based multi-provider AI discussion room.
+This release fixes the mismatch in the previous `AI_Council_V22_1_FREE_CASCADE_10_NO_LOCAL_FINAL_HOTFIX`: the old package actually contained only five seats. This package exposes **20 provider seats** and routes each configured seat through an explicit ordered Free API cascade of up to 10 model IDs.
 
-The application provides one shared council room containing:
+## Providers
 
-1. ChatGPT — OpenAI
-2. Gemini — Google
-3. Claude — Anthropic
-4. Grok — xAI
-5. Kimi — Moonshot
+1. OpenAI / ChatGPT
+2. Google Gemini
+3. Anthropic Claude
+4. Groq
+5. OpenRouter
+6. Cohere
+7. Mistral AI
+8. xAI / Grok
+9. DeepSeek
+10. Together AI
+11. Perplexity
+12. Fireworks AI
+13. Replicate
+14. Hugging Face Inference Providers
+15. AI21 Labs
+16. Kimi / Moonshot
+17. Alibaba DashScope
+18. Zhipu AI / Z.ai
+19. DeepInfra
+20. Anyscale
 
-The user is the sixth participant.
+## Free-only safety contract
 
----
+- No Local Engine.
+- No automatic paid model selection.
+- No hidden model fallback.
+- A provider is called only when its API credential exists **and** at least one model is explicitly configured in its `*_FREE_MODELS` secret/environment variable.
+- Each provider accepts at most 10 ordered models: Free #1 → Free #10.
+- Model IDs are not hard-coded as supposedly-free defaults because provider entitlements change by account, region, date, and plan.
+- A successful authenticated response is the only condition used to label a council response `Official API`.
 
-## Architecture
+This policy is intentional: a Python application cannot manufacture a provider's free quota or entitlement.
 
-The application is intentionally split into isolated layers:
+## Current API compatibility notes
 
-- `app.py`
-  - Streamlit entry point.
-  - Imports and calls `run_app()` from `main.py`.
+- OpenAI uses the Responses API.
+- Gemini uses `generateContent` for council text/image requests.
+- Anthropic uses Messages API.
+- Cohere uses the current v2 Chat endpoint.
+- Hugging Face uses its current OpenAI-compatible Inference Providers router.
+- Replicate uses its Predictions API and accepts either an official `owner/model` reference or a version ID/reference.
+- The remaining compatible providers use their documented OpenAI-style Chat Completions endpoints.
 
-- `main.py`
-  - Application orchestration.
-  - Six-room UI.
-  - User message handling.
-  - Shared council context.
-  - Attachments.
-  - History management.
-  - Diagnostics.
-  - Parallel provider execution.
+## Voice
 
-- `providers.py`
-  - Official provider gateway.
-  - Provider-specific request/response handling.
-  - Credential isolation.
-  - Model candidate selection.
-  - Error classification.
-  - Secret redaction.
-  - Provider failure isolation.
+Voice transcription is separate from the council cascade and uses Gemini `gemini-3.5-transcribe`. The model is current as of this release and can be overridden with `GEMINI_TRANSCRIBE_MODEL`.
 
-- `attachment_utils.py`
-  - Attachment validation.
-  - Filename sanitization.
-  - Size and count limits.
-  - Duplicate detection.
-  - Safe text extraction.
+## Attachments
 
-- `local_engine.py`
-  - Explicitly declared local fallback engine.
-  - It must never impersonate an official provider.
+Uploads are bounded to protect Streamlit memory and provider request size. Text is extracted when supported. Images are passed inline only where the provider path explicitly supports them; otherwise their extracted/metadata context is supplied as untrusted reference data.
 
-- `requirements.txt`
-  - Runtime Python dependencies.
+## Run
 
-- `tests/`
-  - Unit and structural tests.
-  - Tests must pass before considering a release candidate.
-
----
-
-## Council execution model
-
-A user message is submitted once.
-
-The application then attempts to deliver the same logical request to the five official provider seats independently.
-
-Provider execution is isolated.
-
-Therefore:
-
-- One provider failure must not terminate the other providers.
-- A timeout from one provider must not block the entire council indefinitely.
-- Authentication failures must be reported separately.
-- Rate-limit/quota failures must be reported separately.
-- Invalid or unavailable models must be reported separately.
-- Network/provider failures must be reported separately.
-- A provider must never be marked successful merely because its API key exists.
-
-The application distinguishes between:
-
-- `Official API`
-- `Local fallback`
-- `Unavailable`
-- `Failed`
-
-Credential presence is configuration state only.
-
-It is NOT proof that an API call succeeded.
-
----
-
-## Credential handling
-
-API credentials must be supplied through Streamlit Secrets or environment variables.
-
-Supported credential aliases include:
-
-```text
-OPENAI_API_KEY
-
-GEMINI_API_KEY
-GOOGLE_API_KEY
-
-ANTHROPIC_API_KEY
-ANTHROPIC_WORKSPACE_ID
-CLAUDE_WORKSPACE_ID
-
-XAI_API_KEY
-GROK_API_KEY
-
-KIMI_API_KEY
-MOONSHOT_API_KEY
+```bash
+python -m pip install -r requirements.txt
+streamlit run app.py
