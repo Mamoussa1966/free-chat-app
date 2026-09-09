@@ -1,0 +1,5 @@
+
+streamlit==1.63.0
+requests>=2.31,<3
+
+pytest>=8,<9
