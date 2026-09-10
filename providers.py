@@ -9,13 +9,16 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FREE-CASCADE-10-NO-LOCAL-FINAL-HOTFIX6"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX6"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
 MAX_PROVIDER_ATTACHMENT_BYTES = 12 * 1024 * 1024
 MAX_ERROR_CHARS = 700
+MAX_RESPONSE_CHARS = 40_000
+MAX_RESPONSE_BODY_CHARS = 4_000_000
 RETRIES = 1
+MIN_HTTP_TIMEOUT_SECONDS = 1
 
 
 def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -144,7 +147,9 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
         item = value.strip().strip("\"'")
         if not item or len(item) > 160:
             continue
-        if not re.fullmatch(r"[A-Za-z0-9._:/@-]+", item):
+        # Model IDs are inserted into provider paths/JSON; reject path traversal
+        # and URL-control characters rather than relying on downstream parsing.
+        if item in {".", ".."} or ".." in item.split("/") or not re.fullmatch(r"[A-Za-z0-9._:/@-]+", item):
             continue
         if item in seen:
             continue
@@ -238,7 +243,7 @@ def _retry_delay(response: Any, attempt: int) -> float:
     return min(2.0, 0.35 * (attempt + 1))
 
 
-def _openai_models_probe(credential: Optional[str], timeout: int = REQUEST_TIMEOUT) -> None:
+def _openai_models_probe(credential: Optional[str], timeout: int = REQUEST_TIMEOUT, deadline: Optional[float] = None) -> None:
     key = (credential or "").strip()
     if not key:
         raise ProviderError("OpenAI API credential is not configured", error_class="not_configured")
@@ -246,7 +251,7 @@ def _openai_models_probe(credential: Optional[str], timeout: int = REQUEST_TIMEO
         response = requests.get(
             "https://api.openai.com/v1/models",
             headers={"Authorization": f"Bearer {key}"},
-            timeout=timeout,
+            timeout=_effective_timeout(timeout, deadline),
         )
     except requests.Timeout as exc:
         raise ProviderError("OpenAI authentication probe timed out", error_class="timeout") from exc
@@ -284,33 +289,65 @@ def _openai_models_probe(credential: Optional[str], timeout: int = REQUEST_TIMEO
         raise ProviderError("OpenAI authentication probe returned an unexpected response", status, "invalid_response")
 
 
-def _post(url: str, headers: dict, payload: dict, timeout: int) -> dict:
+def _effective_timeout(timeout: float, deadline: Optional[float] = None) -> float:
+    try:
+        base = float(timeout)
+    except (TypeError, ValueError):
+        base = float(REQUEST_TIMEOUT)
+    base = max(float(MIN_HTTP_TIMEOUT_SECONDS), min(base, 90.0))
+    if deadline is None:
+        return base
+    remaining = float(deadline) - time.monotonic()
+    if remaining < MIN_HTTP_TIMEOUT_SECONDS:
+        raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
+    return max(float(MIN_HTTP_TIMEOUT_SECONDS), min(base, remaining))
+
+
+def _post(url: str, headers: dict, payload: dict, timeout: int, deadline: Optional[float] = None) -> dict:
+    if not isinstance(url, str) or not url.startswith("https://"):
+        raise ProviderError("invalid provider endpoint", error_class="configuration")
     last: Optional[ProviderError] = None
     for attempt in range(RETRIES + 1):
+        request_timeout = _effective_timeout(timeout, deadline)
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            response = requests.post(url, headers=headers, json=payload, timeout=request_timeout)
         except requests.Timeout as exc:
             last = ProviderError("network timeout", error_class="timeout")
             if attempt < RETRIES:
-                time.sleep(_retry_delay(None, attempt))
+                delay = _retry_delay(None, attempt)
+                if deadline is not None:
+                    delay = min(delay, max(0.0, float(deadline) - time.monotonic()))
+                if delay > 0:
+                    time.sleep(delay)
                 continue
             raise last from exc
         except requests.RequestException as exc:
             last = ProviderError(f"network error: {exc.__class__.__name__}", error_class="network")
             if attempt < RETRIES:
-                time.sleep(_retry_delay(None, attempt))
+                delay = _retry_delay(None, attempt)
+                if deadline is not None:
+                    delay = min(delay, max(0.0, float(deadline) - time.monotonic()))
+                if delay > 0:
+                    time.sleep(delay)
                 continue
             raise last from exc
 
+        raw_text = getattr(response, "text", "")
+        if len(str(raw_text)) > MAX_RESPONSE_BODY_CHARS:
+            raise ProviderError("provider response exceeded safety body cap", getattr(response, "status_code", None), "response_too_large")
         if response.status_code >= 400:
-            body = _sanitize(response.text[:1600])
+            body = _sanitize(str(raw_text)[:1600])
             last = ProviderError(
                 f"HTTP {response.status_code}: {body or 'empty error body'}",
                 response.status_code,
                 _classify(response.status_code, body),
             )
             if _retryable(response.status_code, body) and attempt < RETRIES:
-                time.sleep(_retry_delay(response, attempt))
+                delay = _retry_delay(response, attempt)
+                if deadline is not None:
+                    delay = min(delay, max(0.0, float(deadline) - time.monotonic()))
+                if delay > 0:
+                    time.sleep(delay)
                 continue
             raise last
 
@@ -414,6 +451,7 @@ def call_official(
     credential: Optional[str],
     timeout: int = REQUEST_TIMEOUT,
     attachments: Optional[list[dict]] = None,
+    deadline: Optional[float] = None,
 ) -> str:
     key = (credential or "").strip()
     if not key:
@@ -441,6 +479,7 @@ def call_official(
             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS},
             timeout,
+            deadline,
         )
         text = _openai_text(data)
 
@@ -456,6 +495,7 @@ def call_official(
             {"x-goog-api-key": key, "Content-Type": "application/json"},
             {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}},
             timeout,
+            deadline,
         )
         text = _gemini_text(data)
 
@@ -474,6 +514,7 @@ def call_official(
             {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
             {"model": model, "max_tokens": MAX_OUTPUT_TOKENS, "messages": [{"role": "user", "content": content}]},
             timeout,
+            deadline,
         )
         text = _anthropic_text(data)
 
@@ -492,6 +533,7 @@ def call_official(
             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS},
             timeout,
+            deadline,
         )
         text = _openai_text(data)
 
@@ -510,6 +552,7 @@ def call_official(
             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS},
             timeout,
+            deadline,
         )
         text = _chat_text(data)
 
@@ -518,6 +561,8 @@ def call_official(
 
     if not text:
         raise ProviderError("official provider returned no text", error_class="empty_response")
+    if len(text) > MAX_RESPONSE_CHARS:
+        text = text[:MAX_RESPONSE_CHARS].rstrip() + "\n[response truncated by safety cap]"
     return text
 
 
@@ -553,6 +598,7 @@ def call_seat(
     credential: Optional[str],
     attachments: Optional[list[dict]] = None,
     model_candidates: Optional[Tuple[str, ...]] = None,
+    deadline: Optional[float] = None,
 ) -> dict:
     """Run Free #1 → Free #10 only. The legacy local_fallback flag is ignored."""
     del local_fallback
@@ -568,15 +614,20 @@ def call_seat(
     last_error: Optional[ProviderError] = None
     terminal = {"not_configured", "configuration", "openai_authentication_failed", "authentication_or_permission"}
     for index, model in enumerate(candidates):
+        if deadline is not None and time.monotonic() >= float(deadline):
+            last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
+            break
         attempted.append(model)
         try:
-            content = call_official(seat, _prompt(user_prompt, shared_context, round_no), model, credential, REQUEST_TIMEOUT, attachments)
+            content = call_official(seat, _prompt(user_prompt, shared_context, round_no), model, credential, REQUEST_TIMEOUT, attachments, deadline)
             return _result(seat, "SUCCESS", model, content, None, started, attempted)
         except ProviderError as exc:
             last_error = exc
             if exc.error_class in terminal or index == len(candidates) - 1:
                 break
             # Every remaining candidate is still explicitly operator-configured as Free.
+            if deadline is not None and time.monotonic() >= float(deadline):
+                break
             continue
 
     return _result(
@@ -590,11 +641,11 @@ def call_seat(
     )
 
 
-def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:
+def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None) -> dict:
     started = time.perf_counter()
     if seat.key == "openai":
         try:
-            _openai_models_probe(credential)
+            _openai_models_probe(credential, REQUEST_TIMEOUT, deadline)
         except ProviderError as exc:
             return _result(seat, "FAILED", "", "", _diagnostic(exc, credential), started, [])
         candidates = tuple(model_candidates or get_model_candidates(seat))
@@ -612,7 +663,7 @@ def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Opt
                 "attempted_models": [],
                 "official_authenticated": True,
             }
-    return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates)
+    return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates, deadline)
 
 
 def transcribe_audio_gemini(
@@ -620,6 +671,7 @@ def transcribe_audio_gemini(
     mime_type: str,
     credential: Optional[str],
     model_candidates: Optional[Tuple[str, ...]] = None,
+    deadline: Optional[float] = None,
 ) -> dict:
     """Separate Gemini transcription path; it requires an explicit model setting.
 
@@ -663,6 +715,7 @@ def transcribe_audio_gemini(
                     {"inlineData": {"mimeType": mime, "data": encoded}},
                 ]}]},
                 REQUEST_TIMEOUT,
+                deadline,
             )
             text = _gemini_text(data)
             if not text:

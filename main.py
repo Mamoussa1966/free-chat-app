@@ -23,12 +23,13 @@ from providers import (
     transcribe_audio_gemini,
 )
 
-APP_VERSION = "V22.1-FREE-CASCADE-10-NO-LOCAL-FINAL-HOTFIX6"
+APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX6"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
 MAX_ROUNDS = 4
 MAX_EXECUTION_SECONDS = 180
+MAX_DIAGNOSTIC_SECONDS = 75
 MAX_PROMPT_CHARS = 20_000
 MAX_CHAT_MESSAGES = 200
 
@@ -140,30 +141,40 @@ def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None) 
     }
 
 
-def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str) -> list[dict]:
+def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float) -> list[dict]:
     snapshot = _shared_context(chat, exclude_message_id=current_user_message_id)
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=len(SEATS), thread_name_prefix="council") as pool:
-        futures = {
-            pool.submit(
-                call_seat,
-                seat,
-                user_prompt,
-                snapshot,
-                round_no,
-                False,
-                credentials.get(seat.key),
-                attachments,
-                model_candidates.get(seat.key),
-            ): seat
-            for seat in SEATS
-        }
-        for future in as_completed(futures):
+    pool = ThreadPoolExecutor(max_workers=len(SEATS), thread_name_prefix="council")
+    futures = {
+        pool.submit(
+            call_seat,
+            seat,
+            user_prompt,
+            snapshot,
+            round_no,
+            False,
+            credentials.get(seat.key),
+            attachments,
+            model_candidates.get(seat.key),
+            deadline,
+        ): seat
+        for seat in SEATS
+    }
+    try:
+        remaining = max(0.0, deadline - time.monotonic())
+        for future in as_completed(futures, timeout=remaining):
             seat = futures[future]
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates)
+    except TimeoutError:
+        pass
+    finally:
+        for future in futures:
+            if not future.done():
+                future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
     for seat in SEATS:
         results.setdefault(seat.key, _worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates))
     return [results[seat.key] for seat in SEATS]
@@ -171,8 +182,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str) -> list[dict]:
     all_results: list[dict] = []
+    deadline = time.monotonic() + MAX_EXECUTION_SECONDS
     for round_no in range(1, max(1, min(int(rounds), MAX_ROUNDS)) + 1):
-        round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id)
+        if time.monotonic() >= deadline:
+            break
+        round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline)
         all_results.extend(round_results)
         for result in round_results:
             if result.get("status") == "SUCCESS" and result.get("content"):
@@ -195,14 +209,26 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
 
 def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list[dict]:
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=len(SEATS), thread_name_prefix="diagnostic") as pool:
-        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in SEATS}
-        for future in as_completed(futures):
+    deadline = time.monotonic() + MAX_DIAGNOSTIC_SECONDS
+    pool = ThreadPoolExecutor(max_workers=len(SEATS), thread_name_prefix="diagnostic")
+    futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key), deadline): seat for seat in SEATS}
+    try:
+        remaining = max(0.0, deadline - time.monotonic())
+        for future in as_completed(futures, timeout=remaining):
             seat = futures[future]
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates)
+    except TimeoutError:
+        pass
+    finally:
+        for future in futures:
+            if not future.done():
+                future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+    for seat in SEATS:
+        results.setdefault(seat.key, _worker_failure(seat, TimeoutError("diagnostic deadline exceeded"), model_candidates))
     return [results[seat.key] for seat in SEATS]
 
 
@@ -328,7 +354,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                     st.warning("هذه الرسالة الصوتية تم إرسالها بالفعل.")
                 else:
                     with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
-                        transcription = transcribe_audio_gemini(audio_bytes, mime, credentials.get("gemini"), None)
+                        transcription = transcribe_audio_gemini(audio_bytes, mime, credentials.get("gemini"), None, time.monotonic() + 60)
                     if transcription.get("status") == "SUCCESS" and transcription.get("text", "").strip():
                         st.session_state.last_voice_error = ""
                         voice_submission = (transcription["text"].strip(), audio_bytes, mime, fingerprint)

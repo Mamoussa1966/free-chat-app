@@ -46,7 +46,12 @@ def package(output: Path) -> Path:
         rel = path.relative_to(ROOT).as_posix()
         if rel.startswith("__pycache__/") or "/__pycache__/" in rel or rel.endswith(".pyc") or rel.endswith(".pyo"):
             continue
-        if rel.startswith("dist/"):
+        if rel.startswith("dist/") or rel.startswith(".git/"):
+            continue
+        # Never nest release artifacts inside a new release archive.
+        if path.suffix.lower() in {".zip", ".sha256"}:
+            continue
+        if path.name == "RELEASE_MANIFEST.json":
             continue
         files.append((path, rel))
 
@@ -67,7 +72,10 @@ def write_hash(path: Path) -> Path:
 def check_zip(path: Path) -> dict:
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
-        bad = [n for n in names if n.startswith("/") or ".." in Path(n).parts]
+        bad = [n for n in names if n.startswith("/") or "\\" in n or ".." in Path(n).parts]
+        duplicate_names = sorted({n for n in names if names.count(n) > 1})
+        if duplicate_names:
+            raise SystemExit(f"ZIP contains duplicate paths: {duplicate_names}")
         if bad:
             raise SystemExit(f"Unsafe ZIP paths: {bad}")
         required_missing = [p for p in REQUIRED if p not in names]
