@@ -1,65 +1,32 @@
-# AI Council V22.1 — Final Exact Names Updated / Hardened Hotfix 6
+# AI Council V22.1 — FINAL HARDENED HOTFIX 6
 
-Five official provider-family seats plus the user room:
-ChatGPT/OpenAI, Gemini/Google, Claude/Anthropic, Grok/xAI, and Kimi/Moonshot.
+Five official provider seats plus the user room: OpenAI/ChatGPT, Gemini, Anthropic/Claude, xAI/Grok, and Moonshot/Kimi.
 
 ## Release contract
 
-- Strict **Free API Cascade #1 → #10** per provider.
-- Only models explicitly configured in `*_FREE_MODELS` are eligible.
-- No Local Engine.
-- No paid-model default.
-- No automatic model discovery that silently selects a billable model.
-- A credential is never treated as proof of Free Tier entitlement.
-- Official status is granted only after an official provider request returns usable text.
-- Authentication/configuration failures stop the cascade; candidate-specific temporary, quota/rate-limit, model, and server failures can advance to the next explicitly configured candidate.
+- Free API Cascade #1 → #10 per provider.
+- Only explicitly configured `*_FREE_MODELS` are eligible.
+- No Local Engine and no paid fallback.
+- A credential is never treated as proof that a model is free.
+- Official success is recorded only when an official request returns usable text.
+- Provider requests are bounded by an application-wide execution deadline.
+- Secrets are captured before worker threads and are not read from Streamlit inside workers.
+- Duplicate requests are fingerprinted from normalized prompt + attachment hashes.
+- DOCX archive traversal, symlink, member-count, expansion-size, and compression-ratio checks are enforced.
 
-## Security hardening
+## Validation
 
-- Secrets are captured on the Streamlit main thread before worker execution.
-- Worker threads receive plain snapshots and never access `st.secrets`.
-- Error messages are sanitized and explicit credential values are redacted.
-- User prompt and shared-context lengths are bounded.
-- Provider attachment payloads have a separate safety cap.
-- Upload count and total size are bounded.
-- DOCX archives are checked for traversal, absolute paths, symbolic links, member count, and expansion size before text extraction.
-- Per-chat request fingerprints reduce exact duplicate submissions.
-- A monotonic 180-second council execution deadline bounds the whole request; provider HTTP timeouts are clipped to the remaining deadline.
-- Provider response bodies are capped before JSON parsing/retention.
-- Provider endpoints are HTTPS-only and model path traversal segments are rejected.
-- Diagnostics and voice transcription have independent monotonic deadlines.
-- Release packaging excludes prior ZIP/hash artifacts and rejects duplicate ZIP paths.
-- Voice replay fingerprints are scoped per chat.
-- No local result is represented as a provider response.
+`build_release.py --check-only` performs source parsing, compilation, tests, required-file checks, and ZIP safety validation.
 
-## Important provider boundary
+Python's `ast.parse()` is useful for syntax/AST validation, but Python documents that parsing alone does not guarantee compilability; the release gate therefore also compiles the sources. citeturn0search0turn0search2
 
-This project cannot determine whether an API model is free for a particular account. Free-tier eligibility, quota, billing, model availability, and provider policy are external facts. The operator must put only genuinely zero-cost model IDs into the corresponding `*_FREE_MODELS` secret.
-
-## Voice
-
-Voice transcription is a separate Gemini utility path. It does not use a local engine and it does not inject a default transcription model. Configure `GEMINI_TRANSCRIBE_MODEL` explicitly.
-
-## Run
-
-```bash
-python -m pip install -r requirements.txt
-streamlit run app.py
-```
-
-## Validate
-
-```bash
-python build_release.py --check-only
-```
-
-or:
-
-```bash
-python -m py_compile app.py main.py providers.py attachment_utils.py tests/*.py
-python -m unittest discover -s tests -p 'test_*.py' -v
-```
+ZIP members are validated before release; Python's ZIP documentation warns about unsafe archive paths and untrusted extraction. citeturn0search6
 
 ## Trust boundary
 
-The application hardens execution inside the Python/Streamlit process. It does not claim that a user who controls the deployment host, repository, environment variables, or Streamlit secrets can be made cryptographically unable to modify the application. True independent tamper resistance requires an external trust boundary.
+This is application-level hardening, not an operating-system sandbox. A principal that controls the deployment host, repository, environment, or Streamlit secrets can modify the application. True independent tamper resistance requires a separate trust boundary.
+
+
+## Free-model configuration contract
+
+`GEMINI_FREE_MODELS` (and the corresponding `*_FREE_MODELS` settings) is authoritative. The application never synthesizes a paid/default model when the list is absent or invalid. Streamlit Secrets is preferred over environment variables. Use ASCII commas only.

@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 import re
+import struct
 import zipfile
 from typing import Iterable
 
@@ -14,14 +15,9 @@ MAX_FILES = 20
 MAX_TEXT_CHARS = 30_000
 MAX_ARCHIVE_MEMBERS = 500
 MAX_ARCHIVE_UNCOMPRESSED = 20 * 1024 * 1024
+MAX_ARCHIVE_RATIO = 200
 
-TEXT_EXTENSIONS = {
-    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml",
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".kt", ".kts", ".go", ".rs",
-    ".c", ".h", ".cpp", ".hpp", ".cs", ".php", ".rb", ".swift", ".sql", ".html",
-    ".css", ".scss", ".ini", ".toml", ".log", ".sh", ".bat", ".ps1",
-}
-
+TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".kt", ".kts", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs", ".php", ".rb", ".swift", ".sql", ".html", ".css", ".scss", ".ini", ".toml", ".log", ".sh", ".bat", ".ps1"}
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}
 
 
@@ -33,16 +29,12 @@ def _safe_name(name: str) -> str:
 
 def _safe_mime(value: object) -> str:
     mime = str(value or "application/octet-stream").split(";", 1)[0].strip().lower()
-    if not re.fullmatch(r"[a-z0-9!#$&^_.+\-]+/[a-z0-9!#$&^_.+\-]+", mime):
-        return "application/octet-stream"
-    return mime[:120]
+    return mime[:120] if re.fullmatch(r"[a-z0-9!#$&^_.+\-]+/[a-z0-9!#$&^_.+\-]+", mime) else "application/octet-stream"
 
 
 def _zip_member_safe(name: str) -> bool:
     normalized = str(name or "").replace("\\", "/")
-    if not normalized or normalized.startswith("/") or normalized.startswith("\\"):
-        return False
-    if re.match(r"^[A-Za-z]:/", normalized):
+    if not normalized or normalized.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:/", normalized):
         return False
     parts = [p for p in normalized.split("/") if p not in ("", ".")]
     return ".." not in parts
@@ -58,18 +50,34 @@ def _validate_docx_container(data: bytes) -> None:
             for info in infos:
                 if not _zip_member_safe(info.filename):
                     raise ValueError("DOCX archive contains an unsafe path.")
-                # Unix mode 0120000 denotes a symbolic link.
                 if ((info.external_attr >> 16) & 0o170000) == 0o120000:
                     raise ValueError("DOCX archive contains a symbolic link.")
-                if info.file_size < 0 or info.file_size > MAX_FILE_BYTES:
+                if info.file_size < 0 or info.compress_size < 0:
+                    raise ValueError("DOCX archive contains invalid size metadata.")
+                if info.file_size > MAX_FILE_BYTES:
                     raise ValueError("DOCX archive member exceeds the safety limit.")
                 total += info.file_size
                 if total > MAX_ARCHIVE_UNCOMPRESSED:
                     raise ValueError("DOCX archive expands beyond the safety limit.")
+                if info.compress_size and info.file_size / info.compress_size > MAX_ARCHIVE_RATIO:
+                    raise ValueError("DOCX archive compression ratio is unsafe.")
             if "word/document.xml" not in zf.namelist():
                 raise ValueError("DOCX document.xml is missing.")
     except zipfile.BadZipFile as exc:
         raise ValueError("DOCX archive is invalid.") from exc
+
+
+def _image_signature_ok(data: bytes, mime: str, name: str) -> bool:
+    ext = os.path.splitext(name)[1].lower()
+    if mime == "image/png" or ext == ".png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime in {"image/jpeg", "image/jpg"} or ext in {".jpg", ".jpeg"}:
+        return data.startswith(b"\xff\xd8\xff")
+    if mime == "image/gif" or ext == ".gif":
+        return data[:6] in {b"GIF87a", b"GIF89a"}
+    if mime == "image/webp" or ext == ".webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return True
 
 
 def normalize_uploaded_files(files: Iterable[object]) -> list[dict]:
@@ -83,24 +91,26 @@ def normalize_uploaded_files(files: Iterable[object]) -> list[dict]:
             raise ValueError("تعذر قراءة أحد المرفقات.") from exc
         if not data:
             continue
+        name = _safe_name(getattr(uploaded, "name", "attachment"))
+        mime = _safe_mime(getattr(uploaded, "type", None))
         if len(data) > MAX_FILE_BYTES:
-            raise ValueError(f"الملف {getattr(uploaded, 'name', 'attachment')} أكبر من الحد المسموح 10 MB.")
+            raise ValueError(f"الملف {name} أكبر من الحد المسموح 10 MB.")
         fingerprint = hashlib.sha256(data).digest()
         if fingerprint in seen:
             continue
         if len(result) >= MAX_FILES:
             raise ValueError(f"عدد المرفقات الفريدة يتجاوز الحد المسموح {MAX_FILES} ملفًا.")
-        seen.add(fingerprint)
         if total + len(data) > MAX_TOTAL_BYTES:
             raise ValueError("إجمالي المرفقات يتجاوز الحد المسموح 25 MB للرسالة الواحدة.")
-        name = _safe_name(getattr(uploaded, "name", "attachment"))
-        mime = _safe_mime(getattr(uploaded, "type", None))
+        seen.add(fingerprint)
         ext = os.path.splitext(name)[1].lower()
         if ext == ".docx":
             try:
                 _validate_docx_container(data)
             except ValueError as exc:
                 raise ValueError(f"المرفق {name} مرفوض: {exc}") from exc
+        if mime in IMAGE_MIMES and not _image_signature_ok(data, mime, name):
+            raise ValueError(f"المرفق {name} مرفوض: محتوى الصورة لا يطابق نوع الملف المعلن.")
         result.append({"name": name, "mime": mime, "size": len(data), "data": data, "sha256": hashlib.sha256(data).hexdigest()})
         total += len(data)
     return result
@@ -144,13 +154,15 @@ def extract_text(att: dict) -> str:
 
 
 def attachment_summary(attachments: list[dict], max_chars: int = MAX_TEXT_CHARS) -> str:
+    if not attachments:
+        return ""
     lines = ["ATTACHMENTS:"]
-    for att in attachments or []:
+    for att in attachments:
         lines.append(f"- {att.get('name')} ({att.get('mime')}, {att.get('size', 0)} bytes)")
         text = extract_text(att)
         if text:
             lines.append(f"  EXTRACTED TEXT:\n{text}")
-    return "\n".join(lines)[-max_chars:] if attachments else ""
+    return "\n".join(lines)[-max_chars:]
 
 
 def public_metadata(attachments: list[dict]) -> list[dict]:
