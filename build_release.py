@@ -42,7 +42,7 @@ def package(output: Path) -> None:
             rel = path.relative_to(ROOT).as_posix()
             if any(part in {"__pycache__", ".pytest_cache", "dist", "build"} for part in path.relative_to(ROOT).parts):
                 continue
-            if rel.endswith((".pyc", ".pyo")) or rel.endswith(".sha256") or rel == "RELEASE_MANIFEST.json":
+            if rel.endswith((".pyc", ".pyo", ".zip")) or rel.endswith(".sha256") or rel == "RELEASE_MANIFEST.json":
                 continue
             zf.write(path, rel)
 
@@ -67,7 +67,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_HARDENED_HOTFIX6.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HARDENED_HOTFIX8.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()

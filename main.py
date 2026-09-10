@@ -12,9 +12,9 @@ import uuid
 import streamlit as st
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, transcribe_audio_gemini, get_model_config_diagnostic
+from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
-APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX7"
+APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX8"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -222,14 +222,19 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}**")
             st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
         st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/5")
+        st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
+        sources = model_config_sources()
+        source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in SEATS)
+        st.caption(f"مصدر إعداد النماذج: {source_text}")
+        st.caption("Streamlit Secrets لها الأولوية المطلقة؛ Environment Variables تُستخدم فقط عند غياب المفتاح نفسه في Secrets.")
+        if st.button("🔄 إعادة تحميل إعدادات Secrets", use_container_width=True):
+            try:
+                st.cache_data.clear()
+                st.cache_resource.clear()
+            except Exception:
+                pass
+            st.rerun()
         st.caption("وجود المفتاح لا يثبت Free Tier أو quota.")
-        gemini_cfg = get_model_config_diagnostic(next(s for s in SEATS if s.key == "gemini"))
-        if gemini_cfg["invalid"]:
-            st.error("GEMINI_FREE_MODELS موجود لكنه غير صالح. استخدم أسماء نماذج مفصولة بفواصل إنجليزية (,). لا يوجد fallback تلقائي.")
-        elif gemini_cfg["configured"]:
-            st.caption(f"Gemini config source: `{gemini_cfg['source']}` • {gemini_cfg['model_count']} model(s) loaded")
-        else:
-            st.caption("Gemini config source: `unset` • لا يوجد Free model configured")
         st.caption("المفاتيح لا تظهر في الواجهة ولا تدخل History.")
     return rounds
 

@@ -1,4 +1,4 @@
-# AI Council V22.1 — FINAL HARDENED HOTFIX 6
+# AI Council V22.1 — FINAL HARDENED HOTFIX 7
 
 Five official provider seats plus the user room: OpenAI/ChatGPT, Gemini, Anthropic/Claude, xAI/Grok, and Moonshot/Kimi.
 
@@ -9,6 +9,9 @@ Five official provider seats plus the user room: OpenAI/ChatGPT, Gemini, Anthrop
 - No Local Engine and no paid fallback.
 - A credential is never treated as proof that a model is free.
 - Official success is recorded only when an official request returns usable text.
+- Streamlit Secrets are authoritative for provider/model configuration; environment variables are used only when the corresponding Secret is absent.
+- Common Unicode comma/semicolon variants are normalized before model parsing, while unsafe model identifiers are rejected.
+- A non-secret model-configuration fingerprint is displayed to diagnose stale deployments without exposing credentials.
 - Provider requests are bounded by an application-wide execution deadline.
 - Secrets are captured before worker threads and are not read from Streamlit inside workers.
 - Duplicate requests are fingerprinted from normalized prompt + attachment hashes.
@@ -25,8 +28,3 @@ ZIP members are validated before release; Python's ZIP documentation warns about
 ## Trust boundary
 
 This is application-level hardening, not an operating-system sandbox. A principal that controls the deployment host, repository, environment, or Streamlit secrets can modify the application. True independent tamper resistance requires a separate trust boundary.
-
-
-## Free-model configuration contract
-
-`GEMINI_FREE_MODELS` (and the corresponding `*_FREE_MODELS` settings) is authoritative. The application never synthesizes a paid/default model when the list is absent or invalid. Streamlit Secrets is preferred over environment variables. Use ASCII commas only.

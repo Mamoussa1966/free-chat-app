@@ -9,13 +9,14 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX7"
-CONFIG_CONTRACT_VERSION = "FREE_MODELS_SECRET_AUTHORITATIVE_V1"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX8"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
 MAX_PROVIDER_ATTACHMENT_BYTES = 12 * 1024 * 1024
 MAX_ERROR_CHARS = 700
+MAX_RESPONSE_CHARS = 40_000
+MAX_RESPONSE_BODY_CHARS = 4_000_000
 RETRIES = 1
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 
@@ -59,35 +60,59 @@ class ProviderError(RuntimeError):
         self.error_class = error_class
 
 
-def _streamlit_secret(name: str) -> Optional[str]:
+def _coerce_setting_value(value: Any) -> Optional[str]:
+    """Convert a Streamlit/TOML or environment setting to a clean string.
+
+    Streamlit Secrets may contain strings or TOML arrays.  The provider layer
+    accepts both without ever falling back to an implicit model catalog.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        value = ",".join(str(item) for item in value)
+    text = str(value).strip()
+    return text or None
+
+
+def _read_setting(name: str) -> Tuple[Optional[str], str]:
+    """Read one setting with an explicit Streamlit-Secrets authority boundary.
+
+    If the exact key exists in Streamlit Secrets, that key owns the decision
+    even when its value is empty. This prevents a stale environment variable
+    from silently replacing an operator-edited Secret. Environment variables
+    are used only when the exact Streamlit Secret key is absent.
+    """
     try:
         import streamlit as st
-        value = st.secrets.get(name)
+        secrets = st.secrets
+        if name in secrets:
+            value = _coerce_setting_value(secrets.get(name))
+            return value, "streamlit_secrets" if value else "streamlit_secrets_empty"
     except Exception:
-        return None
-    return str(value).strip() if value else None
+        pass
+    value = _coerce_setting_value(os.getenv(name))
+    if value:
+        return value, "environment"
+    return None, "missing"
 
 
-def _setting_with_source(names: Iterable[str]) -> tuple[Optional[str], str]:
-    """Resolve configuration deterministically.
-
-    Streamlit Secrets is authoritative when a named secret exists.
-    Environment variables are only a fallback for deployments that do not
-    provide that secret. Model lists are NEVER synthesized from Seat defaults.
-    """
-    for name in names:
-        value = _streamlit_secret(name)
-        if value:
-            return value, f"streamlit_secret:{name}"
-        value = os.getenv(name, "").strip()
-        if value:
-            return value, f"environment:{name}"
-    return None, "unset"
+def _streamlit_secret(name: str) -> Optional[str]:
+    value, source = _read_setting(name)
+    return value if source == "streamlit_secrets" else None
 
 
 def _setting(names: Iterable[str]) -> Optional[str]:
-    value, _source = _setting_with_source(names)
-    return value
+    """Read configuration from Streamlit Secrets first, then environment.
+
+    A non-empty Streamlit Secret is authoritative for that exact key. The
+    environment is consulted only when the Secret is absent/empty. No model
+    catalog is merged, inferred, or silently substituted.
+    """
+    for name in names:
+        value, _ = _read_setting(name)
+        if value:
+            return value
+    return None
 
 
 def get_secret(names: Iterable[str]) -> Optional[str]:
@@ -109,9 +134,16 @@ def configured_count(credentials: Optional[Dict[str, Optional[str]]] = None) -> 
 def _parse_models(raw: str) -> Tuple[str, ...]:
     values: list[str] = []
     seen: set[str] = set()
-    for value in re.split(r"[,;\n]", str(raw or "")):
+    # Accept common Unicode comma/semicolon variants so mobile keyboards
+    # cannot silently turn a valid cascade into one malformed model id.
+    separators = r"[,;\n\r\u060c\u061b\u201a\uff0c]"
+    for value in re.split(separators, str(raw or "")):
         item = value.strip().strip("\"'")
         if not item or len(item) > 160:
+            continue
+        # Model IDs are later placed in provider URLs/JSON. Reject traversal
+        # segments and control/space characters at the configuration boundary.
+        if item in {".", ".."} or ".." in item.split("/"):
             continue
         if not re.fullmatch(r"[A-Za-z0-9._:/@-]+", item):
             continue
@@ -125,32 +157,39 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
 
 
 def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
-    # Strict contract: only the explicitly configured *_FREE_MODELS value is
-    # accepted. There is deliberately NO default_model/fallback catalog here.
-    raw, _source = _setting_with_source(seat.model_env)
-    return _parse_models(raw or "")
-
-
-def get_model_config_diagnostic(seat: Seat) -> dict:
-    """Return safe configuration metadata without exposing secret values."""
-    raw, source = _setting_with_source(seat.model_env)
-    models = _parse_models(raw or "")
-    invalid = bool(raw and not models)
-    return {
-        "seat": seat.key,
-        "source": source,
-        "configured": bool(raw),
-        "model_count": len(models),
-        "models": models,
-        "invalid": invalid,
-        "contract": CONFIG_CONTRACT_VERSION,
-    }
+    return _parse_models(_setting(seat.model_env) or "")
 
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
-    # Snapshot once on the Streamlit script thread; workers receive immutable
-    # tuples and never read st.secrets directly.
     return {seat.key: get_model_candidates(seat) for seat in SEATS}
+
+
+def model_config_sources() -> Dict[str, str]:
+    """Return only non-secret configuration-source labels for diagnostics."""
+    sources: Dict[str, str] = {}
+    for seat in SEATS:
+        source = "missing"
+        for name in seat.model_env:
+            value, candidate_source = _read_setting(name)
+            if value:
+                source = candidate_source
+                break
+        sources[seat.key] = source
+    return sources
+
+
+def model_config_fingerprint(model_candidates: Optional[Dict[str, Tuple[str, ...]]] = None) -> str:
+    """Return a non-secret fingerprint of the active model configuration.
+
+    This makes stale deployment/configuration problems diagnosable without
+    exposing API keys or raw secrets in the UI or logs.
+    """
+    import hashlib
+    candidates = model_candidates or capture_model_candidates()
+    material = "|".join(
+        f"{seat.key}:{','.join(candidates.get(seat.key, ())) }" for seat in SEATS
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
 
 def _sanitize(text: str, secrets: Iterable[str] = ()) -> str:
