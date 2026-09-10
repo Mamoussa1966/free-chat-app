@@ -64,6 +64,9 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(result["status"], "NO_FREE_MODEL_CONFIGURED")
         call.assert_not_called()
 
+    def test_model_parser_rejects_path_traversal_segments(self):
+        self.assertEqual(_parse_models("good,foo/../bar,../evil,bar"), ("good", "bar"))
+
     def test_missing_credential_never_calls_provider(self):
         with patch("providers.call_official") as call:
             result = call_seat(SEATS[0], "Hello", "", 1, False, None, [], ("free-1",))

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from providers import ProviderError, SEATS, _post, _prompt
+from providers import MAX_RESPONSE_BODY_CHARS, MAX_RESPONSE_CHARS, ProviderError, SEATS, _post, _prompt, call_official
 
 
 class ProviderRuntimeTests(unittest.TestCase):
@@ -16,6 +16,35 @@ class ProviderRuntimeTests(unittest.TestCase):
             with self.assertRaises(ProviderError):
                 _post("https://example.invalid", {}, {}, 5)
         self.assertEqual(post.call_count, 1)
+
+    def test_deadline_prevents_provider_call_when_expired(self):
+        with self.assertRaises(ProviderError) as ctx:
+            _post("https://example.invalid", {}, {}, 5, deadline=__import__("time").monotonic() - 1)
+        self.assertEqual(ctx.exception.error_class, "deadline_exceeded")
+
+    def test_response_text_is_bounded(self):
+        from unittest.mock import patch
+        huge = "x" * (MAX_RESPONSE_CHARS + 100)
+        fake = {"output_text": huge}
+        with patch("providers._post", return_value=fake):
+            text = call_official(SEATS[0], "hello", "model", "key", 5, [])
+        self.assertLessEqual(len(text), MAX_RESPONSE_CHARS + 40)
+        self.assertIn("response truncated by safety cap", text)
+
+    def test_response_body_cap_is_enforced(self):
+        huge = "x" * (MAX_RESPONSE_BODY_CHARS + 1)
+        response = type("Response", (), {"status_code": 200, "text": huge, "headers": {}, "json": lambda self: {}})()
+        with patch("providers.requests.post", return_value=response):
+            with self.assertRaises(ProviderError) as ctx:
+                _post("https://example.invalid", {}, {}, 5)
+        self.assertEqual(ctx.exception.error_class, "response_too_large")
+
+    def test_invalid_endpoint_is_rejected_before_network(self):
+        with patch("providers.requests.post") as post:
+            with self.assertRaises(ProviderError) as ctx:
+                _post("http://example.invalid", {}, {}, 5)
+        self.assertEqual(ctx.exception.error_class, "configuration")
+        post.assert_not_called()
 
     def test_network_error_gets_one_retry(self):
         import requests
