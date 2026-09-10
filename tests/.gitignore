@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+venv/
+env/
+.env
+.env.*
+.streamlit/secrets.toml
+*.log
+*.zip
+*.sha256
+.DS_Store
+Thumbs.db
