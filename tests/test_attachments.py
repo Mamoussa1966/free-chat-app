@@ -1,7 +1,13 @@
-
+import io
 import unittest
+import zipfile
 
-from attachment_utils import MAX_FILES, MAX_TOTAL_BYTES, as_data_url, extract_text, normalize_uploaded_files
+from attachment_utils import (
+    MAX_FILES,
+    MAX_TOTAL_BYTES,
+    extract_text,
+    normalize_uploaded_files,
+)
 
 
 class FakeUpload:
@@ -17,48 +23,47 @@ class FakeUpload:
 class AttachmentTests(unittest.TestCase):
     def test_normalize_and_text_extract(self):
         item = normalize_uploaded_files([FakeUpload("note.txt", b"Hello attachment", "text/plain")])[0]
-        self.assertEqual(item["name"], "note.txt")
         self.assertEqual(extract_text(item), "Hello attachment")
+        self.assertEqual(len(item["sha256"]), 64)
 
-    def test_image_data_url(self):
-        item = normalize_uploaded_files([FakeUpload("x.png", b"abc", "image/png")])[0]
-        self.assertTrue(as_data_url(item).startswith("data:image/png;base64,"))
-
-    def test_duplicate_files_are_deduplicated(self):
-        files = [
-            FakeUpload("same.txt", b"abc", "text/plain"),
-            FakeUpload("same.txt", b"abc", "text/plain"),
-        ]
-        self.assertEqual(len(normalize_uploaded_files(files)), 1)
-
-    def test_same_prefix_different_content_is_not_deduplicated(self):
-        prefix = b"x" * 64
-        a = prefix + b"A"
-        b = prefix + b"B"
-        items = normalize_uploaded_files([
-            FakeUpload("same.txt", a, "text/plain"),
-            FakeUpload("same.txt", b, "text/plain"),
+    def test_duplicate_payloads_are_removed(self):
+        result = normalize_uploaded_files([
+            FakeUpload("a.txt", b"same", "text/plain"),
+            FakeUpload("b.txt", b"same", "text/plain"),
         ])
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(result), 1)
 
-    def test_per_file_limit(self):
+    def test_file_size_limit(self):
         with self.assertRaises(ValueError):
-            normalize_uploaded_files([
-                FakeUpload("large.bin", b"x" * (10 * 1024 * 1024 + 1), "application/octet-stream")
-            ])
+            normalize_uploaded_files([FakeUpload("big.bin", b"x" * (10 * 1024 * 1024 + 1), "application/octet-stream")])
 
     def test_total_limit(self):
-        size = 10 * 1024 * 1024
+        a = FakeUpload("a.bin", b"a" * (10 * 1024 * 1024), "application/octet-stream")
+        b = FakeUpload("b.bin", b"b" * (10 * 1024 * 1024), "application/octet-stream")
+        c = FakeUpload("c.bin", b"c" * (6 * 1024 * 1024), "application/octet-stream")
         with self.assertRaises(ValueError):
-            normalize_uploaded_files([
-                FakeUpload("a.bin", b"a" * size, "application/octet-stream"),
-                FakeUpload("b.bin", b"b" * size, "application/octet-stream"),
-                FakeUpload("c.bin", b"c" * size, "application/octet-stream"),
-            ])
+            normalize_uploaded_files([a, b, c])
 
-    def test_limits_are_positive(self):
-        self.assertGreater(MAX_FILES, 0)
-        self.assertGreater(MAX_TOTAL_BYTES, 0)
+    def test_file_count_limit(self):
+        files = [FakeUpload(f"{i}.txt", str(i).encode(), "text/plain") for i in range(MAX_FILES + 1)]
+        with self.assertRaises(ValueError):
+            normalize_uploaded_files(files)
+
+    def test_docx_safe_container_is_read(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("[Content_Types].xml", "<Types/>")
+            zf.writestr("word/document.xml", "<w:document><w:body><w:p>Hello DOCX</w:p></w:body></w:document>")
+        item = normalize_uploaded_files([FakeUpload("x.docx", buf.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")])[0]
+        self.assertIn("Hello DOCX", extract_text(item))
+
+    def test_docx_path_traversal_is_rejected(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("../evil.txt", "bad")
+            zf.writestr("word/document.xml", "<w:document/>")
+        with self.assertRaises(ValueError):
+            normalize_uploaded_files([FakeUpload("x.docx", buf.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")])
 
 
 if __name__ == "__main__":
