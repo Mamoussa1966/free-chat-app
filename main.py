@@ -115,7 +115,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     results: dict[str, dict] = {}
     pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="council")
     futures = {
-        pool.submit(call_seat, seat, user_prompt, snapshot, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key)): seat
+        pool.submit(call_seat, seat, user_prompt, snapshot, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key), deadline): seat
         for seat in SEATS
     }
     try:
@@ -149,7 +149,14 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         all_results.extend(round_results)
         for result in round_results:
             if result.get("status") == "SUCCESS" and result.get("content"):
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": result.get("model", ""), "executed_model": result.get("executed_model", ""), "attempted_models": list(result.get("attempted_models", [])), "created_at": _now()})
+                executed_model = str(result.get("executed_model") or "").strip()
+                result_model = str(result.get("model") or "").strip()
+                attempted_models = [str(m).strip() for m in result.get("attempted_models", []) if str(m).strip()]
+                if not executed_model or result_model != executed_model:
+                    raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
+                if attempted_models and attempted_models[-1] != executed_model:
+                    raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "created_at": _now()})
         chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
     return all_results
 
@@ -158,7 +165,7 @@ def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list
     results: dict[str, dict] = {}
     deadline = time.monotonic() + MAX_DIAGNOSTIC_SECONDS
     pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="diagnostic")
-    futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in SEATS}
+    futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key), deadline): seat for seat in SEATS}
     try:
         for future in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
             seat = futures[future]
@@ -319,12 +326,20 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption("بانتظار أول جولة…")
             return
         for message in messages:
-            displayed_model = str(message.get("model", ""))
-            executed_model = str(message.get("executed_model", ""))
-            if not executed_model or executed_model != displayed_model:
-                st.error("⚠️ Model Execution Identity Mismatch: النموذج الظاهر لا يطابق النموذج المنفذ.")
-                continue
-            st.markdown(f"**Round {message.get('round', '?')} · 🟢 Official API · `{displayed_model}`**")
+            displayed_model = str(message.get("model") or "").strip()
+            executed_model = str(message.get("executed_model") or "").strip()
+            attempted_models = [str(m).strip() for m in message.get("attempted_models", []) if str(m).strip()]
+            if message.get("mode") == "official":
+                if not executed_model or displayed_model != executed_model:
+                    st.error("⚠️ Execution identity mismatch: النموذج المعروض لا يطابق النموذج المنفذ.")
+                    continue
+                if attempted_models and attempted_models[-1] != executed_model:
+                    st.error("⚠️ Cascade identity mismatch: آخر محاولة لا تطابق النموذج المنفذ.")
+                    continue
+            st.markdown(f"**Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
+            if attempted_models:
+                st.caption("Cascade attempts: " + " → ".join(f"`{m}`" for m in attempted_models))
+            st.caption(f"Executed model: `{executed_model or displayed_model}`")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
             st.divider()
