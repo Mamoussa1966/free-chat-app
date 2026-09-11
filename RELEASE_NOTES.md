@@ -1,26 +1,8 @@
-# V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX9
+# V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX12
 
-- Added fail-closed Gemini Model ID validation against Google’s official Models API before any user-content request is sent.
-- Rejects unknown Gemini IDs such as stale, mistyped, or invented names instead of sending them to generateContent.
-- Confirms `generateContent` support before a configured Gemini model enters the active cascade.
-- Validation never claims Free Tier eligibility: Free status remains an account/project quota property and the explicit `GEMINI_FREE_MODELS` Secret remains the only cascade declaration.
-- Added a 5-minute in-process validation cache keyed by a non-secret credential fingerprint and model ID.
-- No Local Engine, paid fallback, implicit/default model, or hidden model substitution.
-
-# V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX8
-
-- Streamlit Secrets are now an absolute authority when the exact key exists, including an intentionally empty key; stale environment values can no longer shadow it.
-- Added an in-app Secrets reload action and non-secret model-source diagnostics.
-- Preserved the strict Free-only cascade, 10-model cap, Unicode mobile separator handling, and no Local Engine / paid fallback contract.
-- Added regression coverage for an empty authoritative Secret blocking a stale environment model list.
-
-# V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX6
-
-- Fixes the deployed-version/configuration mismatch: the active provider layer reads `*_FREE_MODELS` directly from Streamlit Secrets on every Streamlit run.
-- Streamlit Secrets are authoritative; environment variables are used only when the exact Secret is absent or empty.
-- No implicit model catalog, hard-coded Gemini fallback, or paid/local fallback is injected into an explicitly configured Free cascade.
-- Mobile Unicode separators such as `‚`, `،`, `，`, and `؛` are normalized safely at the configuration boundary.
-- Maximum cascade length is exactly 10 candidates per provider.
-- Active model candidates, source labels, and a non-secret configuration fingerprint are exposed for deployment diagnostics without exposing credentials.
-- Preserves the complete test set from the prior release; release packaging excludes caches, bytecode, nested ZIPs, and manifests from the payload.
-- Current Streamlit UI must show provider version `V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX6` after this release is deployed.
+- Preserves the complete HOTFIX9 project and test suite.
+- Fixes the remaining Secrets precedence edge case: an explicitly present Streamlit Secret, including an empty value, is authoritative and cannot be replaced by an Environment Variable for the same key.
+- Keeps the strict Free-only contract: no implicit provider model defaults, no Local Engine, and no paid fallback.
+- Keeps Unicode mobile separators, deduplication, and the hard limit of 10 configured models per provider.
+- Adds regression coverage for explicit-empty Secret precedence and live model-list changes.
+- Release is built only after syntax validation, full unittest/pytest execution, ZIP integrity validation, and manifest/hash generation.

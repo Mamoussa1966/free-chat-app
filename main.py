@@ -14,7 +14,7 @@ import streamlit as st
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
-APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX9"
+APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX12"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -226,14 +226,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         sources = model_config_sources()
         source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in SEATS)
         st.caption(f"مصدر إعداد النماذج: {source_text}")
-        st.caption("Streamlit Secrets لها الأولوية المطلقة؛ Environment Variables تُستخدم فقط عند غياب المفتاح نفسه في Secrets.")
-        if st.button("🔄 إعادة تحميل إعدادات Secrets", use_container_width=True):
-            try:
-                st.cache_data.clear()
-                st.cache_resource.clear()
-            except Exception:
-                pass
-            st.rerun()
+        st.caption("Streamlit Secrets لها الأولوية؛ Environment Variables تُستخدم فقط عند غياب Secret غير الفارغ.")
         st.caption("وجود المفتاح لا يثبت Free Tier أو quota.")
         st.caption("المفاتيح لا تظهر في الواجهة ولا تدخل History.")
     return rounds
@@ -329,13 +322,6 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
         st.warning(f"🟡 {result['label']} — نقطة المصادقة قبلت المفتاح، لكن لا يوجد Free model مُكوّن.")
-        st.caption(result.get("error", ""))
-    elif status == "INVALID_MODEL_ID":
-        st.error(f"🔴 {result['label']} — Model ID غير صالح رسميًا؛ لم يتم إرسال طلب المحتوى.")
-        st.caption(result.get("error", ""))
-        st.caption("راجع *_FREE_MODELS: يجب استخدام Model ID موجود فعليًا في Google Gemini API.")
-    elif status == "MODEL_VALIDATION_FAILED":
-        st.error(f"🔴 {result['label']} — تعذر التحقق الرسمي من Model ID؛ لم يتم إرسال طلب المحتوى.")
         st.caption(result.get("error", ""))
     else:
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
