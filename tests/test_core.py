@@ -7,6 +7,13 @@ class CoreTests(unittest.TestCase):
         self.assertEqual([s.key for s in SEATS], ["openai", "gemini", "claude", "grok", "kimi"])
     def test_model_parser_caps(self):
         self.assertEqual(len(_parse_models(",".join(f"m{i}" for i in range(20)))), MAX_MODELS_PER_SEAT)
+    def test_invalid_gemini_model_is_not_sent(self):
+        gemini = SEATS[1]
+        with patch("providers.validate_model_candidates", return_value=((), {"gemini-3.7-flash": "class=invalid_model_id; Model not found."})):
+            result = call_seat(gemini, "Hello", "", 1, False, "test-key-123456", model_candidates=("gemini-3.7-flash",))
+        self.assertEqual(result["status"], "INVALID_MODEL_ID")
+        self.assertEqual(result["attempted_models"], ["gemini-3.7-flash"])
+
     def test_model_candidates_empty_without_setting(self):
         with patch("providers._setting", return_value=None):
             self.assertEqual(get_model_candidates(SEATS[0]), ())
