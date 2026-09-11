@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from datetime import datetime, timezone
 import hashlib
 import html
@@ -12,14 +12,16 @@ import uuid
 import streamlit as st
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, get_gemini_transcriber_model
 
-APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX12"
+APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX13"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
 MAX_ROUNDS = 4
 MAX_EXECUTION_SECONDS = 180
+MAX_DIAGNOSTIC_SECONDS = 75
+MAX_VOICE_EXECUTION_SECONDS = 60
 MAX_PROMPT_CHARS = 20_000
 MAX_CHAT_MESSAGES = 200
 MAX_REQUEST_IDS = 50
@@ -111,17 +113,26 @@ def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None) 
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float) -> list[dict]:
     snapshot = _shared_context(chat, exclude_message_id=current_user_message_id)
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="council") as pool:
-        futures = {
-            pool.submit(call_seat, seat, user_prompt, snapshot, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key), deadline): seat
-            for seat in SEATS
-        }
-        for future in as_completed(futures):
+    pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="council")
+    futures = {
+        pool.submit(call_seat, seat, user_prompt, snapshot, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key)): seat
+        for seat in SEATS
+    }
+    try:
+        remaining = max(0.0, deadline - time.monotonic())
+        for future in as_completed(futures, timeout=remaining):
             seat = futures[future]
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates)
+    except TimeoutError:
+        pass
+    finally:
+        for future in futures:
+            if not future.done():
+                future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
     for seat in SEATS:
         results.setdefault(seat.key, _worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates))
     return [results[seat.key] for seat in SEATS]
@@ -138,21 +149,32 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         all_results.extend(round_results)
         for result in round_results:
             if result.get("status") == "SUCCESS" and result.get("content"):
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": result.get("model", ""), "attempted_models": list(result.get("attempted_models", [])), "created_at": _now()})
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": result.get("model", ""), "executed_model": result.get("executed_model", ""), "attempted_models": list(result.get("attempted_models", [])), "created_at": _now()})
         chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
     return all_results
 
 
 def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list[dict]:
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="diagnostic") as pool:
-        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in SEATS}
-        for future in as_completed(futures):
+    deadline = time.monotonic() + MAX_DIAGNOSTIC_SECONDS
+    pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="diagnostic")
+    futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in SEATS}
+    try:
+        for future in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
             seat = futures[future]
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates)
+    except TimeoutError:
+        pass
+    finally:
+        for future in futures:
+            if not future.done():
+                future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+    for seat in SEATS:
+        results.setdefault(seat.key, _worker_failure(seat, TimeoutError("diagnostic deadline exceeded"), model_candidates))
     return [results[seat.key] for seat in SEATS]
 
 
@@ -262,7 +284,8 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                     st.warning("هذه الرسالة الصوتية تم إرسالها بالفعل.")
                 else:
                     with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
-                        transcription = transcribe_audio_gemini(audio_bytes, mime, credentials.get("gemini"), model_candidates.get("gemini"))
+                        transcriber = get_gemini_transcriber_model()
+                        transcription = transcribe_audio_gemini(audio_bytes, mime, credentials.get("gemini"), model_candidates.get("gemini") if transcriber else None, time.monotonic() + MAX_VOICE_EXECUTION_SECONDS)
                     if transcription.get("status") == "SUCCESS" and transcription.get("text", "").strip():
                         st.session_state.last_voice_error = ""
                         voice_submission = (transcription["text"].strip(), audio_bytes, mime, fingerprint)
@@ -296,7 +319,12 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption("بانتظار أول جولة…")
             return
         for message in messages:
-            st.markdown(f"**Round {message.get('round', '?')} · 🟢 Official API · `{message.get('model', '')}`**")
+            displayed_model = str(message.get("model", ""))
+            executed_model = str(message.get("executed_model", ""))
+            if not executed_model or executed_model != displayed_model:
+                st.error("⚠️ Model Execution Identity Mismatch: النموذج الظاهر لا يطابق النموذج المنفذ.")
+                continue
+            st.markdown(f"**Round {message.get('round', '?')} · 🟢 Official API · `{displayed_model}`**")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
             st.divider()
@@ -368,11 +396,20 @@ def _submission_files(submission, folder_files: list[object]) -> list[dict] | No
 def _request_fingerprint(prompt: str, attachments: list[dict]) -> str:
     h = hashlib.sha256()
     h.update(str(prompt).strip().encode("utf-8"))
-    for attachment in attachments:
-        h.update(str(attachment.get("name", "")).encode("utf-8"))
-        h.update(str(attachment.get("mime", "")).encode("utf-8"))
-        h.update(str(attachment.get("size", 0)).encode("ascii"))
-        h.update(str(attachment.get("sha256", "")).encode("ascii"))
+    canonical_attachments = sorted(
+        (
+            str(a.get("sha256", "")),
+            str(a.get("name", "")),
+            str(a.get("mime", "")),
+            str(a.get("size", 0)),
+        )
+        for a in attachments
+    )
+    for sha256, name, mime, size in canonical_attachments:
+        h.update(name.encode("utf-8"))
+        h.update(mime.encode("utf-8"))
+        h.update(size.encode("ascii"))
+        h.update(sha256.encode("ascii"))
     return h.hexdigest()
 
 

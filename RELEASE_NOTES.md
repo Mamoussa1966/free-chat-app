@@ -1,8 +1,11 @@
-# V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX12
+# AI Council V22.1 — HOTFIX13
 
-- Preserves the complete HOTFIX9 project and test suite.
-- Fixes the remaining Secrets precedence edge case: an explicitly present Streamlit Secret, including an empty value, is authoritative and cannot be replaced by an Environment Variable for the same key.
-- Keeps the strict Free-only contract: no implicit provider model defaults, no Local Engine, and no paid fallback.
-- Keeps Unicode mobile separators, deduplication, and the hard limit of 10 configured models per provider.
-- Adds regression coverage for explicit-empty Secret precedence and live model-list changes.
-- Release is built only after syntax validation, full unittest/pytest execution, ZIP integrity validation, and manifest/hash generation.
+## Model execution identity and strict cascade
+
+- Enforces authoritative `executed_model` identity for successful official API calls.
+- Persists `executed_model` with each successful chat message.
+- Displays the executed model and cascade attempts only after identity validation.
+- Adds regression tests proving strict `#1 → #2 → #3` ordering with no skipped candidate.
+- Adds tests proving first-success stops the cascade and terminal failures do not jump forward.
+- Fixes provider-call argument mismatch in the round and diagnostic worker paths.
+- Free-only cascade remains limited to models explicitly configured in `*_FREE_MODELS`; no paid/local fallback is introduced.
