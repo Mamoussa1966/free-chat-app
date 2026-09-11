@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX13"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX12"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -17,7 +17,6 @@ MAX_PROVIDER_ATTACHMENT_BYTES = 12 * 1024 * 1024
 MAX_ERROR_CHARS = 700
 MAX_RESPONSE_CHARS = 40_000
 MAX_RESPONSE_BODY_CHARS = 4_000_000
-MAX_MODEL_ID_CHARS = 160
 RETRIES = 1
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 
@@ -146,7 +145,7 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
     separators = r"[,;\n\r\u060c\u061b\u201a\uff0c]"
     for value in re.split(separators, str(raw or "")):
         item = value.strip().strip("\"'")
-        if not item or len(item) > MAX_MODEL_ID_CHARS:
+        if not item or len(item) > 160:
             continue
         # Model IDs are later placed in provider URLs/JSON. Reject traversal
         # segments and control/space characters at the configuration boundary.
@@ -169,11 +168,6 @@ def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
     return {seat.key: get_model_candidates(seat) for seat in SEATS}
-
-
-def get_gemini_transcriber_model() -> Optional[str]:
-    candidates = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
-    return candidates[0] if candidates else None
 
 
 def model_config_sources() -> Dict[str, str]:
@@ -266,10 +260,9 @@ def _bounded_timeout(timeout: float, deadline: Optional[float]) -> float:
     remaining = _remaining(deadline)
     if remaining is None:
         return max(0.5, float(timeout))
-    if remaining <= 0.05:
+    if remaining <= 0:
         raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
-    # Never request a socket timeout longer than the remaining application deadline.
-    return min(max(0.05, float(timeout)), remaining)
+    return max(0.5, min(float(timeout), remaining))
 
 
 def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Optional[float] = None) -> dict:
@@ -297,14 +290,8 @@ def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Opti
                 continue
             raise last from exc
 
-        raw_content = getattr(response, "content", b"")
-        if isinstance(raw_content, (bytes, bytearray)) and len(raw_content) > MAX_RESPONSE_BODY_CHARS:
-            raise ProviderError("provider response exceeded safety body cap", response.status_code, "response_too_large")
-        raw_text = getattr(response, "text", "")
-        if len(str(raw_text)) > MAX_RESPONSE_BODY_CHARS:
-            raise ProviderError("provider response exceeded safety body cap", response.status_code, "response_too_large")
         if response.status_code >= 400:
-            body = _sanitize(str(raw_text)[:1600])
+            body = _sanitize(response.text[:1600])
             last = ProviderError(f"HTTP {response.status_code}: {body or 'empty error body'}", response.status_code, _classify(response.status_code, body))
             if _retryable(response.status_code, body) and attempt < RETRIES and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
                 delay = _retry_delay(response, attempt)
@@ -324,20 +311,17 @@ def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Opti
     raise last or ProviderError("provider request failed")
 
 
-def _openai_models_probe(credential: Optional[str], timeout: int = REQUEST_TIMEOUT, deadline: Optional[float] = None) -> None:
+def _openai_models_probe(credential: Optional[str], timeout: int = REQUEST_TIMEOUT) -> None:
     key = (credential or "").strip()
     if not key:
         raise ProviderError("OpenAI credential is not configured", error_class="not_configured")
     try:
-        response = requests.get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"}, timeout=_bounded_timeout(timeout, deadline))
+        response = requests.get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"}, timeout=timeout)
     except requests.Timeout as exc:
         raise ProviderError("OpenAI authentication probe timed out", error_class="timeout") from exc
     except requests.RequestException as exc:
         raise ProviderError(f"OpenAI authentication probe network error: {exc.__class__.__name__}", error_class="network") from exc
-    raw_content = getattr(response, "content", b"")
-    if isinstance(raw_content, (bytes, bytearray)) and len(raw_content) > MAX_RESPONSE_BODY_CHARS:
-        raise ProviderError("OpenAI authentication probe response exceeded safety body cap", response.status_code, "response_too_large")
-    body = _sanitize(str(getattr(response, "text", ""))[:1600], (key,))
+    body = _sanitize(response.text[:1600], (key,))
     if response.status_code >= 400:
         raise ProviderError(f"HTTP {response.status_code}: {body or 'empty error body'}", response.status_code, _classify(response.status_code, body))
     try:
@@ -350,14 +334,14 @@ def _openai_models_probe(credential: Optional[str], timeout: int = REQUEST_TIMEO
 
 def _openai_text(data: dict) -> str:
     if isinstance(data.get("output_text"), str) and data["output_text"].strip():
-        return data["output_text"].strip()[:MAX_RESPONSE_CHARS]
+        return data["output_text"].strip()
     parts: list[str] = []
     for item in data.get("output", []) or []:
         if isinstance(item, dict):
             for content in item.get("content", []) or []:
                 if isinstance(content, dict) and isinstance(content.get("text"), str):
                     parts.append(content["text"])
-    return "\n".join(parts).strip()[:MAX_RESPONSE_CHARS]
+    return "\n".join(parts).strip()
 
 
 def _chat_text(data: dict) -> str:
@@ -366,9 +350,9 @@ def _chat_text(data: dict) -> str:
         return ""
     content = (choices[0].get("message") or {}).get("content", "")
     if isinstance(content, str):
-        return content.strip()[:MAX_RESPONSE_CHARS]
+        return content.strip()
     if isinstance(content, list):
-        return "\n".join(str(x.get("text", "")) for x in content if isinstance(x, dict)).strip()[:MAX_RESPONSE_CHARS]
+        return "\n".join(str(x.get("text", "")) for x in content if isinstance(x, dict)).strip()
     return ""
 
 
@@ -380,11 +364,11 @@ def _gemini_text(data: dict) -> str:
             for part in content.get("parts", []) or []:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     out.append(part["text"])
-    return "\n".join(out).strip()[:MAX_RESPONSE_CHARS]
+    return "\n".join(out).strip()
 
 
 def _anthropic_text(data: dict) -> str:
-    return "\n".join(item.get("text", "") for item in (data.get("content") or []) if isinstance(item, dict) and isinstance(item.get("text"), str)).strip()[:MAX_RESPONSE_CHARS]
+    return "\n".join(item.get("text", "") for item in (data.get("content") or []) if isinstance(item, dict) and isinstance(item.get("text"), str)).strip()
 
 
 def _prompt(user_prompt: str, shared_context: str, round_no: int) -> str:
@@ -425,7 +409,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
     if not key:
         raise ProviderError("no official credential configured", error_class="not_configured")
     model = str(model or "").strip()
-    if not model or len(model) > MAX_MODEL_ID_CHARS or not re.fullmatch(r"[A-Za-z0-9._:/@-]+", model):
+    if not model or len(model) > 160 or not re.fullmatch(r"[A-Za-z0-9._:/@-]+", model):
         raise ProviderError("invalid model identifier", error_class="configuration")
     safe_attachments = _provider_attachments(attachments)
     from attachment_utils import as_base64, as_data_url, extract_text, is_image
@@ -507,9 +491,9 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
     return text
 
 
-def _result(seat: Seat, status: str, model: str, content: str, error: Optional[str], started: float, attempted: list[str], authenticated: bool = False) -> dict:
-    executed_model = str(model or "").strip()
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": status, "mode": "official", "model": executed_model, "executed_model": executed_model, "content": content, "error": error, "latency": round(time.perf_counter() - started, 3), "attempted_models": list(attempted), "official_authenticated": authenticated}
+def _result(seat: Seat, status: str, model: str, content: str, error: Optional[str], started: float, attempted: list[str], authenticated: bool = False, request_id: str = "", round_no: int = 0) -> dict:
+    normalized_model = str(model or "").strip()
+    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": status, "mode": "official", "model": normalized_model, "executed_model": normalized_model, "content": content, "error": error, "latency": round(time.perf_counter() - started, 3), "attempted_models": list(attempted), "official_authenticated": authenticated, "request_id": str(request_id or ""), "round": int(round_no)}
 
 
 def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) -> str:
@@ -519,15 +503,15 @@ def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) 
     return f"{status}class={exc.error_class}; {_sanitize(str(exc), (credential or "",))}"
 
 
-def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None) -> dict:
+def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "") -> dict:
     del local_fallback
     started = time.perf_counter()
     candidates = _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT]
     attempted: list[str] = []
     if not candidates:
-        return _result(seat, "NO_FREE_MODEL_CONFIGURED", "", "", "class=no_free_models_configured; No explicitly configured Free API model.", started, attempted)
+        return _result(seat, "NO_FREE_MODEL_CONFIGURED", "", "", "class=no_free_models_configured; No explicitly configured Free API model.", started, attempted, request_id=request_id, round_no=round_no)
     if not credential:
-        return _result(seat, "FAILED", candidates[0], "", "class=not_configured; No official credential configured.", started, attempted)
+        return _result(seat, "FAILED", candidates[0], "", "class=not_configured; No official credential configured.", started, attempted, request_id=request_id, round_no=round_no)
 
     last_error: Optional[ProviderError] = None
     terminal = {"not_configured", "configuration", "http_401_authentication_failed", "http_403_permission_denied", "deadline_exceeded"}
@@ -537,30 +521,36 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             break
         attempted.append(model)
         try:
-            content = call_official(seat, _prompt(user_prompt, shared_context, round_no), model, credential, REQUEST_TIMEOUT, attachments, deadline)
-            return _result(seat, "SUCCESS", model, content, None, started, attempted, authenticated=True)
+            executed_model = str(model or "").strip()
+            content = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
+            result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no)
+            if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
+                raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
+            if result.get("attempted_models") and result["attempted_models"][-1] != executed_model:
+                raise ProviderError("cascade execution identity mismatch", error_class="execution_identity_mismatch")
+            return result
         except ProviderError as exc:
             last_error = exc
             if exc.error_class in terminal or index == len(candidates) - 1:
                 break
 
-    return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted)
+    return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no)
 
 
-def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None) -> dict:
+def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:
     started = time.perf_counter()
     if seat.key == "openai":
         try:
-            _openai_models_probe(credential, REQUEST_TIMEOUT, deadline)
+            _openai_models_probe(credential)
         except ProviderError as exc:
             return _result(seat, "FAILED", "", "", _diagnostic(exc, credential), started, [])
         candidates = tuple(model_candidates or get_model_candidates(seat))
         if not candidates:
             return _result(seat, "AUTHENTICATION_OK_NO_FREE_MODEL", "", "", "class=authentication_ok_no_free_model; Authentication endpoint accepted the credential, but no Free model was explicitly configured.", started, [], authenticated=True)
-    return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates, deadline)
+    return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates)
 
 
-def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None) -> dict:
+def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:
     started = time.perf_counter()
     if not isinstance(audio_bytes, (bytes, bytearray)):
         return {"status": "FAILED", "text": "", "error": "class=invalid_audio; Audio payload is invalid.", "model": "", "latency": 0, "attempted_models": []}
@@ -576,18 +566,17 @@ def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Opti
     if not re.fullmatch(r"audio/[a-z0-9!#$&^_.+\-]+", mime):
         return {"status": "FAILED", "text": "", "error": "class=invalid_audio_mime; Audio MIME type is not supported.", "model": "", "latency": 0, "attempted_models": []}
     candidates = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
+    if not candidates and model_candidates:
+        candidates = _parse_models(",".join(model_candidates))[:MAX_MODELS_PER_SEAT]
     if not candidates:
-        return {"status": "FAILED", "text": "", "error": "class=transcriber_model_not_configured; Set GEMINI_TRANSCRIBE_MODEL explicitly.", "model": "", "latency": round(time.perf_counter() - started, 3), "attempted_models": []}
-    if model_candidates is not None and candidates[0] not in tuple(model_candidates):
-        return {"status": "FAILED", "text": "", "error": "class=transcriber_model_not_in_free_cascade; GEMINI_TRANSCRIBE_MODEL must also be listed in GEMINI_FREE_MODELS.", "model": candidates[0], "latency": round(time.perf_counter() - started, 3), "attempted_models": []}
-    candidates = candidates[:1]
+        return {"status": "FAILED", "text": "", "error": "class=transcriber_model_not_configured; Set GEMINI_TRANSCRIBE_MODEL explicitly or pass an explicitly configured Gemini Free candidate.", "model": "", "latency": round(time.perf_counter() - started, 3), "attempted_models": []}
     encoded = base64.b64encode(audio).decode("ascii")
     attempted: list[str] = []
     last_error: Optional[ProviderError] = None
     for index, model in enumerate(candidates):
         attempted.append(model)
         try:
-            data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": [{"text": "Transcribe the attached audio exactly as spoken. Return only the transcription. Preserve Arabic, English, numbers, and names. Do not summarize."}, {"inlineData": {"mimeType": mime, "data": encoded}}]}]}, REQUEST_TIMEOUT, deadline)
+            data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": [{"text": "Transcribe the attached audio exactly as spoken. Return only the transcription. Preserve Arabic, English, numbers, and names. Do not summarize."}, {"inlineData": {"mimeType": mime, "data": encoded}}]}]}, REQUEST_TIMEOUT)
             text = _gemini_text(data)
             if not text:
                 raise ProviderError("Gemini returned no transcription text", error_class="empty_response")

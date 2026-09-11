@@ -1,13 +1,14 @@
-# AI Council V22.1 — HOTFIX13
+# V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX12
 
-Built from the HOTFIX12 source while preserving the existing test-suite surface and adding explicit execution identity and result uniqueness invariants.
+- Preserves the complete HOTFIX9 project and test suite.
+- Fixes the remaining Secrets precedence edge case: an explicitly present Streamlit Secret, including an empty value, is authoritative and cannot be replaced by an Environment Variable for the same key.
+- Keeps the strict Free-only contract: no implicit provider model defaults, no Local Engine, and no paid fallback.
+- Keeps Unicode mobile separators, deduplication, and the hard limit of 10 configured models per provider.
+- Adds regression coverage for explicit-empty Secret precedence and live model-list changes.
+- Release is built only after syntax validation, full unittest/pytest execution, ZIP integrity validation, and manifest/hash generation.
 
-## Invariants
-- `GEMINI_FREE_MODELS` → ordered `model_candidates` remains explicit and Secrets-first.
-- The router's selected model is recorded as `executed_model` immediately at the official call boundary.
-- Successful `model`, `executed_model`, and the last `attempted_models` entry must agree.
-- Round, History, and Diagnostics render the same authoritative execution identity.
-- Exactly one persisted result is allowed for `(request_id, round, seat)`.
-- Candidate #2 cannot be skipped when #1 fails with a cascade-eligible error.
-- No Local Engine and no paid fallback.
-- `get_gemini_transcriber_model` remains part of the `main.py` ↔ `providers.py` import contract.
+## Hotfix 13
+- Preserved the complete Hotfix 12 test suite.
+- Added authoritative `executed_model` identity.
+- Added fail-closed UI identity checks.
+- Added regression tests preventing cascade skips such as #1 → #3.
