@@ -92,31 +92,20 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def _streamlit_secret(name: str) -> Optional[str]:
-    """Read exactly one Streamlit Secret; None means the key is absent."""
-    try:
-        import streamlit as st
-        secrets = st.secrets
-        if name in secrets:
-            value = secrets.get(name)
-            if isinstance(value, (list, tuple)):
-                return ",".join(str(item) for item in value)
-            return "" if value is None else str(value).strip()
-    except Exception:
-        pass
-    return None
-
-
 def _read_setting(name: str) -> Tuple[Optional[str], str]:
     """Read one setting with authoritative Streamlit Secret precedence."""
-    secret_value = _streamlit_secret(name)
-    if secret_value is not None:
-        # Presence, including an explicitly empty Secret, is authoritative.
-        return _coerce_setting_value(secret_value), "streamlit_secrets"
+    present, value = _streamlit_secret_state(name)
+    if present:
+        return value, "streamlit_secrets"
     value = _coerce_setting_value(os.getenv(name))
     if value:
         return value, "environment"
     return None, "missing"
+
+
+def _streamlit_secret(name: str) -> Optional[str]:
+    value, source = _read_setting(name)
+    return value if source == "streamlit_secrets" else None
 
 
 def _setting(names: Iterable[str]) -> Optional[str]:
@@ -177,21 +166,6 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
 def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
     return _parse_models(_setting(seat.model_env) or "")
 
-
-
-
-def get_model_config_diagnostic(seat: Seat) -> dict:
-    """Safe model-configuration diagnostics; never expose secret values."""
-    raw, source = _read_setting(seat.model_env[0]) if seat.model_env else (None, "missing")
-    models = _parse_models(raw or "")
-    return {
-        "seat": seat.key,
-        "source": source,
-        "configured": bool(raw),
-        "model_count": len(models),
-        "models": models,
-        "invalid": bool(raw and not models),
-    }
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
     return {seat.key: get_model_candidates(seat) for seat in SEATS}
@@ -534,8 +508,8 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
 
 
 def _result(seat: Seat, status: str, model: str, content: str, error: Optional[str], started: float, attempted: list[str], authenticated: bool = False) -> dict:
-    normalized_model = str(model or "").strip()
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": status, "mode": "official", "model": normalized_model, "executed_model": normalized_model, "content": content, "error": error, "latency": round(time.perf_counter() - started, 3), "attempted_models": list(attempted), "official_authenticated": authenticated}
+    executed_model = str(model or "").strip()
+    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": status, "mode": "official", "model": executed_model, "executed_model": executed_model, "content": content, "error": error, "latency": round(time.perf_counter() - started, 3), "attempted_models": list(attempted), "official_authenticated": authenticated}
 
 
 def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) -> str:
@@ -563,14 +537,8 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             break
         attempted.append(model)
         try:
-            executed_model = str(model or "").strip()
-            content = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
-            result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True)
-            if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
-                raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
-            if result.get("attempted_models") and result["attempted_models"][-1] != executed_model:
-                raise ProviderError("cascade execution identity mismatch", error_class="execution_identity_mismatch")
-            return result
+            content = call_official(seat, _prompt(user_prompt, shared_context, round_no), model, credential, REQUEST_TIMEOUT, attachments, deadline)
+            return _result(seat, "SUCCESS", model, content, None, started, attempted, authenticated=True)
         except ProviderError as exc:
             last_error = exc
             if exc.error_class in terminal or index == len(candidates) - 1:

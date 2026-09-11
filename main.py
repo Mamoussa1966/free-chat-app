@@ -33,7 +33,7 @@ def _now() -> str:
 
 
 def _new_chat() -> dict:
-    return {"id": uuid.uuid4().hex, "title": "محادثة جديدة", "created_at": _now(), "messages": [], "request_ids": []}
+    return {"id": uuid.uuid4().hex, "title": "محادثة جديدة", "created_at": _now(), "messages": [], "request_ids": [], "result_keys": []}
 
 
 def _init_state() -> None:
@@ -54,6 +54,7 @@ def _active_chat() -> dict:
             chat.setdefault("title", "محادثة جديدة")
             chat.setdefault("created_at", _now())
             chat.setdefault("request_ids", [])
+            chat.setdefault("result_keys", [])
             return chat
     chat = _new_chat()
     st.session_state.chats.insert(0, chat)
@@ -105,12 +106,12 @@ def _shared_context(chat: dict, exclude_message_id: str | None = None, max_chars
     return "\n\n".join(lines)[-max_chars:]
 
 
-def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None) -> dict:
+def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, request_id: str = "", round_no: int = 0) -> dict:
     models = tuple((model_candidates or {}).get(seat.key) or ())
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "error": f"class=internal_worker_error; {exc.__class__.__name__}", "latency": 0.0, "attempted_models": [], "official_authenticated": False}
+    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": "", "executed_model": "", "content": "", "error": f"class=internal_worker_error; {exc.__class__.__name__}", "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
 
 
-def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float) -> list[dict]:
+def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float, request_id: str) -> list[dict]:
     snapshot = _shared_context(chat, exclude_message_id=current_user_message_id)
     results: dict[str, dict] = {}
     pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="council")
@@ -123,9 +124,18 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         for future in as_completed(futures, timeout=remaining):
             seat = futures[future]
             try:
-                results[seat.key] = future.result()
+                result = future.result()
+                result["request_id"] = request_id
+                result["round"] = round_no
+                if result.get("status") == "SUCCESS":
+                    if str(result.get("model") or "").strip() != str(result.get("executed_model") or "").strip():
+                        raise RuntimeError("execution identity mismatch")
+                    attempts = list(result.get("attempted_models", []))
+                    if attempts and attempts[-1] != result.get("executed_model"):
+                        raise RuntimeError("cascade execution identity mismatch")
+                results[seat.key] = result
             except Exception as exc:
-                results[seat.key] = _worker_failure(seat, exc, model_candidates)
+                results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id, round_no)
     except TimeoutError:
         pass
     finally:
@@ -134,29 +144,33 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 future.cancel()
         pool.shutdown(wait=False, cancel_futures=True)
     for seat in SEATS:
-        results.setdefault(seat.key, _worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates))
+        results.setdefault(seat.key, _worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates, request_id, round_no))
     return [results[seat.key] for seat in SEATS]
 
 
-def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str) -> list[dict]:
+def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
     deadline = time.monotonic() + MAX_EXECUTION_SECONDS
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
     for round_no in range(1, total_rounds + 1):
         if time.monotonic() >= deadline:
             break
-        round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline)
-        all_results.extend(round_results)
+        round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
+        # One and only one persisted result for (request_id, round, seat).
+        existing_keys = set(chat.get("result_keys", []))
         for result in round_results:
+            result_key = f"{request_id}:{round_no}:{result.get('seat','')}"
+            result["result_key"] = result_key
+            if result_key in existing_keys:
+                continue
+            existing_keys.add(result_key)
+            all_results.append(result) if result not in all_results else None
             if result.get("status") == "SUCCESS" and result.get("content"):
                 executed_model = str(result.get("executed_model") or "").strip()
-                result_model = str(result.get("model") or "").strip()
-                attempted_models = [str(m).strip() for m in result.get("attempted_models", []) if str(m).strip()]
-                if not executed_model or result_model != executed_model:
-                    raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
-                if attempted_models and attempted_models[-1] != executed_model:
-                    raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "created_at": _now()})
+                if str(result.get("model") or "").strip() != executed_model:
+                    raise RuntimeError("history model identity invariant violated")
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": list(result.get("attempted_models", [])), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+        chat["result_keys"] = list(existing_keys)[-MAX_CHAT_MESSAGES:]
         chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
     return all_results
 
@@ -170,9 +184,18 @@ def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list
         for future in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
             seat = futures[future]
             try:
-                results[seat.key] = future.result()
+                result = future.result()
+                result["request_id"] = request_id
+                result["round"] = round_no
+                if result.get("status") == "SUCCESS":
+                    if str(result.get("model") or "").strip() != str(result.get("executed_model") or "").strip():
+                        raise RuntimeError("execution identity mismatch")
+                    attempts = list(result.get("attempted_models", []))
+                    if attempts and attempts[-1] != result.get("executed_model"):
+                        raise RuntimeError("cascade execution identity mismatch")
+                results[seat.key] = result
             except Exception as exc:
-                results[seat.key] = _worker_failure(seat, exc, model_candidates)
+                results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id, round_no)
     except TimeoutError:
         pass
     finally:
@@ -326,20 +349,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption("بانتظار أول جولة…")
             return
         for message in messages:
-            displayed_model = str(message.get("model") or "").strip()
-            executed_model = str(message.get("executed_model") or "").strip()
-            attempted_models = [str(m).strip() for m in message.get("attempted_models", []) if str(m).strip()]
-            if message.get("mode") == "official":
-                if not executed_model or displayed_model != executed_model:
-                    st.error("⚠️ Execution identity mismatch: النموذج المعروض لا يطابق النموذج المنفذ.")
-                    continue
-                if attempted_models and attempted_models[-1] != executed_model:
-                    st.error("⚠️ Cascade identity mismatch: آخر محاولة لا تطابق النموذج المنفذ.")
-                    continue
-            st.markdown(f"**Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
-            if attempted_models:
-                st.caption("Cascade attempts: " + " → ".join(f"`{m}`" for m in attempted_models))
-            st.caption(f"Executed model: `{executed_model or displayed_model}`")
+            st.markdown(f"**Round {message.get('round', '?')} · 🟢 Official API · `{(message.get('executed_model') or message.get('model', ''))}`**")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
             st.divider()
@@ -360,7 +370,7 @@ def _render_six_rooms(chat: dict, model_candidates: dict, credentials: dict):
 def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
     if status == "SUCCESS":
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{result['model']}` — {result['latency']}s")
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{(result.get('executed_model') or result['model'])}` — {result['latency']}s")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
@@ -481,7 +491,7 @@ def run_app() -> None:
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
         with st.spinner("المجلس السداسي ينفذ Free API Cascade بالتوازي…"):
-            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id)
+            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, fingerprint)
         st.session_state.last_results = results
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1

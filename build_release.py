@@ -30,6 +30,9 @@ def validate_sources() -> None:
 def run_tests() -> None:
     py_files = [str(ROOT / p) for p in ("app.py", "main.py", "providers.py", "attachment_utils.py", "gitops_layer.py")]
     subprocess.run([sys.executable, "-m", "py_compile", *py_files], cwd=ROOT, check=True)
+    test_files = sorted((ROOT / "tests").glob("test_*.py"))
+    if len(test_files) != 11:
+        raise SystemExit(f"Release invariant failed: expected exactly 11 test files, found {len(test_files)}")
     subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=ROOT, check=True)
 
 
@@ -67,7 +70,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX12.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX13.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()
