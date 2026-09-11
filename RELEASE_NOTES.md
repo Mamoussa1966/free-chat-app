@@ -1,3 +1,12 @@
+# V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX9
+
+- Added fail-closed Gemini Model ID validation against Google’s official Models API before any user-content request is sent.
+- Rejects unknown Gemini IDs such as stale, mistyped, or invented names instead of sending them to generateContent.
+- Confirms `generateContent` support before a configured Gemini model enters the active cascade.
+- Validation never claims Free Tier eligibility: Free status remains an account/project quota property and the explicit `GEMINI_FREE_MODELS` Secret remains the only cascade declaration.
+- Added a 5-minute in-process validation cache keyed by a non-secret credential fingerprint and model ID.
+- No Local Engine, paid fallback, implicit/default model, or hidden model substitution.
+
 # V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX8
 
 - Streamlit Secrets are now an absolute authority when the exact key exists, including an intentionally empty key; stale environment values can no longer shadow it.

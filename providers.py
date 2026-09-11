@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX8"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX9"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -19,6 +19,8 @@ MAX_RESPONSE_CHARS = 40_000
 MAX_RESPONSE_BODY_CHARS = 4_000_000
 RETRIES = 1
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
+MODEL_VALIDATION_CACHE_TTL = 300.0
+_MODEL_VALIDATION_CACHE: Dict[Tuple[str, str], Tuple[float, bool, str]] = {}
 
 
 def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -158,6 +160,92 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
 
 def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
     return _parse_models(_setting(seat.model_env) or "")
+
+
+def _credential_fingerprint(credential: str) -> str:
+    import hashlib
+    return hashlib.sha256(str(credential or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _validate_gemini_model(model: str, credential: Optional[str]) -> Tuple[bool, str]:
+    """Validate a Gemini model against Google's official Models API.
+
+    This checks existence and whether the model advertises generateContent.
+    It deliberately does NOT infer Free Tier eligibility from the model name:
+    Google controls quota/billing eligibility per project/key. The application
+    therefore treats the explicit *_FREE_MODELS Secret as the operator's Free
+    cascade declaration and independently verifies that each ID is real and
+    usable for this endpoint before sending user content.
+    """
+    key = (credential or "").strip()
+    model = str(model or "").strip()
+    if not key:
+        return False, "class=not_configured; Gemini credential is not configured."
+    if not model:
+        return False, "class=invalid_model_id; Empty model identifier."
+    cache_key = (_credential_fingerprint(key), model)
+    now = time.monotonic()
+    cached = _MODEL_VALIDATION_CACHE.get(cache_key)
+    if cached and now - cached[0] < MODEL_VALIDATION_CACHE_TTL:
+        return cached[1], cached[2]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
+    try:
+        response = requests.get(
+            url,
+            headers={"x-goog-api-key": key},
+            timeout=_bounded_timeout(REQUEST_TIMEOUT, None),
+        )
+    except requests.Timeout as exc:
+        reason = "class=model_validation_timeout; Google Models API timed out."
+        _MODEL_VALIDATION_CACHE[cache_key] = (now, False, reason)
+        return False, reason
+    except requests.RequestException as exc:
+        reason = f"class=model_validation_network; Google Models API network error: {exc.__class__.__name__}."
+        _MODEL_VALIDATION_CACHE[cache_key] = (now, False, reason)
+        return False, reason
+
+    body = _sanitize(response.text[:1600], (key,))
+    if response.status_code >= 400:
+        classification = _classify(response.status_code, body)
+        if response.status_code == 404:
+            classification = "invalid_model_id"
+        reason = f"HTTP {response.status_code}; class={classification}; {body or 'Google rejected the model lookup.'}"
+        _MODEL_VALIDATION_CACHE[cache_key] = (now, False, reason)
+        return False, reason
+    try:
+        data = response.json()
+    except ValueError:
+        reason = "class=model_validation_invalid_response; Google Models API returned invalid JSON."
+        _MODEL_VALIDATION_CACHE[cache_key] = (now, False, reason)
+        return False, reason
+    if not isinstance(data, dict):
+        reason = "class=model_validation_invalid_response; Google Models API returned an unexpected object."
+        _MODEL_VALIDATION_CACHE[cache_key] = (now, False, reason)
+        return False, reason
+    methods = data.get("supportedGenerationMethods") or []
+    if not isinstance(methods, list) or "generateContent" not in methods:
+        reason = "class=model_unsupported_generation; Model exists but does not advertise generateContent."
+        _MODEL_VALIDATION_CACHE[cache_key] = (now, False, reason)
+        return False, reason
+    reason = "class=model_validated; Google Models API confirmed generateContent support."
+    _MODEL_VALIDATION_CACHE[cache_key] = (now, True, reason)
+    return True, reason
+
+
+def validate_model_candidates(seat: Seat, credential: Optional[str], candidates: Optional[Tuple[str, ...]] = None) -> Tuple[Tuple[str, ...], Dict[str, str]]:
+    """Return only provider-valid candidates; never silently substitute a model."""
+    raw = tuple(candidates or get_model_candidates(seat))[:MAX_MODELS_PER_SEAT]
+    if seat.kind != "gemini":
+        return raw, {}
+    valid: list[str] = []
+    rejected: Dict[str, str] = {}
+    for model in raw:
+        ok, reason = _validate_gemini_model(model, credential)
+        if ok:
+            valid.append(model)
+        else:
+            rejected[model] = reason
+    return tuple(valid), rejected
 
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
@@ -499,12 +587,18 @@ def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) 
 def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None) -> dict:
     del local_fallback
     started = time.perf_counter()
-    candidates = _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT]
+    configured_candidates = _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT]
     attempted: list[str] = []
-    if not candidates:
+    if not configured_candidates:
         return _result(seat, "NO_FREE_MODEL_CONFIGURED", "", "", "class=no_free_models_configured; No explicitly configured Free API model.", started, attempted)
     if not credential:
-        return _result(seat, "FAILED", candidates[0], "", "class=not_configured; No official credential configured.", started, attempted)
+        return _result(seat, "FAILED", configured_candidates[0], "", "class=not_configured; No official credential configured.", started, attempted)
+
+    candidates, rejected = validate_model_candidates(seat, credential, configured_candidates)
+    if not candidates:
+        reason = next(iter(rejected.values()), "class=model_validation_failed; No configured model passed official validation.")
+        status = "INVALID_MODEL_ID" if all("invalid_model_id" in value for value in rejected.values()) else "MODEL_VALIDATION_FAILED"
+        return _result(seat, status, configured_candidates[0], "", reason, started, list(configured_candidates))
 
     last_error: Optional[ProviderError] = None
     terminal = {"not_configured", "configuration", "http_401_authentication_failed", "http_403_permission_denied", "deadline_exceeded"}
