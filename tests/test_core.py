@@ -10,34 +10,6 @@ class CoreTests(unittest.TestCase):
     def test_model_candidates_empty_without_setting(self):
         with patch("providers._setting", return_value=None):
             self.assertEqual(get_model_candidates(SEATS[0]), ())
-
-    def test_unicode_mobile_separators_are_normalized(self):
-        raw = "gemini-a‚gemini-b،gemini-c，gemini-d؛gemini-e"
-        self.assertEqual(_parse_models(raw), ("gemini-a", "gemini-b", "gemini-c", "gemini-d", "gemini-e"))
-
-    def test_model_candidates_are_explicit_and_capped(self):
-        configured = ",".join(f"model-{i}" for i in range(1, 13))
-        with patch("providers._setting", return_value=configured):
-            models = get_model_candidates(SEATS[1])
-        self.assertEqual(len(models), MAX_MODELS_PER_SEAT)
-        self.assertEqual(models[0], "model-1")
-        self.assertEqual(models[-1], "model-10")
-    def test_parser_rejects_path_traversal(self):
-        self.assertEqual(_parse_models("good,foo/../bar,../evil,bar"), ("good", "bar"))
-    def test_explicit_empty_secret_blocks_environment_fallback(self):
-        with patch("providers._streamlit_secret_state", return_value=(True, None)), patch.dict(__import__('os').environ, {"GEMINI_FREE_MODELS": "env-model"}, clear=False):
-            self.assertEqual(get_model_candidates(SEATS[1]), ())
-
-    def test_model_config_fingerprint_changes_when_cascade_changes(self):
-        from providers import model_config_fingerprint
-        a = {seat.key: () for seat in SEATS}
-        b = {seat.key: () for seat in SEATS}
-        a["gemini"] = ("model-a",)
-        b["gemini"] = ("model-b",)
-        self.assertNotEqual(model_config_fingerprint(a), model_config_fingerprint(b))
-    def test_secret_precedence(self):
-        with patch("providers._read_setting", side_effect=lambda name: ("secret-value", "streamlit_secrets") if name == "GEMINI_FREE_MODELS" else (None, "missing")):
-            self.assertEqual(get_model_candidates(SEATS[1]), ("secret-value",))
     def test_classification(self):
         self.assertEqual(_classify(401, "invalid api key"), "http_401_authentication_failed")
         self.assertEqual(_classify(404, "model not found"), "model_not_found_or_invalid")

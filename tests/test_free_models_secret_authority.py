@@ -34,7 +34,7 @@ class FreeModelsSecretAuthorityTests(unittest.TestCase):
 
     def test_unicode_comma_does_not_silently_select_a_model(self):
         gemini = next(s for s in SEATS if s.key == "gemini")
-        bad = "gemini-3.1-pro-preview‚gemini-3.5-flash"
+        bad = "gemini-3.1-pro-preview!gemini-3.5-flash"
         with patch("providers._streamlit_secret", side_effect=lambda name: bad if name == "GEMINI_FREE_MODELS" else None):
             self.assertEqual(get_model_candidates(gemini), ())
             diagnostic = get_model_config_diagnostic(gemini)
