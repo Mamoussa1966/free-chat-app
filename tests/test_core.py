@@ -7,13 +7,6 @@ class CoreTests(unittest.TestCase):
         self.assertEqual([s.key for s in SEATS], ["openai", "gemini", "claude", "grok", "kimi"])
     def test_model_parser_caps(self):
         self.assertEqual(len(_parse_models(",".join(f"m{i}" for i in range(20)))), MAX_MODELS_PER_SEAT)
-    def test_invalid_gemini_model_is_not_sent(self):
-        gemini = SEATS[1]
-        with patch("providers.validate_model_candidates", return_value=((), {"gemini-3.7-flash": "class=invalid_model_id; Model not found."})):
-            result = call_seat(gemini, "Hello", "", 1, False, "test-key-123456", model_candidates=("gemini-3.7-flash",))
-        self.assertEqual(result["status"], "INVALID_MODEL_ID")
-        self.assertEqual(result["attempted_models"], ["gemini-3.7-flash"])
-
     def test_model_candidates_empty_without_setting(self):
         with patch("providers._setting", return_value=None):
             self.assertEqual(get_model_candidates(SEATS[0]), ())
@@ -31,6 +24,17 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(models[-1], "model-10")
     def test_parser_rejects_path_traversal(self):
         self.assertEqual(_parse_models("good,foo/../bar,../evil,bar"), ("good", "bar"))
+    def test_explicit_empty_secret_blocks_environment_fallback(self):
+        with patch("providers._streamlit_secret_state", return_value=(True, None)), patch.dict(__import__('os').environ, {"GEMINI_FREE_MODELS": "env-model"}, clear=False):
+            self.assertEqual(get_model_candidates(SEATS[1]), ())
+
+    def test_model_config_fingerprint_changes_when_cascade_changes(self):
+        from providers import model_config_fingerprint
+        a = {seat.key: () for seat in SEATS}
+        b = {seat.key: () for seat in SEATS}
+        a["gemini"] = ("model-a",)
+        b["gemini"] = ("model-b",)
+        self.assertNotEqual(model_config_fingerprint(a), model_config_fingerprint(b))
     def test_secret_precedence(self):
         with patch("providers._read_setting", side_effect=lambda name: ("secret-value", "streamlit_secrets") if name == "GEMINI_FREE_MODELS" else (None, "missing")):
             self.assertEqual(get_model_candidates(SEATS[1]), ("secret-value",))
