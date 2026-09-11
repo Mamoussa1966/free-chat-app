@@ -1,4 +1,4 @@
-# AI Council V22.1 — FINAL EXACT NAMES UPDATED HOTFIX 14
+# AI Council V22.1 — FINAL HARDENED HOTFIX 7
 
 Five official provider seats plus the user room: OpenAI/ChatGPT, Gemini, Anthropic/Claude, xAI/Grok, and Moonshot/Kimi.
 
