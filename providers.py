@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX28-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX30-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -168,6 +168,7 @@ def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
     return {seat.key: get_model_candidates(seat) for seat in SEATS}
+
 
 
 def model_config_sources() -> Dict[str, str]:

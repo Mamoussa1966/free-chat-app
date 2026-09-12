@@ -1,6 +1,6 @@
-# HOTFIX28-CLAUDE-INTEGRATION
+# HOTFIX30-CLAUDE-GEMINI-PARITY
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX28-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX30-FINAL`
 
 ## Scope
 Built from the preserved full V22.1 release candidate. All existing test modules from the prior preserved baseline remain included; no test module was deleted. `gitops_layer.py` remains outside the application hotfix scope and is unchanged.
@@ -42,9 +42,8 @@ Built from the preserved full V22.1 release candidate. All existing test modules
 
 
 ## Claude Integration Scope
-1. Claude is aligned with the Gemini architecture/behavior: explicit Free model cascade only, with Anthropic API-specific transport differences.
-2. Removed the Claude-only dynamic discovery/cache path so Claude does not have a separate execution or UI model-selection architecture.
-3. Claude execution remains strictly explicit Free cascade from `CLAUDE_FREE_MODELS` / `ANTHROPIC_FREE_MODELS`.
-4. Added explicit Custom Model input guarded by the Free configuration; no automatic model selection.
-5. Added real HTTP-path regression tests for Claude authentication, quota/rate-limit classification, model-unavailable cascade advancement, successful execution identity, and diagnostic privacy.
-6. Preserved the exact 20-module Golden baseline test set and added Claude-specific regression coverage.
+1. Claude now follows the same architecture/behavior contract as Gemini for model configuration and Free-model cascade execution.
+2. Execution uses only the explicitly configured `CLAUDE_FREE_MODELS` / `ANTHROPIC_FREE_MODELS`; no dynamic discovery, paid fallback, local engine, or automatic model selection is used.
+3. Claude-specific implementation is limited to official Anthropic API specifics: endpoint, authentication headers, request payload, and response parsing.
+4. Added real HTTP-path regression tests for Claude authentication, quota/rate-limit classification, model-unavailable cascade advancement, successful execution identity, and diagnostic privacy.
+5. Preserved the complete 20-module baseline test set and added Claude-specific regression coverage as the 21st test module.

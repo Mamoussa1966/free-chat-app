@@ -598,10 +598,6 @@ def run_app() -> None:
     credentials = capture_credentials()
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
-    model_candidates = _claude_execution_candidates(model_candidates)
-    custom_claude = str(st.session_state.get("claude_custom_model") or "").strip()
-    if custom_claude and custom_claude in tuple(model_candidates.get("claude") or ()):
-        model_candidates["claude"] = (custom_claude,) + tuple(m for m in model_candidates["claude"] if m != custom_claude)
     chat = _active_chat()
     st.title("🏛️ AI Council — Six-Room Shared Context Arena")
     st.caption(f"{APP_VERSION} • المستخدم + خمسة مقاعد • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")

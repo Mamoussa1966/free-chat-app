@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX28-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX30-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -20,6 +20,6 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 ## Claude Integration
 - Official Anthropic Messages API only.
 - `ANTHROPIC_API_KEY` is read from Streamlit Secrets first, then environment.
-- Claude follows the same model/cascade architecture as Gemini: execution uses only explicitly configured `ANTHROPIC_FREE_MODELS` / `CLAUDE_FREE_MODELS`; no dynamic model discovery is used for execution.
+- Claude uses the same explicit Free-model configuration architecture and cascade behavior as Gemini; no dynamic model discovery path is used.
+- Claude-specific behavior is limited to Anthropic API specifics (endpoint, headers, payload, and response parsing).
 - Execution uses only the explicit `CLAUDE_FREE_MODELS` / `ANTHROPIC_FREE_MODELS` cascade. No paid fallback, Local Engine, or automatic model selection.
-- Custom Claude model input is accepted only when the model is already present in the explicit Free configuration.
