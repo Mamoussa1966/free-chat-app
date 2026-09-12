@@ -13,7 +13,7 @@ def test_release_metadata_has_single_current_version():
     assert 'APP_VERSION = PROVIDER_VERSION' in main
     assert f'VERSION = "{version}"' in providers
     assert version in release
-    assert 'HOTFIX30_CLAUDE_GEMINI_PARITY_FINAL.zip' in builder
+    assert 'HOTFIX33_GROK_PARITY_FINAL.zip' in builder
 
 
 def test_no_stale_release_identifiers_in_production_metadata():

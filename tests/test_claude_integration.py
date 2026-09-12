@@ -122,3 +122,62 @@ def test_claude_uses_the_same_explicit_candidate_path_as_gemini():
     source_main = Path(main.__file__).read_text(encoding="utf-8")
     assert "_claude_execution_candidates" not in source_main
     assert "claude_custom_model" not in source_main
+
+
+def test_claude_400_model_error_is_model_unavailable_and_advances():
+    responses = [
+        _response(400, '{"error":{"type":"invalid_request_error","message":"model claude-old is not available"}}'),
+        _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"content": [{"type": "text", "text": "CLAUDE_OK"}]}),
+    ]
+    with patch("providers.requests.post", side_effect=responses) as post:
+        result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("claude-old", "claude-good"))
+    assert post.call_count == 2
+    assert result["attempted_models"] == ["claude-old", "claude-good"]
+    assert result["executed_model"] == "claude-good"
+    assert result["attempt_diagnostics"][0]["classification"] == "MODEL_UNAVAILABLE"
+
+
+def test_claude_public_failure_result_keeps_status_and_classification_without_raw_payload():
+    raw = "HTTP 401 invalid x-api-key super-secret-provider-payload"
+    public = main._public_result({
+        "status": "FAILED", "model": "claude-opus-5", "executed_model": "claude-opus-5",
+        "content": "", "error": raw, "attempted_models": ["claude-opus-5"],
+        "attempt_diagnostics": [{"attempt": 1, "model": "claude-opus-5", "status_code": 401,
+            "classification": "AUTHENTICATION_ERROR", "retryable": False, "error": raw, "_display_created_at": time.time()}],
+    })
+    assert public["attempted_models"] == ["claude-opus-5"]
+    assert public["attempt_summaries"][0]["classification"] == "AUTHENTICATION_ERROR"
+    assert public["attempt_summaries"][0]["status_code"] == 401
+    assert "attempt_diagnostics" not in public and "error" not in public
+    assert raw not in repr(public)
+
+
+def test_claude_failure_result_exposes_only_compact_attempt_summaries_to_live_ui():
+    responses = [
+        _response(404, '{"error":{"type":"not_found_error","message":"model not found"}}'),
+        _response(401, '{"error":{"type":"authentication_error","message":"invalid x-api-key; secret=DO_NOT_RENDER"}}'),
+    ]
+    with patch("providers.requests.post", side_effect=responses) as post:
+        result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("claude-opus-5", "claude-sonnet-5"))
+    assert post.call_count == 2
+    assert result["attempted_models"] == ["claude-opus-5", "claude-sonnet-5"]
+    assert result["attempt_summaries"] == [
+        {
+            "attempt": 1,
+            "model": "claude-opus-5",
+            "status_code": 404,
+            "classification": "MODEL_UNAVAILABLE",
+            "retryable": True,
+            "created_at_epoch": result["attempt_summaries"][0]["created_at_epoch"],
+        },
+        {
+            "attempt": 2,
+            "model": "claude-sonnet-5",
+            "status_code": 401,
+            "classification": "AUTHENTICATION_ERROR",
+            "retryable": False,
+            "created_at_epoch": result["attempt_summaries"][1]["created_at_epoch"],
+        },
+    ]
+    assert all("error" not in item for item in result["attempt_summaries"])
+    assert "DO_NOT_RENDER" not in repr(result["attempt_summaries"])
