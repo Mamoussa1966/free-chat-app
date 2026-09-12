@@ -1,17 +1,19 @@
-# HOTFIX24-FINAL
+# HOTFIX27-FINAL
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX24-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX27-FINAL`
 
 ## Scope
-Built from the current V22.1 release candidate while preserving the complete 19-module test suite. `gitops_layer.py` remains outside application hotfix scope and is unchanged.
+Built from the preserved full V22.1 release candidate. All existing test modules from the prior preserved baseline remain included; no test module was deleted. `gitops_layer.py` remains outside the application hotfix scope and is unchanged.
 
-## Fixes
-1. Preserved all 19 existing test modules; the release builder now verifies the exact test-file set, not only a count.
-2. Corrected 429 retry policy to use the same canonical classification as the public taxonomy: explicit quota/billing exhaustion is not retried; transient rate limiting remains retryable.
-3. Raw provider diagnostics and raw result errors are consumed transiently and stripped before `last_results`/`last_diagnostics` persistence.
-4. Visible attempt errors use only compact summaries and the existing 60-second TTL; raw provider payloads are never rendered.
-5. Added regression coverage for session-state diagnostic privacy.
-6. Release validation remains isolated in a temporary copied sandbox with credential-like environment variables scrubbed.
+## Fixes and release hardening
+1. Preserves the complete current test-file set (20 `test_*.py` modules) and enforces the exact set during source validation and ZIP verification.
+2. Keeps the corrected 429 taxonomy: explicit quota/billing exhaustion is `QUOTA_EXCEEDED`; transient throttling is `RATE_LIMITED`.
+3. Stops the Free-model cascade immediately on a confirmed authentication error, using the canonical public classification.
+4. Keeps raw provider diagnostics transient and stores only compact classification summaries in visible History/session-state results.
+5. Visible attempt diagnostics are compact and automatically expire after 60 seconds; raw provider payloads are never rendered.
+6. Release tests execute in a fresh temporary copied sandbox with credential-like inherited environment variables scrubbed.
+7. The exact packaged ZIP is re-extracted into a second fresh sandbox and the complete test suite is executed again before the artifact is accepted.
+8. ZIP validation rejects unsafe paths and symlink members and checks the exact preserved test-file set.
 
 ## Preserved test modules
 - test_attachments.py
@@ -28,6 +30,7 @@ Built from the current V22.1 release candidate while preserving the complete 19-
 - test_hotfix19_fixes.py
 - test_hotfix21_release_consistency.py
 - test_hotfix21_ui_privacy.py
+- test_hotfix26_release_roundtrip.py
 - test_provider_runtime.py
 - test_v213_hardening.py
 - test_v214_voice.py

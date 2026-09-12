@@ -26,6 +26,7 @@ EXPECTED_TEST_FILES = {
     "test_hotfix14_error_classification.py", "test_hotfix14_request_history_identity.py",
     "test_hotfix17_fixes.py", "test_hotfix18_fixes.py", "test_hotfix19_fixes.py",
     "test_hotfix21_release_consistency.py", "test_hotfix21_ui_privacy.py",
+    "test_hotfix26_release_roundtrip.py",
     "test_provider_runtime.py", "test_v213_hardening.py", "test_v214_voice.py",
     "test_v215_resilience.py", "test_v216_hardening.py",
 }
@@ -80,16 +81,57 @@ def _scrub_environment() -> dict[str, str]:
     return env
 
 
+def _run_suite_in_sandbox(sandbox: Path) -> None:
+    """Compile and run the complete suite from an isolated workspace."""
+    env = _scrub_environment()
+    env["PYTHONPATH"] = str(sandbox)
+    py_files = [str(sandbox / p) for p in (
+        "app.py", "main.py", "providers.py", "attachment_utils.py",
+        "gitops_layer.py", "build_release.py",
+    )]
+    subprocess.run([sys.executable, "-m", "py_compile", *py_files], cwd=sandbox, env=env, check=True)
+    subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=sandbox, env=env, check=True)
+
+
 def run_tests() -> None:
-    """Compile and run the complete suite only inside a fresh temporary copy."""
+    """Run the complete suite only inside a fresh temporary copied workspace."""
     with tempfile.TemporaryDirectory(prefix="ai_council_release_test_") as tmp:
         sandbox = Path(tmp) / "project"
         _copy_tree_safely(sandbox)
-        env = _scrub_environment()
-        env["PYTHONPATH"] = str(sandbox)
-        py_files = [str(sandbox / p) for p in ("app.py", "main.py", "providers.py", "attachment_utils.py", "gitops_layer.py", "build_release.py")]
-        subprocess.run([sys.executable, "-m", "py_compile", *py_files], cwd=sandbox, env=env, check=True)
-        subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=sandbox, env=env, check=True)
+        _run_suite_in_sandbox(sandbox)
+
+
+def _zip_member_is_symlink(info: zipfile.ZipInfo) -> bool:
+    mode = (info.external_attr >> 16) & 0o170000
+    return mode == 0o120000
+
+
+def verify_extracted_release(path: Path) -> None:
+    """Re-extract the exact ZIP artifact and execute the suite again from that copy."""
+    with zipfile.ZipFile(path, "r") as zf:
+        for info in zf.infolist():
+            name = info.filename
+            if _zip_member_is_symlink(info):
+                raise SystemExit(f"Symlink ZIP member rejected: {name}")
+        with tempfile.TemporaryDirectory(prefix="ai_council_release_roundtrip_") as tmp:
+            sandbox = Path(tmp) / "extracted"
+            sandbox.mkdir(parents=True, exist_ok=True)
+            zf.extractall(sandbox)
+            missing = [p for p in REQUIRED if not (sandbox / p).is_file()]
+            if missing:
+                raise SystemExit(f"Extracted release missing required files: {missing}")
+            extracted_tests = {p.name for p in (sandbox / "tests").glob("test_*.py") if p.is_file()}
+            if extracted_tests != EXPECTED_TEST_FILES:
+                raise SystemExit(
+                    "Extracted release test-file-set invariant violated; "
+                    f"missing={sorted(EXPECTED_TEST_FILES - extracted_tests)}, "
+                    f"unexpected={sorted(extracted_tests - EXPECTED_TEST_FILES)}"
+                )
+            extracted_version = (sandbox / "VERSION.txt").read_text(encoding="utf-8").strip()
+            source_version = (ROOT / "VERSION.txt").read_text(encoding="utf-8").strip()
+            if extracted_version != source_version:
+                raise SystemExit(f"Extracted version mismatch: {extracted_version!r} != {source_version!r}")
+            _run_suite_in_sandbox(sandbox)
 
 
 def package(output: Path) -> None:
@@ -137,7 +179,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX24_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX27_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()
@@ -147,6 +189,7 @@ def main() -> int:
     out = ROOT / args.output
     package(out)
     manifest = check_zip(out)
+    verify_extracted_release(out)
     (ROOT / "RELEASE_MANIFEST.json").write_text(json.dumps({**manifest, "zip": out.name}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     digest = manifest["sha256"]
     (ROOT / f"{out.name}.sha256").write_text(f"{digest}  {out.name}\n", encoding="utf-8")
