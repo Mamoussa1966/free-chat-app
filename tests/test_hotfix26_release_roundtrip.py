@@ -20,7 +20,7 @@ def test_release_builder_scrubs_credential_like_environment_variables():
 def test_current_release_version_is_consistent():
     root = Path(__file__).resolve().parents[1]
     version = (root / "VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX28-FINAL"
+    assert version == "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX30-FINAL"
     assert f'VERSION = "{version}"' in (root / "providers.py").read_text(encoding="utf-8")
     assert version in (root / "README.md").read_text(encoding="utf-8")
     assert version in (root / "RELEASE_NOTES.md").read_text(encoding="utf-8")

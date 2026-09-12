@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import requests
@@ -102,3 +103,22 @@ def test_claude_history_is_compact_and_raw_diagnostics_are_not_persisted():
     assert "error" not in public
     assert public["attempt_summaries"][0]["classification"] == "AUTHENTICATION_ERROR"
     assert raw not in repr(public)
+
+
+def test_claude_uses_only_explicit_free_configuration():
+    candidates = {seat.key: () for seat in providers.SEATS}
+    candidates["claude"] = ("configured-free-a", "configured-free-b")
+    assert candidates["claude"] == ("configured-free-a", "configured-free-b")
+
+def test_claude_has_no_dynamic_model_discovery_path():
+    source_main = open("main.py", encoding="utf-8").read()
+    source_providers = open("providers.py", encoding="utf-8").read()
+    assert "discover_claude_models" not in source_main
+    assert "CLAUDE_MODELS_ENDPOINT" not in source_providers
+    assert "claude_model_discovery" not in source_main
+
+
+def test_claude_uses_the_same_explicit_candidate_path_as_gemini():
+    source_main = Path(main.__file__).read_text(encoding="utf-8")
+    assert "_claude_execution_candidates" not in source_main
+    assert "claude_custom_model" not in source_main
