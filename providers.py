@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX30-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX33-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -48,7 +48,7 @@ SEATS = (
     Seat("openai", "ChatGPT", "🔑 ChatGPT", ("OPENAI_API_KEY",), ("OPENAI_FREE_MODELS",), "https://api.openai.com/v1/responses", "openai_responses"),
     Seat("gemini", "Gemini", "🔑 Gemini", ("GEMINI_API_KEY", "GOOGLE_API_KEY"), ("GEMINI_FREE_MODELS",), "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", "gemini"),
     Seat("claude", "Claude", "🔑 Claude", ("ANTHROPIC_API_KEY",), ("ANTHROPIC_FREE_MODELS", "CLAUDE_FREE_MODELS"), "https://api.anthropic.com/v1/messages", "anthropic"),
-    Seat("grok", "Grok", "🔑 Grok", ("XAI_API_KEY", "GROK_API_KEY"), ("XAI_FREE_MODELS", "GROK_FREE_MODELS"), "https://api.x.ai/v1/responses", "xai_responses"),
+    Seat("grok", "Grok", "🔑 Grok", ("XAI_API_KEY", "GROK_API_KEY"), ("GROK_FREE_MODELS", "XAI_FREE_MODELS"), "https://api.x.ai/v1/responses", "xai_responses"),
     Seat("kimi", "Kimi", "🔑 Kimi", ("KIMI_API_KEY", "MOONSHOT_API_KEY"), ("KIMI_FREE_MODELS", "MOONSHOT_FREE_MODELS"), "https://api.moonshot.ai/v1/chat/completions", "chat_completions"),
 )
 
@@ -221,7 +221,7 @@ def _classify(status: Optional[int], body: str) -> str:
     low = str(body or "").lower()
     model_markers = (
         "model not found", "model_not_found", "unknown model",
-        "invalid model", "model is not available", "model unavailable",
+        "invalid model", "model is not available", "model unavailable", "model is not available", "not available",
         "does not exist", "unsupported model",
     )
     quota_markers = (
@@ -238,6 +238,17 @@ def _classify(status: Optional[int], body: str) -> str:
     )
     if any(x in low for x in model_markers) or (status == 404 and "model" in low):
         return "model_not_found_or_invalid"
+    # xAI documents that a malformed/incorrect API key can also surface as
+    # HTTP 400. Treat explicit credential language as authentication failure
+    # so the cascade stops exactly like the Gemini/Claude contract.
+    auth_markers = (
+        "incorrect api key", "invalid api key", "invalid xai api key",
+        "invalid authorization", "invalid token", "invalid credential",
+        "missing api key", "api key is invalid", "authentication failed",
+        "unauthorized",
+    )
+    if any(x in low for x in auth_markers):
+        return "http_401_authentication_failed"
     if any(x in low for x in quota_markers):
         return "billing_or_quota"
     # RESOURCE_EXHAUSTED is ambiguous across providers: treat it as quota
@@ -580,6 +591,19 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         "latency": round(time.perf_counter() - started, 3),
         "attempted_models": list(attempted),
         "attempt_diagnostics": [dict(x) for x in (attempt_diagnostics or [])],
+        # Public-safe summaries are available to the live diagnostic renderer.
+        # Raw attempt diagnostics remain transient and are never required by UI/history.
+        "attempt_summaries": [
+            {
+                "attempt": d.get("attempt"),
+                "model": str(d.get("model") or "").strip(),
+                "status_code": d.get("status_code"),
+                "classification": str(d.get("classification") or "UNKNOWN").strip().upper(),
+                "retryable": bool(d.get("retryable", False)),
+                **({"created_at_epoch": float(d.get("_display_created_at"))} if d.get("_display_created_at") is not None else {}),
+            }
+            for d in (attempt_diagnostics or [])
+        ],
         "official_authenticated": authenticated,
         "request_id": str(request_id or ""),
         "round": int(round_no),

@@ -539,11 +539,21 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         st.warning(f"🟡 {result['label']} — نقطة المصادقة قبلت المفتاح، لكن لا يوجد Free model مُكوّن.")
         st.caption("Classification: AUTHENTICATION_ERROR")
     else:
+        summaries = list(result.get("attempt_summaries", []) or [])
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write("Official API request failed; raw provider payload is not shown in the UI.")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
-            for detail in result.get("attempt_summaries", []) or []:
-                _render_temporary_attempt_diagnostic(detail)
+            if summaries:
+                last = summaries[-1]
+                final_class = str(last.get("classification") or "UNKNOWN").upper()
+                final_model = str(last.get("model") or "").strip()
+                final_code = last.get("status_code")
+                final_code_text = f" · HTTP {final_code}" if final_code else ""
+                st.caption(f"Final classification: **{final_class}** · `{final_model}`{final_code_text}")
+                for detail in summaries:
+                    _render_temporary_attempt_diagnostic(detail)
+            else:
+                st.caption("Final classification: **UNKNOWN**")
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:

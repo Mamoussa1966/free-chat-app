@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX30-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX33-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -16,6 +16,13 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 
 - Release artifact is re-extracted into a fresh temporary workspace and the full suite is executed a second time before release.
 
+
+## Grok Integration
+- Official xAI Responses API only.
+- `XAI_API_KEY` / `GROK_API_KEY` is read from Streamlit Secrets first, then environment.
+- Grok uses the same explicit candidate/cascade architecture as Gemini and Claude. `GROK_FREE_MODELS` is preferred; `XAI_FREE_MODELS` remains a backward-compatible alias.
+- No dynamic model discovery, Local Engine, automatic model selection, or paid fallback.
+- The project does not assume any xAI API model is free by default; only explicitly configured candidates are eligible for this project's Free API contract.
 
 ## Claude Integration
 - Official Anthropic Messages API only.

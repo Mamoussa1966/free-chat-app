@@ -29,17 +29,18 @@ EXPECTED_TEST_FILES = {
     "test_hotfix26_release_roundtrip.py",
     "test_provider_runtime.py", "test_v213_hardening.py", "test_v214_voice.py",
     "test_v215_resilience.py", "test_v216_hardening.py",
-    "test_claude_integration.py",
+    "test_claude_integration.py", "test_grok_integration.py",
 }
 
-# Files intentionally changed as part of the Claude integration phase. Every
-# other baseline file must remain byte-identical. The new Claude regression
-# module is allowed in addition to the 20-module Golden baseline.
+# Files intentionally changed as part of the provider-parity integration phase.
+# Every other baseline file must remain byte-identical. The Claude and Grok
+# regression modules are allowed in addition to the 20-module Golden baseline.
 ALLOWED_BASELINE_CHANGES = {
     "main.py", "providers.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
-    "build_release.py",
+    ".streamlit/secrets.toml.example", "build_release.py",
     "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
     "tests/test_hotfix26_release_roundtrip.py",
+    "tests/test_grok_integration.py",
 }
 
 
@@ -59,7 +60,7 @@ def compare_against_golden_baseline() -> None:
     missing = sorted(baseline_paths - set(current_paths))
     if missing:
         raise SystemExit(f"Golden baseline files missing: {missing}")
-    unexpected = sorted(set(current_paths) - baseline_paths - {"tests/test_claude_integration.py", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json"})
+    unexpected = sorted(set(current_paths) - baseline_paths - {"tests/test_claude_integration.py", "tests/test_grok_integration.py", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json"})
     if unexpected:
         raise SystemExit(f"Unexpected files added against Golden baseline: {unexpected}")
     changed = []
@@ -76,6 +77,8 @@ def compare_against_golden_baseline() -> None:
         raise SystemExit("Golden baseline test modules were removed")
     if "tests/test_claude_integration.py" not in current_tests:
         raise SystemExit("Claude regression test module missing")
+    if "tests/test_grok_integration.py" not in current_tests:
+        raise SystemExit("Grok regression test module missing")
 
 
 def validate_sources() -> None:
@@ -233,7 +236,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX30_CLAUDE_GEMINI_PARITY_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX33_GROK_PARITY_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()

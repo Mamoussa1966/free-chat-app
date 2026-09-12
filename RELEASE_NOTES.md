@@ -1,6 +1,53 @@
-# HOTFIX30-CLAUDE-GEMINI-PARITY
+# HOTFIX33-GROK-PARITY
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX30-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX33-FINAL`
+
+## Scope
+1. Adds Grok/xAI as a first-class provider using the same shared architecture and operational contract already used by Gemini and Claude.
+2. Uses `GROK_FREE_MODELS` as the preferred explicit model list, with `XAI_FREE_MODELS` retained as a backward-compatible alias; maximum 10 candidates.
+3. Uses the official xAI Responses API at `https://api.x.ai/v1/responses` with `Authorization: Bearer <XAI_API_KEY>`.
+4. Preserves the stable taxonomy: `MODEL_UNAVAILABLE`, `QUOTA_EXCEEDED`, `RATE_LIMITED`, `AUTHENTICATION_ERROR`, `API_ERROR`, `NETWORK_ERROR`, `TIMEOUT`, `UNKNOWN`.
+5. Authentication failures are terminal; model-unavailable failures advance the explicit cascade; transient 429 rate limits use the shared retry/cascade policy; explicit credit/quota exhaustion is classified as `QUOTA_EXCEEDED`.
+6. xAI's documented HTTP 400 incorrect-API-key case is normalized to `AUTHENTICATION_ERROR`, preventing an invalid credential from silently cascading into other models.
+7. Raw xAI payloads remain transient/internal; live diagnostics and History use compact attempt summaries only.
+8. Gemini and Claude behavior is not changed by this hotfix.
+9. No dynamic Grok model discovery, Local Engine, automatic model selection, or paid fallback is introduced.
+
+## Important Free-API boundary
+xAI's current API documentation publishes per-token pricing for its API models and documents API rate-limit tiers. Therefore this release deliberately does **not** label any xAI model as free by default. A model is eligible for the project's Free API cascade only when the user explicitly places it in `GROK_FREE_MODELS`/`XAI_FREE_MODELS` based on the access/plan available to their account.
+
+## Regression coverage
+- Added `tests/test_grok_integration.py` covering explicit configuration precedence, no discovery, 400/401 authentication stop, model-unavailable advancement, 429 retry/cascade behavior, quota classification, exact execution identity, live diagnostic privacy, and History privacy.
+- Preserved all 20 Golden baseline test modules plus the existing Claude regression module.
+
+# HOTFIX33-CLAUDE-ATTEMPT-DIAGNOSTICS
+
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX33-FINAL`
+
+## Fix
+1. Claude live failure results now expose a compact `attempt_summaries` structure directly to the diagnostic UI, so every real attempted model reports its HTTP status and stable classification without exposing the raw Anthropic payload.
+2. Raw `attempt_diagnostics` and provider error text remain transient/internal; visible History continues to store only compact summaries.
+3. Authentication errors remain terminal; `MODEL_UNAVAILABLE` advances the explicit Free cascade; `QUOTA_EXCEEDED` and `RATE_LIMITED` remain governed by the shared cascade policy.
+4. Added a regression test proving that the live Claude failure result contains only model/status/classification/retryability metadata and never the raw provider payload.
+
+---
+
+# HOTFIX33-CLAUDE-HTTP-DIAGNOSTICS
+
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX33-FINAL`
+
+## Fixes
+1. Claude keeps the Gemini-equivalent explicit Free cascade path; no dynamic discovery, paid fallback, Local Engine, or automatic model selection.
+2. Claude HTTP failures retain the real HTTP status and stable classification internally: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, RATE_LIMITED, AUTHENTICATION_ERROR, API_ERROR, NETWORK_ERROR, TIMEOUT, UNKNOWN.
+3. The Claude failure UI now exposes only a compact per-attempt classification/model/status summary. Raw Anthropic payloads remain hidden.
+4. Authentication errors remain terminal; model-unavailable errors advance to the next explicit Free model; quota/rate-limit behavior remains governed by the shared cascade policy.
+5. Added regression coverage for real HTTP-path classification and compact public-result rendering.
+
+---
+
+# HOTFIX33-CLAUDE-GEMINI-PARITY
+
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX33-FINAL`
 
 ## Scope
 Built from the preserved full V22.1 release candidate. All existing test modules from the prior preserved baseline remain included; no test module was deleted. `gitops_layer.py` remains outside the application hotfix scope and is unchanged.
