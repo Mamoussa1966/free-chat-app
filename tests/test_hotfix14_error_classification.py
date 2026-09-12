@@ -100,3 +100,18 @@ def test_attempt_diagnostic_expires_after_sixty_seconds():
 
 def test_attempt_diagnostic_missing_timestamp_is_not_rendered():
     assert main._attempt_display_remaining({"classification": "QUOTA_EXCEEDED"}, now=1000.0) == 0
+
+
+def test_result_renderer_never_uses_raw_error_for_auth_probe():
+    raw = 'HTTP 403: https://provider.example/private?token=SECRET provider JSON'
+    result = {
+        'status': 'AUTHENTICATION_OK_NO_FREE_MODEL',
+        'label': 'Gemini',
+        'error': raw,
+    }
+    # The UI branch must not render result["error"] / result.get("error").
+    import inspect
+    source = inspect.getsource(main._render_result_line)
+    assert 'result.get("error"' not in source
+    assert 'result["error"]' not in source
+    main._render_result_line(result)
