@@ -14,7 +14,7 @@ import streamlit as st
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
-APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX14"
+APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -31,7 +31,77 @@ def _now() -> str:
 
 
 def _new_chat() -> dict:
-    return {"id": uuid.uuid4().hex, "title": "محادثة جديدة", "created_at": _now(), "messages": [], "request_ids": [], "result_keys": []}
+    return {
+        "id": uuid.uuid4().hex,
+        "title": "محادثة جديدة",
+        "created_at": _now(),
+        "messages": [],
+        "request_ids": [],
+        "request_records": [],
+        "history_identity_ledger": [],
+        "result_keys": [],
+    }
+
+
+def _ensure_chat_identity_state(chat: dict) -> None:
+    chat.setdefault("request_ids", [])
+    chat.setdefault("request_records", [])
+    chat.setdefault("history_identity_ledger", [])
+    chat.setdefault("result_keys", [])
+
+
+def _request_display_number(chat: dict, request_id: str) -> int | None:
+    _ensure_chat_identity_state(chat)
+    for index, record in enumerate(chat.get("request_records", []), start=1):
+        if isinstance(record, dict) and record.get("request_id") == request_id:
+            return index
+    return None
+
+
+def _history_identity_keys(chat: dict) -> set[tuple[str, int, str]]:
+    _ensure_chat_identity_state(chat)
+    keys: set[tuple[str, int, str]] = set()
+    for raw in chat.get("history_identity_ledger", []):
+        if isinstance(raw, (list, tuple)) and len(raw) == 3:
+            try:
+                request_id, round_no, seat_key = str(raw[0]).strip(), int(raw[1]), str(raw[2]).strip()
+            except (TypeError, ValueError):
+                continue
+            if request_id and round_no > 0 and seat_key:
+                keys.add((request_id, round_no, seat_key))
+    # Backward-compatible reconstruction for histories created before the ledger existed.
+    for message in chat.get("messages", []):
+        if message.get("role") != "assistant":
+            continue
+        request_id = str(message.get("request_id") or "").strip()
+        seat = str(message.get("seat_key") or "").strip()
+        if not seat:
+            seat = next((str(s.key) for s in SEATS if s.name == message.get("seat")), "")
+        try:
+            round_no = int(message.get("round"))
+        except (TypeError, ValueError):
+            continue
+        if request_id and seat and round_no > 0:
+            keys.add((request_id, round_no, seat))
+    return keys
+
+
+def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, seat_key: str) -> None:
+    request_id = str(request_id).strip()
+    seat_key = str(seat_key).strip()
+    try:
+        round_no = int(round_no)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Invalid history identity round: {round_no!r}") from exc
+    if not request_id or round_no <= 0 or not seat_key:
+        raise RuntimeError(
+            f"Invalid history identity: request_id={request_id!r}, round={round_no!r}, seat={seat_key!r}"
+        )
+    key = (request_id, round_no, seat_key)
+    existing = _history_identity_keys(chat)
+    if key in existing:
+        raise RuntimeError(f"Duplicate history identity invariant: {key!r}")
+    chat["history_identity_ledger"].append([request_id, round_no, seat_key])
 
 
 def _init_state() -> None:
@@ -51,8 +121,7 @@ def _active_chat() -> dict:
             chat.setdefault("messages", [])
             chat.setdefault("title", "محادثة جديدة")
             chat.setdefault("created_at", _now())
-            chat.setdefault("request_ids", [])
-            chat.setdefault("result_keys", [])
+            _ensure_chat_identity_state(chat)
             return chat
     chat = _new_chat()
     st.session_state.chats.insert(0, chat)
@@ -143,9 +212,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             seat_key = str(result.get("seat") or "")
             result_key = f"{request_id}:{round_no}:{seat_key}"
             result["result_key"] = result_key
-            if result_key in seen_keys:
-                raise RuntimeError(f"Duplicate council result invariant violated: {result_key}")
-            seen_keys.add(result_key)
+            identity_key = (str(request_id), int(round_no), seat_key)
+            if identity_key in seen_keys:
+                raise RuntimeError(f"Duplicate council result invariant violated: {identity_key!r}")
+            _assert_unique_history_identity(chat, request_id, round_no, seat_key)
+            seen_keys.add(identity_key)
             all_results.append(result)
             if result.get("status") == "SUCCESS" and result.get("content"):
                 executed_model = str(result.get("executed_model") or "").strip()
@@ -155,7 +226,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_diagnostics": list(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_diagnostics": list(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
         keys = set(chat.get("result_keys", []))
         keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
         chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
@@ -172,7 +243,7 @@ def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
-                results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id, round_no)
+                results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id="diagnostic", round_no=0)
     return [results[seat.key] for seat in SEATS]
 
 
@@ -332,13 +403,13 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.markdown(f"**{prefix}Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
             if attempted_models:
                 st.caption("Cascade attempts: " + " → ".join(f"`{m}`" for m in attempted_models))
-            attempt_diagnostics = list(message.get("attempt_diagnostics", []) or [])
-            for detail in attempt_diagnostics:
+            for detail in message.get("attempt_diagnostics", []) or []:
                 model = str(detail.get("model") or "").strip()
-                reason = str(detail.get("error") or detail.get("error_class") or "unknown_error").strip()
+                classification = str(detail.get("classification") or detail.get("error_class") or "UNKNOWN_ERROR").strip()
+                reason = str(detail.get("error") or "unknown_error").strip()
                 code = detail.get("status_code")
                 code_text = f" · HTTP {code}" if code else ""
-                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {reason}")
+                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {classification} · {reason}")
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
@@ -369,14 +440,14 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     else:
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write(result.get("error") or "تعذر الحصول على رد رسمي.")
-            attempted = result.get("attempted_models", [])
-        st.write("Attempted models:", ", ".join(attempted) or "none")
-        for detail in result.get("attempt_diagnostics", []) or []:
-            model = str(detail.get("model") or "").strip()
-            reason = str(detail.get("error") or detail.get("error_class") or "unknown_error").strip()
-            code = detail.get("status_code")
-            code_text = f" · HTTP {code}" if code else ""
-            st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {reason}")
+            st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
+            for detail in result.get("attempt_diagnostics", []) or []:
+                model = str(detail.get("model") or "").strip()
+                classification = str(detail.get("classification") or detail.get("error_class") or "UNKNOWN_ERROR").strip()
+                reason = str(detail.get("error") or "unknown_error").strip()
+                code = detail.get("status_code")
+                code_text = f" · HTTP {code}" if code else ""
+                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {classification} · {reason}")
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
@@ -466,11 +537,15 @@ def run_app() -> None:
         if not chat["messages"]:
             chat["title"] = _title_from_prompt(prompt)
         user_message_id = uuid.uuid4().hex
-        chat.setdefault("request_ids", [])
-        chat.setdefault("result_keys", [])
+        request_id = uuid.uuid4().hex
+        _ensure_chat_identity_state(chat)
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
+        chat["request_ids"].append(fingerprint)
+        chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
+        chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now()})
         attachment_context = "\n".join(f"- {a.get('name')} ({a.get('mime')}, {a.get('size', 0)} bytes, sha256={a.get('sha256', '')})" for a in attachments)[:6000]
-        chat["messages"].append({"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "created_at": _now()})
+        request_no = _request_display_number(chat, request_id)
+        chat["messages"].append({"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()})
         if voice_audio is not None:
             chat["messages"][-1].update({"voice": True, "voice_audio_key": user_message_id, "voice_mime": voice_mime})
             st.session_state.voice_audio_store[user_message_id] = voice_audio
@@ -480,7 +555,7 @@ def run_app() -> None:
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
         with st.spinner("المجلس السداسي ينفذ Free API Cascade بالتوازي…"):
-            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, fingerprint)
+            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id)
         st.session_state.last_results = results
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1

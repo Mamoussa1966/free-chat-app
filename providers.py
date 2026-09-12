@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX14"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX14"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -212,23 +212,47 @@ def _sanitize(text: str, secrets: Iterable[str] = ()) -> str:
 
 def _classify(status: Optional[int], body: str) -> str:
     low = str(body or "").lower()
-    if any(x in low for x in ("credit", "balance", "insufficient", "billing", "spending", "payment required", "account suspended", "quota exceeded", "insufficient_quota", "credit_balance_exhausted")):
-        return "billing_or_quota"
+    # Resource/model identity takes precedence over generic quota wording.
+    if status == 404:
+        return "model_not_found_or_invalid" if any(x in low for x in ("model", "not found", "unknown model", "invalid model")) else "http_404_resource_not_found"
+    if status == 429:
+        if any(x in low for x in ("credit", "balance", "insufficient", "billing", "spending", "payment required", "quota exceeded", "insufficient_quota", "credit_balance_exhausted")):
+            return "billing_or_quota"
+        return "http_429_rate_limit_or_quota"
     if status == 401:
         return "http_401_authentication_failed"
     if status == 403:
+        if any(x in low for x in ("credit", "balance", "billing", "spending", "quota")):
+            return "billing_or_quota"
         return "http_403_permission_denied"
-    if status == 404:
-        return "model_not_found_or_invalid" if any(x in low for x in ("model", "not found", "unknown model", "invalid model")) else "http_404_resource_not_found"
     if status == 408:
         return "http_408_timeout"
-    if status == 429:
-        return "http_429_rate_limit_or_quota"
     if status is not None and status >= 500:
         return "provider_server"
     if status is not None and status >= 400:
         return f"http_{status}_provider_request_rejected"
     return "provider_error"
+
+
+def _friendly_error_class(error_class: str) -> str:
+    labels = {
+        "model_not_found_or_invalid": "MODEL_UNAVAILABLE / INVALID_MODEL",
+        "http_404_resource_not_found": "HTTP/API ERROR — RESOURCE_NOT_FOUND",
+        "http_429_rate_limit_or_quota": "RATE_LIMIT_OR_QUOTA",
+        "billing_or_quota": "QUOTA / BILLING",
+        "http_401_authentication_failed": "AUTHENTICATION_ERROR",
+        "http_403_permission_denied": "PERMISSION_ERROR",
+        "http_408_timeout": "TIMEOUT",
+        "provider_server": "PROVIDER_SERVER_ERROR",
+        "network": "NETWORK_ERROR",
+        "timeout": "NETWORK_TIMEOUT",
+        "invalid_response": "INVALID_API_RESPONSE",
+        "empty_response": "EMPTY_API_RESPONSE",
+        "configuration": "CONFIGURATION_ERROR",
+        "not_configured": "NOT_CONFIGURED",
+        "deadline_exceeded": "EXECUTION_DEADLINE",
+    }
+    return labels.get(str(error_class or ""), str(error_class or "UNKNOWN_ERROR"))
 
 
 def _retryable(status: int, body: str) -> bool:
@@ -505,7 +529,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         "error": error,
         "latency": round(time.perf_counter() - started, 3),
         "attempted_models": list(attempted),
-        "attempt_diagnostics": list(attempt_diagnostics or []),
+        "attempt_diagnostics": [dict(x) for x in (attempt_diagnostics or [])],
         "official_authenticated": authenticated,
         "request_id": str(request_id or ""),
         "round": int(round_no),
@@ -548,27 +572,18 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             return result
         except ProviderError as exc:
             last_error = exc
-            will_continue = bool(exc.error_class not in terminal and index < len(candidates) - 1)
             attempt_diagnostics.append({
                 "attempt": index + 1,
-                "model": str(model),
-                "status": "FAILED",
-                "error_class": exc.error_class,
+                "model": executed_model,
                 "status_code": exc.status_code,
+                "error_class": exc.error_class,
+                "classification": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
-                "will_continue": will_continue,
+                "retryable": exc.error_class not in terminal and index < len(candidates) - 1,
             })
             if exc.error_class in terminal or index == len(candidates) - 1:
                 break
 
-    # Every failed API attempt must have a durable structured diagnostic. This is
-    # deliberately checked before returning so a future refactor cannot silently
-    # hide why the cascade advanced from #1/#2 to a later candidate.
-    if len(attempt_diagnostics) != len(attempted):
-        raise ProviderError(
-            f"attempt diagnostics invariant violated: attempts={len(attempted)} diagnostics={len(attempt_diagnostics)}",
-            error_class="attempt_diagnostics_invariant_violation",
-        )
     return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
 
 
