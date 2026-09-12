@@ -115,3 +115,13 @@ def test_result_renderer_never_uses_raw_error_for_auth_probe():
     assert 'result.get("error"' not in source
     assert 'result["error"]' not in source
     main._render_result_line(result)
+
+
+def test_gemini_quota_payload_is_quota_exceeded():
+    body = '{"error":{"code":429,"message":"Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.8-flash","status":"RESOURCE_EXHAUSTED"}}'
+    assert providers._canonical_error_classification(providers._classify(429, body)) == "QUOTA_EXCEEDED"
+
+
+def test_gemini_retry_payload_is_rate_limited_when_no_quota_signal():
+    body = '{"error":{"code":429,"message":"Too many requests. Please retry in 24 seconds.","status":"RESOURCE_EXHAUSTED"}}'
+    assert providers._canonical_error_classification(providers._classify(429, body)) == "RATE_LIMITED"
