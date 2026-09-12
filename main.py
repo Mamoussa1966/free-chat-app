@@ -10,6 +10,7 @@ import time
 import uuid
 
 import streamlit as st
+from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
@@ -24,6 +25,7 @@ MAX_PROMPT_CHARS = 20_000
 MAX_CHAT_MESSAGES = 200
 MAX_REQUEST_IDS = 50
 MAX_WORKERS = 5
+ERROR_DISPLAY_TTL_SECONDS = 60
 
 
 def _now() -> str:
@@ -178,6 +180,69 @@ def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, 
     return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "error": f"class=internal_worker_error; {exc.__class__.__name__}", "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
 
 
+def _history_attempt_summaries(details: list[dict]) -> list[dict]:
+    """Persist only compact, non-sensitive classifications in visible History."""
+    allowed = {
+        "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
+        "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+        "TIMEOUT", "UNKNOWN",
+    }
+    summaries: list[dict] = []
+    for detail in details or []:
+        classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
+        if classification not in allowed:
+            classification = "UNKNOWN"
+        summary = {
+            "attempt": detail.get("attempt"),
+            "model": str(detail.get("model") or "").strip(),
+            "status_code": detail.get("status_code"),
+            "classification": classification,
+            "retryable": bool(detail.get("retryable", False)),
+        }
+        # The timestamp is runtime metadata used only for the 60-second UI TTL.
+        # Do not synthesize it here: real provider attempts stamp it at creation time.
+        if "_display_created_at" in detail:
+            try:
+                summary["created_at_epoch"] = float(detail.get("_display_created_at"))
+            except (TypeError, ValueError):
+                pass
+        summaries.append(summary)
+    return summaries
+
+
+def _attempt_display_remaining(detail: dict, now: float | None = None) -> float:
+    """Return remaining UI visibility time; never expose or mutate raw provider errors."""
+    try:
+        created = float(detail.get("created_at_epoch", 0))
+    except (TypeError, ValueError):
+        return 0.0
+    current = time.time() if now is None else float(now)
+    return max(0.0, ERROR_DISPLAY_TTL_SECONDS - (current - created))
+
+
+def _render_temporary_attempt_diagnostic(detail: dict) -> None:
+    """Render a compact attempt error for 60 seconds, without exposing raw provider payloads."""
+    model = str(detail.get("model") or "").strip()
+    classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
+    code = detail.get("status_code")
+    code_text = f" · HTTP {code}" if code else ""
+    remaining = _attempt_display_remaining(detail)
+    if remaining <= 0:
+        return
+    safe_text = html.escape(
+        f"Attempt #{detail.get('attempt', '?')} · {model} · ❌ FAILED{code_text} · {classification}"
+    )
+    height = 32
+    components_html(
+        f"""<div id=\"attempt-error\" style=\"font-family:sans-serif;font-size:13px;padding:4px 0;\">{safe_text}</div>
+<script>
+const el=document.getElementById('attempt-error');
+setTimeout(()=>{{ if(el) el.remove(); }}, {int(remaining * 1000)});
+</script>""",
+        height=height,
+    )
+
+
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float, request_id: str) -> list[dict]:
     snapshot = _shared_context(chat, exclude_message_id=current_user_message_id)
     results: dict[str, dict] = {}
@@ -226,7 +291,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_diagnostics": list(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_diagnostics": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
         keys = set(chat.get("result_keys", []))
         keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
         chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
@@ -404,12 +469,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             if attempted_models:
                 st.caption("Cascade attempts: " + " → ".join(f"`{m}`" for m in attempted_models))
             for detail in message.get("attempt_diagnostics", []) or []:
-                model = str(detail.get("model") or "").strip()
-                classification = str(detail.get("classification") or detail.get("error_class") or "UNKNOWN_ERROR").strip()
-                reason = str(detail.get("error") or "unknown_error").strip()
-                code = detail.get("status_code")
-                code_text = f" · HTTP {code}" if code else ""
-                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {classification} · {reason}")
+                _render_temporary_attempt_diagnostic(detail)
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
@@ -439,15 +499,14 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         st.caption(result.get("error", ""))
     else:
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
-            st.write(result.get("error") or "تعذر الحصول على رد رسمي.")
+            st.write("Official API request failed; raw provider payload is not shown in the UI.")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
             for detail in result.get("attempt_diagnostics", []) or []:
                 model = str(detail.get("model") or "").strip()
-                classification = str(detail.get("classification") or detail.get("error_class") or "UNKNOWN_ERROR").strip()
-                reason = str(detail.get("error") or "unknown_error").strip()
+                classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
                 code = detail.get("status_code")
                 code_text = f" · HTTP {code}" if code else ""
-                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {classification} · {reason}")
+                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {classification}")
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:

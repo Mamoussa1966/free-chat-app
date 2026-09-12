@@ -24,5 +24,18 @@
 
 ## HOTFIX14 diagnostic hardening
 - Every failed Free-cascade candidate is now recorded as `attempt_diagnostics` with candidate number, exact model, HTTP status when available, stable `error_class`, sanitized error text, and whether the cascade may advance.
-- Failed attempts are persisted into the successful assistant History entry, so the UI can show why #1/#2 failed while still showing the actual executed model.
+- Failed attempts remain detailed in the in-memory runtime result/log path, while visible History persists only compact, non-sensitive classifications (`MODEL_UNAVAILABLE`, `QUOTA_EXCEEDED`, `RATE_LIMITED`, `AUTHENTICATION_ERROR`, `API_ERROR`, `NETWORK_ERROR`, `TIMEOUT`, `UNKNOWN`).
+- Raw provider error payloads, URLs, quota bodies, and credential-bearing diagnostics are not persisted into visible assistant History.
 - No cascade ordering or fallback policy was changed: candidates remain explicit `*_FREE_MODELS` entries and execution stops at the first successful candidate.
+
+## HOTFIX14 diagnostic classification hardening
+- Visible History stores only stable error classifications and compact metadata; raw provider payloads are never copied into History.
+- Canonical classifications are: `MODEL_UNAVAILABLE`, `QUOTA_EXCEEDED`, `RATE_LIMITED`, `AUTHENTICATION_ERROR`, `API_ERROR`, `NETWORK_ERROR`, `TIMEOUT`, and `UNKNOWN`.
+- HTTP 429 quota/billing responses are distinguished from generic rate limiting; model/resource errors are distinguished from generic API failures.
+- Runtime diagnostics retain the detailed sanitized provider error for operational troubleshooting without exposing it in the visible History.
+### HOTFIX14 UI diagnostic hardening — TTL 60s
+- Visible History stores only compact attempt classifications; raw provider payloads/links are excluded.
+- Attempt failure lines are displayed for at most 60 seconds and then removed client-side.
+- Cascade execution, candidate ordering, request identity, and History identity invariants are unchanged.
+- Added regression tests for the 60-second diagnostic TTL and timestamp handling.
+

@@ -28,3 +28,10 @@ ZIP members are validated before release; Python's ZIP documentation warns about
 ## Trust boundary
 
 This is application-level hardening, not an operating-system sandbox. A principal that controls the deployment host, repository, environment, or Streamlit secrets can modify the application. True independent tamper resistance requires a separate trust boundary.
+
+## Error diagnostics contract
+
+- Runtime provider attempts retain detailed sanitized diagnostics for operational troubleshooting.
+- Visible History stores only compact, stable classifications: `MODEL_UNAVAILABLE`, `QUOTA_EXCEEDED`, `RATE_LIMITED`, `AUTHENTICATION_ERROR`, `API_ERROR`, `NETWORK_ERROR`, `TIMEOUT`, `UNKNOWN`.
+- Raw provider JSON, quota payloads, provider URLs, and credential-bearing error text are excluded from visible History.
+- Error classification does not alter Free Cascade ordering or success-stop behavior.

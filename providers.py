@@ -230,29 +230,51 @@ def _classify(status: Optional[int], body: str) -> str:
     if status is not None and status >= 500:
         return "provider_server"
     if status is not None and status >= 400:
+        if any(x in low for x in ("model not found", "unknown model", "invalid model", "model is unavailable", "model unavailable")):
+            return "model_not_found_or_invalid"
         return f"http_{status}_provider_request_rejected"
     return "provider_error"
 
 
+def _canonical_error_classification(error_class: str) -> str:
+    """Map provider-internal error classes to stable UI/history categories."""
+    categories = {
+        "model_not_found_or_invalid": "MODEL_UNAVAILABLE",
+        "http_404_resource_not_found": "API_ERROR",
+        "http_429_rate_limit_or_quota": "RATE_LIMITED",
+        "billing_or_quota": "QUOTA_EXCEEDED",
+        "http_401_authentication_failed": "AUTHENTICATION_ERROR",
+        "http_403_permission_denied": "AUTHENTICATION_ERROR",
+        "http_408_timeout": "TIMEOUT",
+        "provider_server": "API_ERROR",
+        "network": "NETWORK_ERROR",
+        "timeout": "TIMEOUT",
+        "invalid_response": "API_ERROR",
+        "empty_response": "API_ERROR",
+        "configuration": "API_ERROR",
+        "not_configured": "AUTHENTICATION_ERROR",
+        "deadline_exceeded": "TIMEOUT",
+        "execution_identity_mismatch": "API_ERROR",
+        "response_too_large": "API_ERROR",
+    }
+    normalized = str(error_class or "")
+    if normalized.startswith("http_") and normalized.endswith("_provider_request_rejected"):
+        return "API_ERROR"
+    return categories.get(normalized, "UNKNOWN")
+
+
 def _friendly_error_class(error_class: str) -> str:
     labels = {
-        "model_not_found_or_invalid": "MODEL_UNAVAILABLE / INVALID_MODEL",
-        "http_404_resource_not_found": "HTTP/API ERROR — RESOURCE_NOT_FOUND",
-        "http_429_rate_limit_or_quota": "RATE_LIMIT_OR_QUOTA",
-        "billing_or_quota": "QUOTA / BILLING",
-        "http_401_authentication_failed": "AUTHENTICATION_ERROR",
-        "http_403_permission_denied": "PERMISSION_ERROR",
-        "http_408_timeout": "TIMEOUT",
-        "provider_server": "PROVIDER_SERVER_ERROR",
-        "network": "NETWORK_ERROR",
-        "timeout": "NETWORK_TIMEOUT",
-        "invalid_response": "INVALID_API_RESPONSE",
-        "empty_response": "EMPTY_API_RESPONSE",
-        "configuration": "CONFIGURATION_ERROR",
-        "not_configured": "NOT_CONFIGURED",
-        "deadline_exceeded": "EXECUTION_DEADLINE",
+        "MODEL_UNAVAILABLE": "MODEL_UNAVAILABLE",
+        "QUOTA_EXCEEDED": "QUOTA_EXCEEDED",
+        "RATE_LIMITED": "RATE_LIMITED",
+        "AUTHENTICATION_ERROR": "AUTHENTICATION_ERROR",
+        "API_ERROR": "API_ERROR",
+        "NETWORK_ERROR": "NETWORK_ERROR",
+        "TIMEOUT": "TIMEOUT",
+        "UNKNOWN": "UNKNOWN",
     }
-    return labels.get(str(error_class or ""), str(error_class or "UNKNOWN_ERROR"))
+    return labels.get(_canonical_error_classification(error_class), "UNKNOWN")
 
 
 def _retryable(status: int, body: str) -> bool:
@@ -577,9 +599,12 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "model": executed_model,
                 "status_code": exc.status_code,
                 "error_class": exc.error_class,
-                "classification": _friendly_error_class(exc.error_class),
+                "classification": _canonical_error_classification(exc.error_class),
+                "classification_label": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
                 "retryable": exc.error_class not in terminal and index < len(candidates) - 1,
+                # UI-only timestamp; raw provider error remains runtime-only.
+                "_display_created_at": time.time(),
             })
             if exc.error_class in terminal or index == len(candidates) - 1:
                 break
