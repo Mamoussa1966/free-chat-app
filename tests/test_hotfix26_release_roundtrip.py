@@ -20,7 +20,7 @@ def test_release_builder_scrubs_credential_like_environment_variables():
 def test_current_release_version_is_consistent():
     root = Path(__file__).resolve().parents[1]
     version = (root / "VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX27-FINAL"
+    assert version == "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX28-FINAL"
     assert f'VERSION = "{version}"' in (root / "providers.py").read_text(encoding="utf-8")
     assert version in (root / "README.md").read_text(encoding="utf-8")
     assert version in (root / "RELEASE_NOTES.md").read_text(encoding="utf-8")
@@ -41,7 +41,8 @@ def test_all_existing_test_modules_are_preserved_and_new_regression_is_present()
     }
     assert expected_core <= test_names
     assert "test_hotfix26_release_roundtrip.py" in test_names
-    assert len(test_names) == 20
+    assert "test_claude_integration.py" in test_names
+    assert len(test_names) == 21
 
 
 def test_packaged_zip_excludes_runtime_caches(tmp_path):
