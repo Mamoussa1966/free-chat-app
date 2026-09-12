@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX14"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX24-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -211,28 +211,54 @@ def _sanitize(text: str, secrets: Iterable[str] = ()) -> str:
 
 
 def _classify(status: Optional[int], body: str) -> str:
+    """Classify provider failures using stable internal classes.
+
+    Explicit quota/billing exhaustion wins over generic HTTP 429 throttling.
+    In particular, daily quotas such as ``50 requests per day`` are quota
+    exhaustion, not transient rate limiting.
+    """
     low = str(body or "").lower()
-    # Resource/model identity takes precedence over generic quota wording.
-    if status == 404:
-        return "model_not_found_or_invalid" if any(x in low for x in ("model", "not found", "unknown model", "invalid model")) else "http_404_resource_not_found"
-    if status == 429:
-        if any(x in low for x in ("credit", "balance", "insufficient", "billing", "spending", "payment required", "quota exceeded", "insufficient_quota", "credit_balance_exhausted")):
-            return "billing_or_quota"
-        return "http_429_rate_limit_or_quota"
+    model_markers = (
+        "model not found", "model_not_found", "unknown model",
+        "invalid model", "model is not available", "model unavailable",
+        "does not exist", "unsupported model",
+    )
+    quota_markers = (
+        "quota exceeded", "quota_exceeded", "free_tier",
+        "limit: 0", "insufficient_quota", "credit_balance_exhausted", "credit balance exhausted",
+        "daily limit", "per day", "billing account", "payment required",
+        "account suspended", "spending limit", "monthly spending",
+        "free_tier_requests", "free_tier_input_token_count",
+    )
+    rate_markers = (
+        "rate limit", "rate-limit", "ratelimit", "rate_limit",
+        "too many requests", "retry-after", "retry in ",
+        "requests per minute", "requests per second", "rpm", "rps",
+    )
+    if any(x in low for x in model_markers) or (status == 404 and "model" in low):
+        return "model_not_found_or_invalid"
+    if any(x in low for x in quota_markers):
+        return "billing_or_quota"
+    # RESOURCE_EXHAUSTED is ambiguous across providers: treat it as quota
+    # only when no explicit throttling/retry signal is present.
+    if "resource_exhausted" in low and not any(x in low for x in rate_markers):
+        return "billing_or_quota"
     if status == 401:
         return "http_401_authentication_failed"
     if status == 403:
-        if any(x in low for x in ("credit", "balance", "billing", "spending", "quota")):
-            return "billing_or_quota"
+        if any(x in low for x in ("api key", "authentication", "credential", "permission", "unauthorized")):
+            return "http_403_permission_denied"
         return "http_403_permission_denied"
     if status == 408:
         return "http_408_timeout"
+    if status == 429:
+        return "http_429_rate_limit_or_quota"
     if status is not None and status >= 500:
         return "provider_server"
     if status is not None and status >= 400:
-        if any(x in low for x in ("model not found", "unknown model", "invalid model", "model is unavailable", "model unavailable")):
-            return "model_not_found_or_invalid"
         return f"http_{status}_provider_request_rejected"
+    if any(x in low for x in rate_markers):
+        return "http_429_rate_limit_or_quota"
     return "provider_error"
 
 
@@ -282,8 +308,9 @@ def _retryable(status: int, body: str) -> bool:
         return True
     if status != 429:
         return False
-    low = str(body or "").lower()
-    return not any(x in low for x in ("credit", "balance", "insufficient", "monthly spending", "spending limit", "account suspended", "quota exceeded", "insufficient_quota", "credit_balance_exhausted"))
+    # Keep retry policy aligned with the public taxonomy: explicit quota/billing
+    # exhaustion is not transient, while a generic 429 is retryable.
+    return _canonical_error_classification(_classify(status, body)) != "QUOTA_EXCEEDED"
 
 
 def _retry_delay(response: Any, attempt: int) -> float:
@@ -577,7 +604,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
 
     last_error: Optional[ProviderError] = None
     attempt_diagnostics: list[dict] = []
-    terminal = {"not_configured", "configuration", "http_401_authentication_failed", "http_403_permission_denied", "deadline_exceeded"}
+    terminal = {"not_configured", "configuration", "deadline_exceeded"}
     for index, model in enumerate(candidates):
         if deadline is not None and (_remaining(deadline) or 0) <= 0:
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
@@ -606,7 +633,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 # UI-only timestamp; raw provider error remains runtime-only.
                 "_display_created_at": time.time(),
             })
-            if exc.error_class in terminal or index == len(candidates) - 1:
+            if exc.error_class in terminal or _canonical_error_classification(exc.error_class) == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
                 break
 
     return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
@@ -658,6 +685,6 @@ def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Opti
             return {"status": "SUCCESS", "text": text, "error": None, "model": model, "latency": round(time.perf_counter() - started, 3), "attempted_models": attempted}
         except ProviderError as exc:
             last_error = exc
-            if exc.error_class in {"not_configured", "configuration", "http_401_authentication_failed", "http_403_permission_denied"} or index == len(candidates) - 1:
+            if exc.error_class in {"not_configured", "configuration", "deadline_exceeded"} or _canonical_error_classification(exc.error_class) == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
                 break
     return {"status": "FAILED", "text": "", "error": _diagnostic(last_error, key), "model": attempted[-1] if attempted else "", "latency": round(time.perf_counter() - started, 3), "attempted_models": attempted}

@@ -147,7 +147,12 @@ class RepositorySnapshot:
                 rel = path.relative_to(root).as_posix()
                 try:
                     CodeValidator.normalize_path(rel)
-                except ValueError:
+                    if path.is_symlink():
+                        continue
+                    resolved = path.resolve()
+                    if root not in resolved.parents and resolved != root:
+                        continue
+                except (OSError, ValueError):
                     continue
                 yield path
 
@@ -258,3 +263,4 @@ class ApprovalSystem:
             return False
         proposal.state = ProposalState.APPROVED
         return True
+

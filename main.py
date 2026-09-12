@@ -210,6 +210,16 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     return summaries
 
 
+
+def _public_result(result: dict) -> dict:
+    """Return the UI-safe result persisted in session state. Raw provider payloads stay transient."""
+    public = dict(result or {})
+    details = list(public.get("attempt_diagnostics", []) or [])
+    public["attempt_summaries"] = _history_attempt_summaries(details)
+    public.pop("attempt_diagnostics", None)
+    public.pop("error", None)
+    return public
+
 def _attempt_display_remaining(detail: dict, now: float | None = None) -> float:
     """Return remaining UI visibility time; never expose or mutate raw provider errors."""
     try:
@@ -232,12 +242,18 @@ def _render_temporary_attempt_diagnostic(detail: dict) -> None:
     safe_text = html.escape(
         f"Attempt #{detail.get('attempt', '?')} · {model} · ❌ FAILED{code_text} · {classification}"
     )
+    # Streamlit can render several attempt diagnostics in the same page.
+    # Every timer therefore gets a unique DOM id; a shared id would cause
+    # getElementById() to target only the first diagnostic and leave later
+    # errors visible indefinitely.
+    element_id = "attempt-error-" + uuid.uuid4().hex
+    safe_id = html.escape(element_id, quote=True)
     height = 32
     components_html(
-        f"""<div id=\"attempt-error\" style=\"font-family:sans-serif;font-size:13px;padding:4px 0;\">{safe_text}</div>
+        f"""<div id=\"{safe_id}\" style=\"font-family:sans-serif;font-size:13px;padding:4px 0;\">{safe_text}</div>
 <script>
-const el=document.getElementById('attempt-error');
-setTimeout(()=>{{ if(el) el.remove(); }}, {int(remaining * 1000)});
+const el=document.getElementById('{safe_id}');
+if (el) setTimeout(()=>{{ el.remove(); }}, {int(remaining * 1000)});
 </script>""",
         height=height,
     )
@@ -282,7 +298,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                 raise RuntimeError(f"Duplicate council result invariant violated: {identity_key!r}")
             _assert_unique_history_identity(chat, request_id, round_no, seat_key)
             seen_keys.add(identity_key)
-            all_results.append(result)
+            public_result = _public_result(result)
+            all_results.append(public_result)
             if result.get("status") == "SUCCESS" and result.get("content"):
                 executed_model = str(result.get("executed_model") or "").strip()
                 result_model = str(result.get("model") or "").strip()
@@ -291,7 +308,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_diagnostics": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
         keys = set(chat.get("result_keys", []))
         keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
         chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
@@ -323,7 +340,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.caption("API رسمي فقط؛ لا Local Engine ولا نموذج تلقائي.")
         if st.button("🔍 فحص المزودين الخمسة الآن", use_container_width=True):
             with st.spinner("تشخيص المزودين بالتوازي…"):
-                st.session_state.last_diagnostics = _run_provider_diagnostics(credentials, model_candidates)
+                st.session_state.last_diagnostics = [_public_result(r) for r in _run_provider_diagnostics(credentials, model_candidates)]
             st.rerun()
         st.divider()
         chat = _active_chat()
@@ -468,7 +485,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.markdown(f"**{prefix}Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
             if attempted_models:
                 st.caption("Cascade attempts: " + " → ".join(f"`{m}`" for m in attempted_models))
-            for detail in message.get("attempt_diagnostics", []) or []:
+            for detail in message.get("attempt_summaries", []) or []:
                 _render_temporary_attempt_diagnostic(detail)
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
             st.markdown(message.get("content", ""))
@@ -524,12 +541,8 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write("Official API request failed; raw provider payload is not shown in the UI.")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
-            for detail in result.get("attempt_diagnostics", []) or []:
-                model = str(detail.get("model") or "").strip()
-                classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
-                code = detail.get("status_code")
-                code_text = f" · HTTP {code}" if code else ""
-                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {classification}")
+            for detail in result.get("attempt_summaries", []) or []:
+                _render_temporary_attempt_diagnostic(detail)
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
@@ -638,7 +651,7 @@ def run_app() -> None:
         st.session_state.last_diagnostics = []
         with st.spinner("المجلس السداسي ينفذ Free API Cascade بالتوازي…"):
             results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id)
-        st.session_state.last_results = results
+        st.session_state.last_results = [_public_result(r) for r in results]
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1
         st.rerun()
