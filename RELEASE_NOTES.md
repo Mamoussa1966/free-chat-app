@@ -1,6 +1,6 @@
-# HOTFIX27-FINAL
+# HOTFIX28-CLAUDE-INTEGRATION
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX27-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX28-FINAL`
 
 ## Scope
 Built from the preserved full V22.1 release candidate. All existing test modules from the prior preserved baseline remain included; no test module was deleted. `gitops_layer.py` remains outside the application hotfix scope and is unchanged.
@@ -39,3 +39,12 @@ Built from the preserved full V22.1 release candidate. All existing test modules
 
 ## Explicit non-scope
 `gitops_layer.py` remains exploratory/educational. No GitHub Push, PAT, GitHub App, or external repository mutation is performed by this release.
+
+
+## Claude Integration Scope
+1. Claude is aligned with the Gemini architecture/behavior: explicit Free model cascade only, with Anthropic API-specific transport differences.
+2. Removed the Claude-only dynamic discovery/cache path so Claude does not have a separate execution or UI model-selection architecture.
+3. Claude execution remains strictly explicit Free cascade from `CLAUDE_FREE_MODELS` / `ANTHROPIC_FREE_MODELS`.
+4. Added explicit Custom Model input guarded by the Free configuration; no automatic model selection.
+5. Added real HTTP-path regression tests for Claude authentication, quota/rate-limit classification, model-unavailable cascade advancement, successful execution identity, and diagnostic privacy.
+6. Preserved the exact 20-module Golden baseline test set and added Claude-specific regression coverage.

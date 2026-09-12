@@ -13,7 +13,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import SEATS, VERSION as PROVIDER_VERSION, ProviderError, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -389,6 +389,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.last_diagnostics = []
                 st.rerun()
         st.divider()
+        st.divider()
         st.subheader("🔌 الاعتمادات والنماذج")
         for seat in SEATS:
             models = tuple(model_candidates.get(seat.key) or ())
@@ -597,6 +598,10 @@ def run_app() -> None:
     credentials = capture_credentials()
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
+    model_candidates = _claude_execution_candidates(model_candidates)
+    custom_claude = str(st.session_state.get("claude_custom_model") or "").strip()
+    if custom_claude and custom_claude in tuple(model_candidates.get("claude") or ()):
+        model_candidates["claude"] = (custom_claude,) + tuple(m for m in model_candidates["claude"] if m != custom_claude)
     chat = _active_chat()
     st.title("🏛️ AI Council — Six-Room Shared Context Arena")
     st.caption(f"{APP_VERSION} • المستخدم + خمسة مقاعد • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
