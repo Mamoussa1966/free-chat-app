@@ -39,3 +39,10 @@
 - Cascade execution, candidate ordering, request identity, and History identity invariants are unchanged.
 - Added regression tests for the 60-second diagnostic TTL and timestamp handling.
 
+
+
+### Final residual-point closure
+- Removed the remaining UI path that could render a raw provider error during the `AUTHENTICATION_OK_NO_FREE_MODEL` diagnostic state.
+- Provider failures in the visible diagnostic UI now use stable classifications only; raw provider payloads remain runtime-only.
+- Added a regression guard ensuring `_render_result_line` does not directly render `result["error"]` or `result.get("error")`.
+- No changes were made to Free Cascade ordering, fallback policy, model configuration semantics, or request/history identity invariants.

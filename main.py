@@ -488,6 +488,29 @@ def _render_six_rooms(chat: dict, model_candidates: dict, credentials: dict):
     return voice_submission
 
 
+def _result_error_classification(result: dict) -> str:
+    details = result.get("attempt_diagnostics", []) or []
+    for detail in reversed(details):
+        value = str(detail.get("classification") or "").strip().upper()
+        if value in {
+            "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
+            "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+            "TIMEOUT", "UNKNOWN",
+        }:
+            return value
+    raw = str(result.get("error") or "")
+    match = re.search(r"(?:^|[;\s])class=([A-Za-z0-9_:-]+)", raw, flags=re.IGNORECASE)
+    if match:
+        internal = match.group(1)
+        try:
+            from providers import _canonical_error_classification
+            return _canonical_error_classification(internal)
+        except Exception:
+            pass
+    status = result.get("status_code")
+    return "AUTHENTICATION_ERROR" if status in (401, 403) else "UNKNOWN"
+
+
 def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
     if status == "SUCCESS":
@@ -496,7 +519,7 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
         st.warning(f"🟡 {result['label']} — نقطة المصادقة قبلت المفتاح، لكن لا يوجد Free model مُكوّن.")
-        st.caption(result.get("error", ""))
+        st.caption("Classification: AUTHENTICATION_ERROR")
     else:
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write("Official API request failed; raw provider payload is not shown in the UI.")
