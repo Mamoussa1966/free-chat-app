@@ -1,3 +1,4 @@
+import providers
 import unittest
 from unittest.mock import patch
 import requests
@@ -20,3 +21,12 @@ class ProviderRuntimeTests(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
 
 if __name__ == "__main__": unittest.main()
+
+
+def test_404_model_classification_wins_over_quota_wording():
+    assert providers._classify(404, "model not found; quota information unavailable") == "model_not_found_or_invalid"
+
+
+def test_429_distinguishes_rate_limit_from_explicit_quota():
+    assert providers._classify(429, "too many requests") == "http_429_rate_limit_or_quota"
+    assert providers._classify(429, "quota exceeded") == "billing_or_quota"
