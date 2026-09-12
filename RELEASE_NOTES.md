@@ -1,11 +1,14 @@
 # V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX14
 
-- Preserves the complete prior project and regression suite.
-- Keeps the strict Free-only contract: no Local Engine, no paid fallback, and no implicit model selection.
-- Keeps authoritative executed_model identity and ordered Free Cascade behavior.
-- Adds durable request/history identity: every new request receives a unique request_id and monotonically increasing Request number.
-- Displays Request N · Round M in AI rooms so separate requests with the same round number cannot be mistaken for duplicate execution.
-- Enforces (request_id, round, seat) uniqueness against the entire retained chat history, not only a local per-run seen set.
-- Keeps idempotency fingerprinting separate from request identity.
-- Preserves last_results as the latest request result set while History retains request-scoped identities.
-- Release is validated with syntax checks, the full test suite, ZIP integrity checks, and stale-version detection.
+- Preserves the complete HOTFIX9 project and test suite.
+- Fixes the remaining Secrets precedence edge case: an explicitly present Streamlit Secret, including an empty value, is authoritative and cannot be replaced by an Environment Variable for the same key.
+- Keeps the strict Free-only contract: no implicit provider model defaults, no Local Engine, and no paid fallback.
+- Keeps Unicode mobile separators, deduplication, and the hard limit of 10 configured models per provider.
+- Adds regression coverage for explicit-empty Secret precedence and live model-list changes.
+- Release is built only after syntax validation, full unittest/pytest execution, ZIP integrity validation, and manifest/hash generation.
+
+## Hotfix 13
+- Preserved the complete Hotfix 12 test suite.
+- Added authoritative `executed_model` identity.
+- Added fail-closed UI identity checks.
+- Added regression tests preventing cascade skips such as #1 → #3.

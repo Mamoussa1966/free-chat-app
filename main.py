@@ -14,7 +14,7 @@ import streamlit as st
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
-APP_VERSION = PROVIDER_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX14"
+APP_VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HARDENED-HOTFIX14"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -31,7 +31,7 @@ def _now() -> str:
 
 
 def _new_chat() -> dict:
-    return {"id": uuid.uuid4().hex, "title": "محادثة جديدة", "created_at": _now(), "messages": [], "request_ids": [], "request_fingerprints": [], "request_counter": 0, "result_keys": []}
+    return {"id": uuid.uuid4().hex, "title": "محادثة جديدة", "created_at": _now(), "messages": [], "request_ids": [], "result_keys": []}
 
 
 def _init_state() -> None:
@@ -52,8 +52,6 @@ def _active_chat() -> dict:
             chat.setdefault("title", "محادثة جديدة")
             chat.setdefault("created_at", _now())
             chat.setdefault("request_ids", [])
-            chat.setdefault("request_fingerprints", [])
-            chat.setdefault("request_counter", 0)
             chat.setdefault("result_keys", [])
             return chat
     chat = _new_chat()
@@ -130,7 +128,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     return [results[seat.key] for seat in SEATS]
 
 
-def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str, request_number: int) -> list[dict]:
+def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
     deadline = time.monotonic() + MAX_EXECUTION_SECONDS
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
@@ -141,21 +139,13 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         seen_keys = set()
         for result in round_results:
             result["request_id"] = request_id
-            result["request_number"] = int(request_number)
             result["round"] = round_no
             seat_key = str(result.get("seat") or "")
             result_key = f"{request_id}:{round_no}:{seat_key}"
             result["result_key"] = result_key
             if result_key in seen_keys:
                 raise RuntimeError(f"Duplicate council result invariant violated: {result_key}")
-            persistent_keys = set(str(k) for k in (chat.get("result_keys") or []) if str(k))
-            if result_key in persistent_keys:
-                raise RuntimeError(f"History result uniqueness invariant violated: {result_key}")
             seen_keys.add(result_key)
-            # Durable reservation: record the identity before mutating History.
-            # If Streamlit reruns after a partial failure, the same request/round/seat
-            # cannot be appended a second time. Failing closed is intentional.
-            chat.setdefault("result_keys", []).append(result_key)
             all_results.append(result)
             if result.get("status") == "SUCCESS" and result.get("content"):
                 executed_model = str(result.get("executed_model") or "").strip()
@@ -165,10 +155,10 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "request_id": request_id, "request_number": int(request_number), "result_key": result_key, "created_at": _now()})
-        # result_keys were durably reserved above; keep insertion order and remove
-        # accidental duplicates defensively without truncating the identity ledger.
-        chat["result_keys"] = list(dict.fromkeys(str(k) for k in (chat.get("result_keys") or []) if str(k)))
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_diagnostics": list(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+        keys = set(chat.get("result_keys", []))
+        keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
+        chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
         chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
     return all_results
 
@@ -336,9 +326,19 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                 if attempted_models and attempted_models[-1] != executed_model:
                     st.error("⚠️ Cascade identity mismatch: آخر محاولة لا تطابق النموذج المنفذ.")
                     continue
-            st.markdown(f"**Request {message.get('request_number', '?')} · Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
+            request_id = str(message.get("request_id") or "").strip()
+            request_no = _request_display_number(chat, request_id) if request_id else None
+            prefix = f"Request {request_no} · " if request_no is not None else ""
+            st.markdown(f"**{prefix}Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
             if attempted_models:
                 st.caption("Cascade attempts: " + " → ".join(f"`{m}`" for m in attempted_models))
+            attempt_diagnostics = list(message.get("attempt_diagnostics", []) or [])
+            for detail in attempt_diagnostics:
+                model = str(detail.get("model") or "").strip()
+                reason = str(detail.get("error") or detail.get("error_class") or "unknown_error").strip()
+                code = detail.get("status_code")
+                code_text = f" · HTTP {code}" if code else ""
+                st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {reason}")
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
@@ -360,8 +360,7 @@ def _render_six_rooms(chat: dict, model_candidates: dict, credentials: dict):
 def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
     if status == "SUCCESS":
-        identity = f"Request {result.get('request_number', '?')} · Round {result.get('round', '?')}" if result.get("request_id") else f"Round {result.get('round', '?')}"
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — {identity} — Official API — `{(result.get('executed_model') or result.get('model', ''))}` — {result['latency']}s")
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{(result.get('executed_model') or result.get('model', ''))}` — {result['latency']}s")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
@@ -370,7 +369,14 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     else:
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write(result.get("error") or "تعذر الحصول على رد رسمي.")
-            st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
+            attempted = result.get("attempted_models", [])
+        st.write("Attempted models:", ", ".join(attempted) or "none")
+        for detail in result.get("attempt_diagnostics", []) or []:
+            model = str(detail.get("model") or "").strip()
+            reason = str(detail.get("error") or detail.get("error_class") or "unknown_error").strip()
+            code = detail.get("status_code")
+            code_text = f" · HTTP {code}" if code else ""
+            st.caption(f"Attempt #{detail.get('attempt', '?')} · `{model}` · ❌ FAILED{code_text} · {reason}")
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
@@ -454,23 +460,17 @@ def run_app() -> None:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
         fingerprint = _request_fingerprint(prompt, attachments)
-        chat.setdefault("request_ids", [])
-        chat.setdefault("request_fingerprints", [])
-        chat.setdefault("request_counter", 0)
-        chat.setdefault("result_keys", [])
-        if fingerprint in chat.get("request_fingerprints", []):
+        if fingerprint in chat.get("request_ids", []):
             st.warning("تم تجاهل طلب مكرر مطابق تمامًا لطلب أُرسل في هذه المحادثة.")
             return
-        request_id = uuid.uuid4().hex
-        chat["request_counter"] = int(chat.get("request_counter", 0) or 0) + 1
-        request_number = chat["request_counter"]
-        chat["request_ids"] = (chat.get("request_ids") or [])[-MAX_REQUEST_IDS:] + [request_id]
-        chat["request_fingerprints"] = (chat.get("request_fingerprints") or [])[-MAX_REQUEST_IDS:] + [fingerprint]
         if not chat["messages"]:
             chat["title"] = _title_from_prompt(prompt)
         user_message_id = uuid.uuid4().hex
+        chat.setdefault("request_ids", [])
+        chat.setdefault("result_keys", [])
+        chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
         attachment_context = "\n".join(f"- {a.get('name')} ({a.get('mime')}, {a.get('size', 0)} bytes, sha256={a.get('sha256', '')})" for a in attachments)[:6000]
-        chat["messages"].append({"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_number": request_number, "created_at": _now()})
+        chat["messages"].append({"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "created_at": _now()})
         if voice_audio is not None:
             chat["messages"][-1].update({"voice": True, "voice_audio_key": user_message_id, "voice_mime": voice_mime})
             st.session_state.voice_audio_store[user_message_id] = voice_audio
@@ -480,7 +480,7 @@ def run_app() -> None:
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
         with st.spinner("المجلس السداسي ينفذ Free API Cascade بالتوازي…"):
-            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id, request_number)
+            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, fingerprint)
         st.session_state.last_results = results
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1

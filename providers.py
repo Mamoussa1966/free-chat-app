@@ -491,9 +491,25 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
     return text
 
 
-def _result(seat: Seat, status: str, model: str, content: str, error: Optional[str], started: float, attempted: list[str], authenticated: bool = False, request_id: str = "", round_no: int = 0) -> dict:
+def _result(seat: Seat, status: str, model: str, content: str, error: Optional[str], started: float, attempted: list[str], authenticated: bool = False, request_id: str = "", round_no: int = 0, attempt_diagnostics: Optional[list[dict]] = None) -> dict:
     normalized_model = str(model or "").strip()
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": status, "mode": "official", "model": normalized_model, "executed_model": normalized_model, "content": content, "error": error, "latency": round(time.perf_counter() - started, 3), "attempted_models": list(attempted), "official_authenticated": authenticated, "request_id": str(request_id or ""), "round": int(round_no)}
+    return {
+        "seat": seat.key,
+        "name": seat.name,
+        "label": seat.label,
+        "status": status,
+        "mode": "official",
+        "model": normalized_model,
+        "executed_model": normalized_model,
+        "content": content,
+        "error": error,
+        "latency": round(time.perf_counter() - started, 3),
+        "attempted_models": list(attempted),
+        "attempt_diagnostics": list(attempt_diagnostics or []),
+        "official_authenticated": authenticated,
+        "request_id": str(request_id or ""),
+        "round": int(round_no),
+    }
 
 
 def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) -> str:
@@ -514,6 +530,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         return _result(seat, "FAILED", candidates[0], "", "class=not_configured; No official credential configured.", started, attempted, request_id=request_id, round_no=round_no)
 
     last_error: Optional[ProviderError] = None
+    attempt_diagnostics: list[dict] = []
     terminal = {"not_configured", "configuration", "http_401_authentication_failed", "http_403_permission_denied", "deadline_exceeded"}
     for index, model in enumerate(candidates):
         if deadline is not None and (_remaining(deadline) or 0) <= 0:
@@ -523,7 +540,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         try:
             executed_model = str(model or "").strip()
             content = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
-            result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no)
+            result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
             if result.get("attempted_models") and result["attempted_models"][-1] != executed_model:
@@ -531,10 +548,28 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             return result
         except ProviderError as exc:
             last_error = exc
+            will_continue = bool(exc.error_class not in terminal and index < len(candidates) - 1)
+            attempt_diagnostics.append({
+                "attempt": index + 1,
+                "model": str(model),
+                "status": "FAILED",
+                "error_class": exc.error_class,
+                "status_code": exc.status_code,
+                "error": _diagnostic(exc, credential),
+                "will_continue": will_continue,
+            })
             if exc.error_class in terminal or index == len(candidates) - 1:
                 break
 
-    return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no)
+    # Every failed API attempt must have a durable structured diagnostic. This is
+    # deliberately checked before returning so a future refactor cannot silently
+    # hide why the cascade advanced from #1/#2 to a later candidate.
+    if len(attempt_diagnostics) != len(attempted):
+        raise ProviderError(
+            f"attempt diagnostics invariant violated: attempts={len(attempted)} diagnostics={len(attempt_diagnostics)}",
+            error_class="attempt_diagnostics_invariant_violation",
+        )
+    return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
 
 
 def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:
