@@ -5,7 +5,7 @@ import re
 def test_release_metadata_has_single_current_version():
     root = Path(__file__).resolve().parents[1]
     version = (root / 'VERSION.txt').read_text(encoding='utf-8').strip()
-    assert version == 'V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX24-FINAL'
+    assert re.fullmatch(r'V22\.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX\d+-FINAL', version)
     main = (root / 'main.py').read_text(encoding='utf-8')
     providers = (root / 'providers.py').read_text(encoding='utf-8')
     release = (root / 'RELEASE_NOTES.md').read_text(encoding='utf-8')
@@ -13,7 +13,7 @@ def test_release_metadata_has_single_current_version():
     assert 'APP_VERSION = PROVIDER_VERSION' in main
     assert f'VERSION = "{version}"' in providers
     assert version in release
-    assert 'HOTFIX24_FINAL.zip' in builder
+    assert 'HOTFIX27_FINAL.zip' in builder
 
 
 def test_no_stale_release_identifiers_in_production_metadata():

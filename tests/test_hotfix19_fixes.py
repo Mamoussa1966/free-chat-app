@@ -24,7 +24,7 @@ def test_build_release_has_isolated_sandbox_and_environment_scrubbing():
 def test_release_preserves_all_current_test_files():
     root = Path(__file__).resolve().parents[1]
     test_files = sorted((root / "tests").glob("test_*.py"))
-    assert len(test_files) == 19
+    assert len(test_files) == 20
     assert "test_hotfix17_fixes.py" in {p.name for p in test_files}
     assert "test_hotfix18_fixes.py" in {p.name for p in test_files}
     assert "test_hotfix19_fixes.py" in {p.name for p in test_files}
