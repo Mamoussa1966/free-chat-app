@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX33-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX34-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -230,11 +230,14 @@ def _classify(status: Optional[int], body: str) -> str:
         "daily limit", "per day", "billing account", "payment required",
         "account suspended", "spending limit", "monthly spending",
         "free_tier_requests", "free_tier_input_token_count",
+        "insufficient balance", "insufficient_balance", "credits exhausted",
+        "credit exhausted", "no credits", "credit_limit", "billing_error",
     )
     rate_markers = (
         "rate limit", "rate-limit", "ratelimit", "rate_limit",
         "too many requests", "retry-after", "retry in ",
         "requests per minute", "requests per second", "rpm", "rps",
+        "rate_limit_exceeded", "rate limit exceeded",
     )
     if any(x in low for x in model_markers) or (status == 404 and "model" in low):
         return "model_not_found_or_invalid"
@@ -242,9 +245,12 @@ def _classify(status: Optional[int], body: str) -> str:
     # HTTP 400. Treat explicit credential language as authentication failure
     # so the cascade stops exactly like the Gemini/Claude contract.
     auth_markers = (
-        "incorrect api key", "invalid api key", "invalid xai api key",
-        "invalid authorization", "invalid token", "invalid credential",
-        "missing api key", "api key is invalid", "authentication failed",
+        "incorrect api key", "incorrect_api_key", "invalid api key",
+        "invalid_api_key", "invalid xai api key", "invalid_xai_api_key",
+        "api_key_invalid", "invalid authorization", "invalid_authorization",
+        "invalid token", "invalid_token", "invalid credential",
+        "invalid_credential", "missing api key", "missing_api_key",
+        "api key is invalid", "authentication failed", "authentication_error",
         "unauthorized",
     )
     if any(x in low for x in auth_markers):
@@ -263,6 +269,8 @@ def _classify(status: Optional[int], body: str) -> str:
         return "http_403_permission_denied"
     if status == 408:
         return "http_408_timeout"
+    if status == 402:
+        return "billing_or_quota"
     if status == 429:
         return "http_429_rate_limit_or_quota"
     if status is not None and status >= 500:
@@ -282,6 +290,9 @@ def _canonical_error_classification(error_class: str) -> str:
         "http_429_rate_limit_or_quota": "RATE_LIMITED",
         "billing_or_quota": "QUOTA_EXCEEDED",
         "http_401_authentication_failed": "AUTHENTICATION_ERROR",
+        "invalid_api_key": "AUTHENTICATION_ERROR",
+        "invalid_authorization": "AUTHENTICATION_ERROR",
+        "authentication_error": "AUTHENTICATION_ERROR",
         "http_403_permission_denied": "AUTHENTICATION_ERROR",
         "http_408_timeout": "TIMEOUT",
         "provider_server": "API_ERROR",
@@ -294,6 +305,8 @@ def _canonical_error_classification(error_class: str) -> str:
         "deadline_exceeded": "TIMEOUT",
         "execution_identity_mismatch": "API_ERROR",
         "response_too_large": "API_ERROR",
+        "provider_error": "API_ERROR",
+        "provider": "API_ERROR",
     }
     normalized = str(error_class or "")
     if normalized.startswith("http_") and normalized.endswith("_provider_request_rejected"):
