@@ -20,8 +20,8 @@ def _response(status, text, payload=None, headers=None):
     return Response()
 
 
-def _success(text="GROK_OK", model="grok-good"):
-    payload = {"id": "resp_test", "object": "response", "model": model, "output_text": text, "output": []}
+def _success(text="GROK_OK"):
+    payload = {"id": "resp_test", "object": "response", "output_text": text, "output": []}
     return _response(200, str(payload), payload)
 
 
@@ -43,7 +43,7 @@ def test_grok_uses_only_explicit_candidates_no_discovery():
 def test_grok_400_incorrect_api_key_is_authentication_error_and_stops():
     responses = [
         _response(400, '{"error":{"message":"incorrect API key provided"}}'),
-        _success("SHOULD_NOT_RUN", "grok-b"),
+        _success("SHOULD_NOT_RUN"),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-a", "grok-b"))
@@ -65,7 +65,7 @@ def test_grok_401_stops_cascade():
 def test_grok_model_unavailable_advances_to_next_model():
     responses = [
         _response(404, '{"error":{"message":"model not found"}}'),
-        _success(model="grok-good"),
+        _success(),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-old", "grok-good"))
@@ -79,7 +79,7 @@ def test_grok_429_rate_limit_advances_with_retry_policy():
     responses = [
         _response(429, '{"error":{"message":"too many requests"}}', headers={"Retry-After": "0"}),
         _response(429, '{"error":{"message":"too many requests"}}', headers={"Retry-After": "0"}),
-        _success(model="grok-b"),
+        _success(),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-a", "grok-b"))
@@ -99,7 +99,7 @@ def test_grok_quota_or_credit_exhaustion_is_not_transient_rate_limit():
 
 
 def test_grok_success_records_exact_executed_model_and_response_text():
-    with patch("providers.requests.post", return_value=_success("GROK_OK", "grok-4-free")) as post:
+    with patch("providers.requests.post", return_value=_success("GROK_OK")) as post:
         result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-4-free",))
     assert post.call_count == 1
     assert result["status"] == "SUCCESS"

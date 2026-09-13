@@ -1,10 +1,14 @@
 import unittest
 from unittest.mock import patch
-from providers import MAX_MODELS_PER_SEAT, SEATS, ProviderError, _classify, _parse_models, _retry_delay, _sanitize, call_seat, get_model_candidates
+from providers import MAX_AGENTS, MAX_MODELS_PER_SEAT, SEATS, get_seats, ProviderError, _classify, _parse_models, _retry_delay, _sanitize, call_seat, get_model_candidates
 
 class CoreTests(unittest.TestCase):
     def test_core_provider_seats(self):
         self.assertEqual([s.key for s in SEATS], ["openai", "gemini", "claude", "grok", "kimi", "deepseek"])
+    def test_builtin_agents_remain_canonical_and_dynamic_limit_is_twenty(self):
+        self.assertEqual([s.key for s in SEATS], ["openai", "gemini", "claude", "grok", "kimi", "deepseek"])
+        self.assertLessEqual(len(get_seats()), MAX_AGENTS)
+
     def test_model_parser_caps(self):
         self.assertEqual(len(_parse_models(",".join(f"m{i}" for i in range(20)))), MAX_MODELS_PER_SEAT)
     def test_model_candidates_empty_without_setting(self):
@@ -12,8 +16,8 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(get_model_candidates(SEATS[0]), ())
 
     def test_unicode_mobile_separators_are_normalized(self):
-        raw = "gemini-a،gemini-b，gemini-c؛gemini-d"
-        self.assertEqual(_parse_models(raw), ("gemini-a", "gemini-b", "gemini-c", "gemini-d"))
+        raw = "gemini-a‚gemini-b،gemini-c，gemini-d؛gemini-e"
+        self.assertEqual(_parse_models(raw), ("gemini-a", "gemini-b", "gemini-c", "gemini-d", "gemini-e"))
 
     def test_model_candidates_are_explicit_and_capped(self):
         configured = ",".join(f"model-{i}" for i in range(1, 13))
