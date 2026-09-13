@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX37-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX38-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -50,6 +50,7 @@ SEATS = (
     Seat("claude", "Claude", "🔑 Claude", ("ANTHROPIC_API_KEY",), ("ANTHROPIC_FREE_MODELS", "CLAUDE_FREE_MODELS"), "https://api.anthropic.com/v1/messages", "anthropic"),
     Seat("grok", "Grok", "🔑 Grok", ("XAI_API_KEY", "GROK_API_KEY"), ("GROK_FREE_MODELS", "XAI_FREE_MODELS"), "https://api.x.ai/v1/responses", "xai_responses"),
     Seat("kimi", "Kimi", "🔑 Kimi", ("KIMI_API_KEY", "MOONSHOT_API_KEY"), ("KIMI_FREE_MODELS", "MOONSHOT_FREE_MODELS"), "https://api.moonshot.ai/v1/chat/completions", "chat_completions"),
+    Seat("deepseek", "DeepSeek", "🔑 DeepSeek", ("DEEPSEEK_API_KEY",), ("DEEPSEEK_FREE_MODELS",), "https://api.deepseek.com/chat/completions", "deepseek_chat"),
 )
 
 
@@ -607,6 +608,24 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 content.append({"type": "input_text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
         text = _openai_text(data)
+
+    elif seat.kind == "deepseek_chat":
+        # DeepSeek official OpenAI-compatible Chat Completions API.
+        # Free eligibility is NEVER inferred here; only explicitly configured
+        # DEEPSEEK_FREE_MODELS are eligible for the project cascade.
+        content = [{"type": "text", "text": prompt}]
+        for att in safe_attachments:
+            if att["omitted"]:
+                content.append({"type": "text", "text": f"Attachment omitted by safety cap: {att['name']}"})
+            elif is_image(att):
+                # The general DeepSeek chat endpoint is text-first; image support
+                # is intentionally not inferred from a model name.
+                content.append({"type": "text", "text": f"Image attachment not sent to DeepSeek chat endpoint: {att['name']}"})
+            else:
+                extracted = extract_text(att)
+                content.append({"type": "text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
+        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
+        text = _chat_text(data)
 
     elif seat.kind == "chat_completions":
         content = [{"type": "text", "text": prompt}]

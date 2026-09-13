@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX37-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX38-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -44,3 +44,9 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Canonicalizes internal/provider error labels before they reach public attempt summaries.
 - Prevents internal classes such as `provider_error` from becoming a visible non-taxonomy value or an avoidable `UNKNOWN`.
 - Preserves Grok authentication terminality, quota/rate-limit semantics, compact History, and the shared Gemini/Claude cascade contract.
+
+## DeepSeek integration
+- Adds an official DeepSeek adapter using `https://api.deepseek.com/chat/completions`.
+- Uses only explicitly configured `DEEPSEEK_FREE_MODELS`; no automatic model selection and no inferred Free entitlement.
+- The current official DeepSeek API documents `deepseek-v4-flash` and `deepseek-v4-pro` as API model IDs; the official pricing page lists them as paid API models. Therefore this release does **not** label those IDs as Free by default. `deepseek-*-free` aliases are not accepted as an official DeepSeek Free catalog unless the provider itself documents them.
+- DeepSeek is not Golden until a real credential/entitlement produces a successful official API test and the full release gate passes.

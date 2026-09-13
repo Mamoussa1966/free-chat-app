@@ -24,7 +24,7 @@ MAX_EXECUTION_SECONDS = 180
 MAX_PROMPT_CHARS = 20_000
 MAX_CHAT_MESSAGES = 200
 MAX_REQUEST_IDS = 50
-MAX_WORKERS = 5
+MAX_WORKERS = 8
 ERROR_DISPLAY_TTL_SECONDS = 60
 
 
@@ -395,7 +395,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             models = tuple(model_candidates.get(seat.key) or ())
             st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}**")
             st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
-        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/5")
+        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(SEATS)}")
         st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
         sources = model_config_sources()
         source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in SEATS)
@@ -495,14 +495,18 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
 
 
 def _render_six_rooms(chat: dict, model_candidates: dict, credentials: dict):
-    rows = [(None, SEATS[0]), (SEATS[1], SEATS[2]), (SEATS[3], SEATS[4])]
+    """Render the user room plus all configured provider seats in a stable 2-column grid."""
+    rooms = [None, *SEATS]
     voice_submission = None
-    for left, right in rows:
+    for index in range(0, len(rooms), 2):
         cols = st.columns(2, gap="medium")
+        left = rooms[index]
+        right = rooms[index + 1] if index + 1 < len(rooms) else None
         with cols[0]:
             voice_submission = _render_user_room(chat, credentials, model_candidates) if left is None else _render_ai_room(chat, left, model_candidates)
         with cols[1]:
-            _render_ai_room(chat, right, model_candidates)
+            if right is not None:
+                _render_ai_room(chat, right, model_candidates)
     return voice_submission
 
 
@@ -609,8 +613,8 @@ def run_app() -> None:
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
-    st.title("🏛️ AI Council — Six-Room Shared Context Arena")
-    st.caption(f"{APP_VERSION} • المستخدم + خمسة مقاعد • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    st.title("🏛️ AI Council — Shared Context Arena")
+    st.caption(f"{APP_VERSION} • المستخدم + {len(SEATS)} مقاعد • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_six_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
@@ -660,7 +664,7 @@ def run_app() -> None:
             fingerprints.add(voice_fingerprint)
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
-        with st.spinner("المجلس السداسي ينفذ Free API Cascade بالتوازي…"):
+        with st.spinner("المجلس ينفذ Free API Cascade بالتوازي…"):
             results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id)
         st.session_state.last_results = [_public_result(r) for r in results]
         st.session_state.folder_nonce += 1
