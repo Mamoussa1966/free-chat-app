@@ -143,3 +143,26 @@ def test_grok_uses_same_shared_call_seat_path_as_gemini_and_claude():
     assert GROK.kind == "xai_responses"
     assert GROK.endpoint == "https://api.x.ai/v1/responses"
     assert GROK.model_env == ("GROK_FREE_MODELS", "XAI_FREE_MODELS")
+
+
+def test_grok_invalid_api_key_code_and_provider_error_never_fall_to_unknown():
+    assert providers._canonical_error_classification("invalid_api_key") == "AUTHENTICATION_ERROR"
+    assert providers._canonical_error_classification("invalid_api_key") == "AUTHENTICATION_ERROR"
+    assert providers._canonical_error_classification("provider_error") == "API_ERROR"
+
+
+def test_grok_http_402_is_quota_exceeded():
+    response = _response(402, '{"error":{"code":"insufficient_balance","message":"insufficient balance"}}')
+    with patch("providers.requests.post", return_value=response) as post:
+        result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-a", "grok-b"))
+    assert post.call_count == 2
+    assert result["attempt_diagnostics"][0]["classification"] == "QUOTA_EXCEEDED"
+
+
+def test_grok_realistic_invalid_api_key_payload_stops_cascade():
+    response = _response(400, '{"error":{"type":"invalid_api_key","message":"Invalid API key"}}')
+    with patch("providers.requests.post", return_value=response) as post:
+        result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-a", "grok-b"))
+    assert post.call_count == 1
+    assert result["attempted_models"] == ["grok-a"]
+    assert result["attempt_diagnostics"][0]["classification"] == "AUTHENTICATION_ERROR"
