@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX40-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX42-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -50,3 +50,8 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Uses only explicitly configured `DEEPSEEK_FREE_MODELS`; no automatic model selection and no inferred Free entitlement.
 - The current official DeepSeek API documents `deepseek-v4-flash` and `deepseek-v4-pro` as API model IDs; the official pricing page lists them as paid API models. Therefore this release does **not** label those IDs as Free by default. `deepseek-*-free` aliases are not accepted as an official DeepSeek Free catalog unless the provider itself documents them.
 - DeepSeek is not Golden until a real credential/entitlement produces a successful official API test and the full release gate passes.
+
+## HOTFIX42 — DeepSeek Secret wiring
+- `DEEPSEEK_API_KEY` is read directly from the live Streamlit Secrets mapping on every app rerun, with environment fallback only when the Secret is absent/empty.
+- `DEEPSEEK_FREE_MODELS` is read through the same Secrets-first configuration path; no implicit catalog is introduced.
+- Credential-source diagnostics expose only `streamlit_secrets`, `environment`, or `missing` — never the credential itself.

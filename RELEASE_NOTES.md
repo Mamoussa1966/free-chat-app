@@ -1,6 +1,6 @@
-# HOTFIX40 FINAL-GROK-ERROR-TAXONOMY
+# HOTFIX42 FINAL-DEEPSEEK-SECRET-WIRING
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX40-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX42-FINAL`
 
 ## Scope
 Grok/xAI is integrated using the same shared provider architecture and behavior contract as Gemini and Claude. Gemini and Claude behavior is unchanged.
@@ -40,9 +40,24 @@ The full preserved test set remains intact: 20 baseline test modules plus Claude
 6. Official DeepSeek documentation currently lists `deepseek-v4-flash`, `deepseek-v4-pro`, and `deepseek-v4-flash-vision-exp` as API IDs; official pricing lists V4 Flash/Pro as paid. This release therefore does not falsely mark any model as Free.
 7. DeepSeek Golden status remains gated on a real official API test; mocked regression tests do not count as real-provider validation.
 
-## HOTFIX40 — Model Identity Attestation
+## Previous Release — Model Identity Attestation
 - Added provider-attested model identity to official responses.
 - DeepSeek/OpenAI-compatible/Anthropic responses use response `model`; Gemini uses official `modelVersion`.
 - A missing or mismatched provider model identity fails closed as `API_ERROR` and cannot be presented as a successful execution.
 - Persisted/UI model identity now requires router/request/provider/executed/displayed identity agreement.
 - Preserved all existing test modules and added `tests/test_model_identity_attestation.py`.
+
+## HOTFIX42 — DeepSeek Secret Runtime
+
+- Hardened exact Streamlit Secret lookup for `DEEPSEEK_API_KEY` using mapping subscription.
+- Preserved Secrets-first precedence over environment variables.
+- Added regression tests for DeepSeek credential loading and precedence.
+- No Gemini, Claude, or Grok provider behavior changed.
+
+
+## HOTFIX42 — DeepSeek Secret wiring
+1. Reaffirmed live Streamlit Secrets mapping lookup for `DEEPSEEK_API_KEY` and `DEEPSEEK_FREE_MODELS`.
+2. Preserved strict Secrets-first precedence; environment variables are used only when the exact Secret is absent/empty.
+3. Added non-secret credential-source diagnostics for deployment troubleshooting.
+4. Added regression coverage proving DeepSeek credential and model configuration are read from Streamlit Secrets and that secrets are never exposed.
+5. Gemini, Claude, and Grok execution behavior is unchanged.

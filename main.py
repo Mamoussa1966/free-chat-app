@@ -13,7 +13,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import SEATS, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, credential_config_sources, transcribe_audio_gemini
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -400,6 +400,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}**")
             st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
         st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(SEATS)}")
+        credential_sources = credential_config_sources()
+        credential_source_text = " • ".join(f"{seat.name}: {credential_sources.get(seat.key, 'missing')}" for seat in SEATS)
+        st.caption(f"مصدر الاعتمادات: {credential_source_text}")
         st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
         sources = model_config_sources()
         source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in SEATS)

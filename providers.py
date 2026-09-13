@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX40-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX42-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -110,8 +110,19 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
     try:
         import streamlit as st
         secrets = st.secrets
-        if name in secrets:
-            return True, _coerce_setting_value(secrets.get(name))
+        # Use mapping subscription rather than relying on a particular
+        # Streamlit Secrets implementation exposing Mapping.get(). This keeps
+        # the exact-key Secrets-first contract reliable in Streamlit Cloud.
+        try:
+            present = name in secrets
+        except Exception:
+            present = False
+        if present:
+            try:
+                raw_value = secrets[name]
+            except Exception:
+                raw_value = None
+            return True, _coerce_setting_value(raw_value)
     except Exception:
         pass
     return False, None
@@ -155,7 +166,22 @@ def get_secret(names: Iterable[str]) -> Optional[str]:
 
 
 def capture_credentials() -> Dict[str, Optional[str]]:
+    """Capture live credentials without caching secret values across reruns."""
     return {seat.key: get_secret(seat.env_names) for seat in SEATS}
+
+
+def credential_config_sources() -> Dict[str, str]:
+    """Return non-secret credential source labels for deployment diagnostics."""
+    sources: Dict[str, str] = {}
+    for seat in SEATS:
+        source = "missing"
+        for name in seat.env_names:
+            value, candidate_source = _read_setting(name)
+            if value:
+                source = candidate_source
+                break
+        sources[seat.key] = source
+    return sources
 
 
 def configured(seat: Seat, credential: Optional[str] = None) -> bool:

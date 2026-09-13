@@ -26,7 +26,7 @@ EXPECTED_TEST_FILES = {
 # Files intentionally changed as part of the provider-parity integration phase.
 # Every other Golden baseline file remains protected. Additional regression
 # modules are retained rather than deleted; the baseline test set is still a
-# mandatory subset of the current 33-module suite.
+# mandatory subset of the current test suite.
 ALLOWED_BASELINE_CHANGES = {
     "main.py", "providers.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
     ".streamlit/secrets.toml.example", "build_release.py",
@@ -236,7 +236,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX40_DEEPSEEK_ADAPTER_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX42_DEEPSEEK_ADAPTER_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()
