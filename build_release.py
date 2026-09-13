@@ -236,7 +236,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX34_GROK_ERROR_TAXONOMY_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX37_GROK_ERROR_TAXONOMY_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()

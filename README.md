@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX34-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX37-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -30,3 +30,17 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Claude uses the same explicit Free-model configuration architecture and cascade behavior as Gemini; no dynamic model discovery path is used.
 - Claude-specific behavior is limited to Anthropic API specifics (endpoint, headers, payload, and response parsing).
 - Execution uses only the explicit `CLAUDE_FREE_MODELS` / `ANTHROPIC_FREE_MODELS` cascade. No paid fallback, Local Engine, or automatic model selection.
+
+- Unexpected adapter exceptions are normalized into the stable error taxonomy instead of escaping the worker and producing an opaque UNKNOWN result with no attempt diagnostics.
+
+## Hotfix 36
+- Hardened xAI/Grok structured error classification using `error.code`, `error.type`, and message fields.
+- xAI documented 403 permission failures are terminal `AUTHENTICATION_ERROR`.
+- Structured model-not-found, rate-limit, billing, and invalid-argument payloads map to the stable taxonomy instead of `UNKNOWN`.
+- No raw provider payload is exposed in UI or History.
+
+
+## Hotfix 37 — final classification hardening
+- Canonicalizes internal/provider error labels before they reach public attempt summaries.
+- Prevents internal classes such as `provider_error` from becoming a visible non-taxonomy value or an avoidable `UNKNOWN`.
+- Preserves Grok authentication terminality, quota/rate-limit semantics, compact History, and the shared Gemini/Claude cascade contract.

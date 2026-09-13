@@ -13,7 +13,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, VERSION as PROVIDER_VERSION, ProviderError, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import SEATS, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -189,7 +189,7 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     }
     summaries: list[dict] = []
     for detail in details or []:
-        classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
+        classification = _canonical_error_classification(str(detail.get("classification") or "UNKNOWN"))
         if classification not in allowed:
             classification = "UNKNOWN"
         summary = {

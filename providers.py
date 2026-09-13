@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX34-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX37-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -50,6 +50,22 @@ SEATS = (
     Seat("claude", "Claude", "🔑 Claude", ("ANTHROPIC_API_KEY",), ("ANTHROPIC_FREE_MODELS", "CLAUDE_FREE_MODELS"), "https://api.anthropic.com/v1/messages", "anthropic"),
     Seat("grok", "Grok", "🔑 Grok", ("XAI_API_KEY", "GROK_API_KEY"), ("GROK_FREE_MODELS", "XAI_FREE_MODELS"), "https://api.x.ai/v1/responses", "xai_responses"),
     Seat("kimi", "Kimi", "🔑 Kimi", ("KIMI_API_KEY", "MOONSHOT_API_KEY"), ("KIMI_FREE_MODELS", "MOONSHOT_FREE_MODELS"), "https://api.moonshot.ai/v1/chat/completions", "chat_completions"),
+)
+
+
+ERROR_CLASS_MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+ERROR_CLASS_QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
+ERROR_CLASS_RATE_LIMITED = "RATE_LIMITED"
+ERROR_CLASS_AUTHENTICATION_ERROR = "AUTHENTICATION_ERROR"
+ERROR_CLASS_API_ERROR = "API_ERROR"
+ERROR_CLASS_NETWORK_ERROR = "NETWORK_ERROR"
+ERROR_CLASS_TIMEOUT = "TIMEOUT"
+ERROR_CLASS_UNKNOWN = "UNKNOWN"
+ERROR_CLASSES = (
+    ERROR_CLASS_MODEL_UNAVAILABLE, ERROR_CLASS_QUOTA_EXCEEDED,
+    ERROR_CLASS_RATE_LIMITED, ERROR_CLASS_AUTHENTICATION_ERROR,
+    ERROR_CLASS_API_ERROR, ERROR_CLASS_NETWORK_ERROR,
+    ERROR_CLASS_TIMEOUT, ERROR_CLASS_UNKNOWN,
 )
 
 
@@ -219,10 +235,30 @@ def _classify(status: Optional[int], body: str) -> str:
     exhaustion, not transient rate limiting.
     """
     low = str(body or "").lower()
+    # xAI can return structured error payloads such as
+    # {"error":{"code":"...","type":"...","message":"..."}}.
+    # Flatten the common structured fields before applying marker rules so a
+    # provider-specific error code cannot collapse into UNKNOWN merely because
+    # the prose message changed.
+    structured = ""
+    try:
+        import json
+        parsed = json.loads(str(body or ""))
+        err = parsed.get("error") if isinstance(parsed, dict) else None
+        if isinstance(err, dict):
+            structured = " ".join(
+                str(err.get(key) or "") for key in ("code", "type", "status", "message", "detail")
+            ).lower()
+    except Exception:
+        structured = ""
+    low = f"{low} {structured}".strip()
+
     model_markers = (
         "model not found", "model_not_found", "unknown model",
-        "invalid model", "model is not available", "model unavailable", "model is not available", "not available",
-        "does not exist", "unsupported model",
+        "invalid model", "model is not available", "model unavailable", "not available",
+        "does not exist", "unsupported model", "model_id_invalid",
+        "model_not_available", "unknown_model", "invalid_model",
+        "model_not_found_or_invalid", "model_access_denied",
     )
     quota_markers = (
         "quota exceeded", "quota_exceeded", "free_tier",
@@ -249,7 +285,7 @@ def _classify(status: Optional[int], body: str) -> str:
         "invalid_api_key", "invalid xai api key", "invalid_xai_api_key",
         "api_key_invalid", "invalid authorization", "invalid_authorization",
         "invalid token", "invalid_token", "invalid credential",
-        "invalid_credential", "missing api key", "missing_api_key",
+        "invalid_credential", "invalid api credential", "invalid_api_credential", "missing api key", "missing_api_key",
         "api key is invalid", "authentication failed", "authentication_error",
         "unauthorized",
     )
@@ -264,8 +300,8 @@ def _classify(status: Optional[int], body: str) -> str:
     if status == 401:
         return "http_401_authentication_failed"
     if status == 403:
-        if any(x in low for x in ("api key", "authentication", "credential", "permission", "unauthorized")):
-            return "http_403_permission_denied"
+        # xAI documents 403 as key/team permission or blocking failure. It is
+        # terminal for this credential, so normalize it as authentication.
         return "http_403_permission_denied"
     if status == 408:
         return "http_408_timeout"
@@ -308,7 +344,10 @@ def _canonical_error_classification(error_class: str) -> str:
         "provider_error": "API_ERROR",
         "provider": "API_ERROR",
     }
-    normalized = str(error_class or "")
+    normalized = str(error_class or "").strip().upper()
+    if normalized in ERROR_CLASSES:
+        return normalized
+    normalized = str(error_class or "").strip()
     if normalized.startswith("http_") and normalized.endswith("_provider_request_rejected"):
         return "API_ERROR"
     return categories.get(normalized, "UNKNOWN")
@@ -611,7 +650,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
                 "attempt": d.get("attempt"),
                 "model": str(d.get("model") or "").strip(),
                 "status_code": d.get("status_code"),
-                "classification": str(d.get("classification") or "UNKNOWN").strip().upper(),
+                "classification": _canonical_error_classification(str(d.get("classification") or "UNKNOWN")),
                 "retryable": bool(d.get("retryable", False)),
                 **({"created_at_epoch": float(d.get("_display_created_at"))} if d.get("_display_created_at") is not None else {}),
             }
@@ -659,19 +698,45 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             return result
         except ProviderError as exc:
             last_error = exc
+            classification = _canonical_error_classification(exc.error_class)
             attempt_diagnostics.append({
                 "attempt": index + 1,
                 "model": executed_model,
                 "status_code": exc.status_code,
                 "error_class": exc.error_class,
-                "classification": _canonical_error_classification(exc.error_class),
+                "classification": classification,
                 "classification_label": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
-                "retryable": exc.error_class not in terminal and index < len(candidates) - 1,
+                "retryable": exc.error_class not in terminal and classification != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
                 # UI-only timestamp; raw provider error remains runtime-only.
                 "_display_created_at": time.time(),
             })
-            if exc.error_class in terminal or _canonical_error_classification(exc.error_class) == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
+            if exc.error_class in terminal or classification == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
+                break
+        except Exception as exc:
+            # Provider adapters must fail closed into the stable taxonomy rather
+            # than escaping to the Streamlit worker as an opaque NameError/
+            # TypeError/requests implementation exception.  This is especially
+            # important for xAI because SDK/HTTP-shape changes must still produce
+            # a visible, compact classification and preserve cascade semantics.
+            text = _sanitize(str(exc), (credential or "",))
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            internal = _classify(status_code, text)
+            normalized = _canonical_error_classification(internal)
+            wrapped = ProviderError(text or exc.__class__.__name__, status_code, internal)
+            last_error = wrapped
+            attempt_diagnostics.append({
+                "attempt": index + 1,
+                "model": executed_model,
+                "status_code": status_code,
+                "error_class": internal,
+                "classification": normalized,
+                "classification_label": _friendly_error_class(internal),
+                "error": _diagnostic(wrapped, credential),
+                "retryable": normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
+                "_display_created_at": time.time(),
+            })
+            if normalized == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
                 break
 
     return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
