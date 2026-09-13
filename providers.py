@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX38-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX39-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -157,9 +157,9 @@ def configured_count(credentials: Optional[Dict[str, Optional[str]]] = None) -> 
 def _parse_models(raw: str) -> Tuple[str, ...]:
     values: list[str] = []
     seen: set[str] = set()
-    # Accept common Unicode comma/semicolon variants so mobile keyboards
-    # cannot silently turn a valid cascade into one malformed model id.
-    separators = r"[,;\n\r\u060c\u061b\u201a\uff0c]"
+    # Accept only explicit ASCII comma/semicolon/newline separators.
+    # Unicode punctuation is rejected to prevent silent model-ID corruption.
+    separators = r"[,;\n\r]"
     for value in re.split(separators, str(raw or "")):
         item = value.strip().strip("\"'")
         if not item or len(item) > 160:
@@ -330,6 +330,7 @@ def _canonical_error_classification(error_class: str) -> str:
         "invalid_api_key": "AUTHENTICATION_ERROR",
         "invalid_authorization": "AUTHENTICATION_ERROR",
         "authentication_error": "AUTHENTICATION_ERROR",
+        "authentication": "AUTHENTICATION_ERROR",
         "http_403_permission_denied": "AUTHENTICATION_ERROR",
         "http_408_timeout": "TIMEOUT",
         "provider_server": "API_ERROR",
@@ -708,7 +709,10 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         attempted.append(model)
         try:
             executed_model = str(model or "").strip()
-            content = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
+            if deadline is None:
+                content = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments)
+            else:
+                content = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
             result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")

@@ -1,6 +1,6 @@
-# HOTFIX38 FINAL-GROK-ERROR-TAXONOMY
+# HOTFIX39 FINAL-DEEPSEEK-VERIFICATION
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX38-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX39-FINAL`
 
 ## Scope
 Grok/xAI is integrated using the same shared provider architecture and behavior contract as Gemini and Claude. Gemini and Claude behavior is unchanged.

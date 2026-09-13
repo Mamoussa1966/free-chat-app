@@ -294,8 +294,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             result_key = f"{request_id}:{round_no}:{seat_key}"
             result["result_key"] = result_key
             identity_key = (str(request_id), int(round_no), seat_key)
-            if identity_key in seen_keys:
-                raise RuntimeError(f"Duplicate council result invariant violated: {identity_key!r}")
+            # Persistent result_key is the durable deduplication boundary.
+            # A repeated worker result for the same request/round/seat is
+            # ignored rather than persisted twice.
+            if result_key in set(chat.get("result_keys", [])) or identity_key in seen_keys:
+                continue
             _assert_unique_history_identity(chat, request_id, round_no, seat_key)
             seen_keys.add(identity_key)
             public_result = _public_result(result)
