@@ -28,7 +28,7 @@ def test_deepseek_seat_uses_official_endpoint_and_explicit_free_catalog_only():
 
 
 def test_deepseek_success_records_exact_executed_model():
-    response = _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"choices": [{"message": {"content": "DEEPSEEK_OK"}}]})
+    response = _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"model": "configured-free-a", "choices": [{"message": {"content": "DEEPSEEK_OK"}}]})
     with patch("providers.requests.post", return_value=response) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("configured-free-a",))
     assert post.call_count == 1
@@ -41,7 +41,7 @@ def test_deepseek_success_records_exact_executed_model():
 def test_deepseek_401_stops_cascade():
     responses = [
         _response(401, '{"error":{"message":"invalid api key"}}'),
-        _response(200, '{"choices":[{"message":{"content":"SHOULD_NOT_RUN"}}]}', {"choices": [{"message": {"content": "SHOULD_NOT_RUN"}}]}),
+        _response(200, '{"choices":[{"message":{"content":"SHOULD_NOT_RUN"}}]}', {"model": "free-b", "choices": [{"message": {"content": "SHOULD_NOT_RUN"}}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("free-a", "free-b"))
@@ -53,7 +53,7 @@ def test_deepseek_401_stops_cascade():
 def test_deepseek_model_unavailable_advances_cascade():
     responses = [
         _response(404, '{"error":{"message":"model not found"}}'),
-        _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"choices": [{"message": {"content": "DEEPSEEK_OK"}}]}),
+        _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"model": "good-model", "choices": [{"message": {"content": "DEEPSEEK_OK"}}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("old-model", "good-model"))
@@ -66,7 +66,7 @@ def test_deepseek_model_unavailable_advances_cascade():
 def test_deepseek_429_quota_is_quota_exceeded_and_cascade_continues():
     responses = [
         _response(429, '{"error":{"message":"quota exceeded; daily limit reached"}}'),
-        _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"choices": [{"message": {"content": "DEEPSEEK_OK"}}]}),
+        _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"model": "free-b", "choices": [{"message": {"content": "DEEPSEEK_OK"}}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("free-a", "free-b"))
@@ -78,12 +78,14 @@ def test_deepseek_429_quota_is_quota_exceeded_and_cascade_continues():
 def test_deepseek_429_rate_limit_is_rate_limited_and_cascade_continues():
     responses = [
         _response(429, '{"error":{"message":"too many requests; retry-after 1"}}', headers={"Retry-After": "0"}),
-        _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"choices": [{"message": {"content": "DEEPSEEK_OK"}}]}),
+        _response(429, '{"error":{"message":"too many requests; retry-after 1"}}', headers={"Retry-After": "0"}),
+        _response(200, '{"choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"model": "free-b", "choices": [{"message": {"content": "DEEPSEEK_OK"}}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("free-a", "free-b"))
-    assert post.call_count == 2
+    assert post.call_count == 3
     assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["free-a", "free-b"]
     assert providers._canonical_error_classification(providers._classify(429, "too many requests; retry-after 1")) == "RATE_LIMITED"
 
 
@@ -112,4 +114,4 @@ def test_deepseek_preserves_full_existing_test_set_plus_this_regression_module()
     root = Path(__file__).resolve().parents[1]
     names = {p.name for p in (root / "tests").glob("test_*.py") if p.is_file()}
     assert "test_deepseek_integration.py" in names
-    assert len(names) == 33
+    assert len(names) == 34

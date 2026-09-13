@@ -48,7 +48,7 @@ def test_claude_429_transient_rate_limit_advances_cascade():
     responses = [
         _response(429, '{"error":{"type":"rate_limit_error","message":"too many requests"}}', headers={"Retry-After": "0"}),
         _response(429, '{"error":{"type":"rate_limit_error","message":"too many requests"}}', headers={"Retry-After": "0"}),
-        _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"content": [{"type": "text", "text": "CLAUDE_OK"}]}),
+        _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"model": "free-2", "content": [{"type": "text", "text": "CLAUDE_OK"}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("free-1", "free-2"))
@@ -62,7 +62,7 @@ def test_claude_429_transient_rate_limit_advances_cascade():
 def test_claude_model_unavailable_advances_to_next_model():
     responses = [
         _response(404, '{"error":{"type":"not_found_error","message":"model not found"}}'),
-        _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"content": [{"type": "text", "text": "CLAUDE_OK"}]}),
+        _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"model": "free-2", "content": [{"type": "text", "text": "CLAUDE_OK"}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("free-1", "free-2"))
@@ -73,7 +73,7 @@ def test_claude_model_unavailable_advances_to_next_model():
 
 
 def test_claude_success_records_executed_model_exactly():
-    response = _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"content": [{"type": "text", "text": "CLAUDE_OK"}]})
+    response = _response(200, '{"model":"free-1","content":[{"type":"text","text":"CLAUDE_OK"}]}', {"model": "free-1", "content": [{"type": "text", "text": "CLAUDE_OK"}]})
     with patch("providers.requests.post", return_value=response) as post:
         result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("free-1",))
     assert post.call_count == 1
@@ -127,7 +127,7 @@ def test_claude_uses_the_same_explicit_candidate_path_as_gemini():
 def test_claude_400_model_error_is_model_unavailable_and_advances():
     responses = [
         _response(400, '{"error":{"type":"invalid_request_error","message":"model claude-old is not available"}}'),
-        _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"content": [{"type": "text", "text": "CLAUDE_OK"}]}),
+        _response(200, '{"content":[{"type":"text","text":"CLAUDE_OK"}]}', {"model": "claude-good", "content": [{"type": "text", "text": "CLAUDE_OK"}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("claude-old", "claude-good"))

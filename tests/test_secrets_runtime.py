@@ -56,7 +56,10 @@ class SecretsRuntimeTests(unittest.TestCase):
                 else (None, "missing")
             ),
         ):
-            self.assertEqual(get_model_candidates(SEATS[1]), ())
+            self.assertEqual(
+                get_model_candidates(SEATS[1]),
+                (),
+            )
 
 
 if __name__ == "__main__":

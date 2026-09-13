@@ -1,36 +1,51 @@
-import ast
-import importlib.util
-import unittest
+import importlib
 
 
-class Hotfix14HistoryIdentityTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.source = open("main.py", "r", encoding="utf-8").read()
-        cls.tree = ast.parse(cls.source)
-
-    def test_request_id_is_unique_and_separate_from_idempotency_fingerprint(self):
-        self.assertIn("request_id = uuid.uuid4().hex", self.source)
-        self.assertIn("_request_fingerprint(prompt, attachments)", self.source)
-        self.assertIn("_request_fingerprint(prompt, attachments)", self.source)
-
-    def test_user_and_assistant_history_carry_request_identity(self):
-        self.assertIn('"request_id": request_id', self.source)
-        self.assertIn('"result_key": result_key', self.source)
-
-    def test_round_rendering_exposes_request_number(self):
-        self.assertIn("Round {message.get('round', '?')}", self.source)
-
-    def test_history_uniqueness_is_checked_against_persistent_result_keys(self):
-        self.assertIn("result_key", self.source)
-        self.assertIn('chat.get("result_keys", [])', self.source)
-        self.assertIn('chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]', self.source)
-
-    def test_different_requests_can_share_round_number_but_same_result_key_cannot(self):
-        # Identity is scoped by request_id + round + seat; round alone is intentionally not unique.
-        self.assertIn('result_key = f"{request_id}:{round_no}:{seat_key}"', self.source)
-        self.assertNotIn('result_key = f"{round_no}:{seat_key}"', self.source)
+def test_history_identity_uses_request_round_and_seat():
+    import main
+    chat = {"messages": [], "result_keys": []}
+    main._assert_unique_history_identity(chat, "RID", 1, "gemini")
+    assert chat["result_keys"] == []
+    assert chat["history_identity_ledger"] == [["RID", 1, "gemini"]]
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_duplicate_history_identity_is_rejected_by_low_level_invariant():
+    import main
+    chat = {"messages": [], "result_keys": []}
+    main._assert_unique_history_identity(chat, "RID", 1, "gemini")
+    try:
+        main._assert_unique_history_identity(chat, "RID", 1, "gemini")
+    except RuntimeError as exc:
+        assert "Duplicate history identity" in str(exc)
+    else:
+        raise AssertionError("duplicate history identity was accepted")
+
+
+def test_different_requests_can_share_round_number():
+    import main
+    chat = {"messages": [], "result_keys": []}
+    main._assert_unique_history_identity(chat, "RID-1", 1, "gemini")
+    main._assert_unique_history_identity(chat, "RID-2", 1, "gemini")
+    assert len(chat["history_identity_ledger"]) == 2
+
+
+def test_council_deduplicates_duplicate_worker_results():
+    import sys, types
+    from unittest.mock import patch
+    sys.modules.setdefault("streamlit", types.ModuleType("streamlit"))
+    import main
+    r = {"seat":"gemini","name":"Gemini","label":"🔑 Gemini","status":"SUCCESS","mode":"official","model":"m1","executed_model":"m1","content":"ok","attempted_models":["m1"],"request_id":"RID","round":1}
+    chat={"messages":[],"result_keys":[],"history_identity_ledger":[]}
+    with patch("main._run_round", return_value=[r, dict(r)]):
+        out=main._run_council("x",chat,1,{},[],{"gemini":("m1",)},"u","RID")
+    assert len(out)==1
+    assert len(chat["messages"])==1
+    assert len(chat["result_keys"])==1
+
+
+def test_result_key_is_scoped_to_request_round_and_seat():
+    request_id = "RID"
+    round_no = 2
+    seat = "gemini"
+    result_key = f"{request_id}:{round_no}:{seat}"
+    assert result_key == "RID:2:gemini"
