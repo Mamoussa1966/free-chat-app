@@ -43,7 +43,8 @@ def test_all_existing_test_modules_are_preserved_and_new_regression_is_present()
     assert "test_hotfix26_release_roundtrip.py" in test_names
     assert "test_claude_integration.py" in test_names
     assert "test_grok_integration.py" in test_names
-    assert len(test_names) == 22
+    assert "test_deepseek_integration.py" in test_names
+    assert len(test_names) == 23
 
 
 def test_packaged_zip_excludes_runtime_caches(tmp_path):
