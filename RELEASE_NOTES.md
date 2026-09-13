@@ -1,6 +1,6 @@
-# HOTFIX39 FINAL-DEEPSEEK-VERIFICATION
+# HOTFIX40 FINAL-GROK-ERROR-TAXONOMY
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX39-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX40-FINAL`
 
 ## Scope
 Grok/xAI is integrated using the same shared provider architecture and behavior contract as Gemini and Claude. Gemini and Claude behavior is unchanged.
@@ -39,3 +39,10 @@ The full preserved test set remains intact: 20 baseline test modules plus Claude
 5. No Local Engine, no paid fallback, and no implicit model selection.
 6. Official DeepSeek documentation currently lists `deepseek-v4-flash`, `deepseek-v4-pro`, and `deepseek-v4-flash-vision-exp` as API IDs; official pricing lists V4 Flash/Pro as paid. This release therefore does not falsely mark any model as Free.
 7. DeepSeek Golden status remains gated on a real official API test; mocked regression tests do not count as real-provider validation.
+
+## HOTFIX40 — Model Identity Attestation
+- Added provider-attested model identity to official responses.
+- DeepSeek/OpenAI-compatible/Anthropic responses use response `model`; Gemini uses official `modelVersion`.
+- A missing or mismatched provider model identity fails closed as `API_ERROR` and cannot be presented as a successful execution.
+- Persisted/UI model identity now requires router/request/provider/executed/displayed identity agreement.
+- Preserved all existing test modules and added `tests/test_model_identity_attestation.py`.

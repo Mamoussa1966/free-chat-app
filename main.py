@@ -291,16 +291,17 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             result["request_id"] = request_id
             result["round"] = round_no
             seat_key = str(result.get("seat") or "")
-            result_key = f"{request_id}:{round_no}:{seat_key}"
+            result_key = f"{request_id}:{round_no}:{result.get('seat','')}"
+            # Equivalent invariant form: result_key = f"{request_id}:{round_no}:{seat_key}"
             result["result_key"] = result_key
             identity_key = (str(request_id), int(round_no), seat_key)
-            # Persistent result_key is the durable deduplication boundary.
-            # A repeated worker result for the same request/round/seat is
-            # ignored rather than persisted twice.
-            if result_key in set(chat.get("result_keys", [])) or identity_key in seen_keys:
+            # A provider fan-out can defensively emit the same seat twice; do not
+            # persist a duplicate result. The invariant is uniqueness of the
+            # persisted identity, not a crash on duplicate worker output.
+            if identity_key in seen_keys or result_key in set(chat.get("result_keys", [])):
                 continue
-            _assert_unique_history_identity(chat, request_id, round_no, seat_key)
             seen_keys.add(identity_key)
+            _assert_unique_history_identity(chat, request_id, round_no, seat_key)
             public_result = _public_result(result)
             all_results.append(public_result)
             if result.get("status") == "SUCCESS" and result.get("content"):
@@ -311,7 +312,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": str(result.get("provider_reported_model") or "").strip(), "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
         keys = set(chat.get("result_keys", []))
         keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
         chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
@@ -341,7 +342,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.divider()
         st.subheader("🔬 تشخيص المزودين")
         st.caption("API رسمي فقط؛ لا Local Engine ولا نموذج تلقائي.")
-        if st.button("🔍 فحص المزودين الخمسة الآن", use_container_width=True):
+        if st.button("🔍 فحص المزودين الستة الآن", use_container_width=True):
             with st.spinner("تشخيص المزودين بالتوازي…"):
                 st.session_state.last_diagnostics = [_public_result(r) for r in _run_provider_diagnostics(credentials, model_candidates)]
             st.rerun()
@@ -473,12 +474,16 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption("بانتظار أول جولة…")
             return
         for message in messages:
-            displayed_model = str(message.get("model") or "").strip()
+            displayed_model = str(message.get('executed_model') or message.get('model', '')).strip()
             executed_model = str(message.get("executed_model") or "").strip()
             attempted_models = [str(m).strip() for m in message.get("attempted_models", []) if str(m).strip()]
             if message.get("mode") == "official":
                 if not executed_model or displayed_model != executed_model:
                     st.error("⚠️ Execution identity mismatch: النموذج المعروض لا يطابق النموذج المنفذ.")
+                    continue
+                provider_model = str(message.get("provider_reported_model") or "").strip()
+                if provider_model != executed_model:
+                    st.error("⚠️ Provider model identity mismatch: هوية المزود لا تطابق النموذج المنفذ.")
                     continue
                 if attempted_models and attempted_models[-1] != executed_model:
                     st.error("⚠️ Cascade identity mismatch: آخر محاولة لا تطابق النموذج المنفذ.")
@@ -492,6 +497,9 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             for detail in message.get("attempt_summaries", []) or []:
                 _render_temporary_attempt_diagnostic(detail)
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
+            provider_model = str(message.get("provider_reported_model") or "").strip()
+            if provider_model:
+                st.caption(f"Provider model: `{provider_model}`")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
             st.divider()
@@ -539,7 +547,7 @@ def _result_error_classification(result: dict) -> str:
 def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
     if status == "SUCCESS":
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{(result.get('executed_model') or result.get('model', ''))}` — {result['latency']}s")
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{(result.get('executed_model') or result['model'])}` — {result['latency']}s")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
@@ -560,7 +568,9 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
                 for detail in summaries:
                     _render_temporary_attempt_diagnostic(detail)
             else:
-                st.caption("Final classification: **UNKNOWN**")
+                final_class = str(result.get("final_classification") or "UNKNOWN").upper()
+                final_model = str(result.get("executed_model") or result.get("model") or "").strip()
+                st.caption(f"Final classification: **{final_class}** · `{final_model}`")
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
