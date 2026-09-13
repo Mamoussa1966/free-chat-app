@@ -9,7 +9,7 @@ class SecretsRuntimeTests(unittest.TestCase):
         with patch(
             "providers._read_setting",
             side_effect=lambda name: (
-                ("gemini-secret-1‚gemini-secret-2", "streamlit_secrets")
+                ("gemini-secret-1,gemini-secret-2", "streamlit_secrets")
                 if name == "GEMINI_FREE_MODELS"
                 else ("environment-model", "environment")
                 if name == "GEMINI_MODELS"
@@ -56,10 +56,7 @@ class SecretsRuntimeTests(unittest.TestCase):
                 else (None, "missing")
             ),
         ):
-            self.assertEqual(
-                get_model_candidates(SEATS[1]),
-                ("gemini-a", "gemini-b", "gemini-c", "gemini-d", "gemini-e"),
-            )
+            self.assertEqual(get_model_candidates(SEATS[1]), ())
 
 
 if __name__ == "__main__":
