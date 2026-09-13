@@ -13,7 +13,7 @@ def test_release_metadata_has_single_current_version():
     assert 'APP_VERSION = PROVIDER_VERSION' in main
     assert f'VERSION = "{version}"' in providers
     assert version in release
-    assert 'HOTFIX34_GROK_ERROR_TAXONOMY_FINAL.zip' in builder
+    assert f'HOTFIX{re.search(r"HOTFIX(\d+)", version).group(1)}_GROK_ERROR_TAXONOMY_FINAL.zip' in builder
 
 
 def test_no_stale_release_identifiers_in_production_metadata():
