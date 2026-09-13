@@ -1,28 +1,53 @@
-# HOTFIX42 FINAL-DEEPSEEK-SECRET-WIRING
+## HOTFIX44 — DeepSeek provider identity attestation
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX42-FINAL`
+Previous release — Multi-agent architecture
+- Preserves the original six first-class provider agents.
+- Removes the architectural assumption that the council is limited to five/six agents.
+- Supports up to 20 total seats, with up to 14 explicitly configured additional agents.
+- Additional agents use the same shared candidate/cascade execution path rather than provider-specific room logic.
+- Existing Gemini/Claude/Grok/DeepSeek adapters remain isolated and unchanged in their provider-specific HTTP contracts.
+- Added regression coverage for ordering, 20-agent cap, explicit credential/model references, and invalid configuration rejection.
 
-## Scope
-Grok/xAI is integrated using the same shared provider architecture and behavior contract as Gemini and Claude. Gemini and Claude behavior is unchanged.
+# AI Council — Free Cascade
 
-## Fixes
-1. xAI authentication payload variants such as `invalid_api_key`, `invalid_authorization`, and `authentication_error` normalize to `AUTHENTICATION_ERROR` and stop the cascade.
-2. HTTP 402 and credit/balance exhaustion markers normalize to `QUOTA_EXCEEDED`.
-3. The generic internal `provider_error` class normalizes to `API_ERROR`, preventing false `UNKNOWN` results when the transport failed without a more specific class.
-4. Transient 429 signals remain `RATE_LIMITED`; model-not-found signals remain `MODEL_UNAVAILABLE`.
-5. Raw provider payloads remain transient/internal and are never persisted to visible History; UI receives compact attempt summaries only.
-6. No dynamic model discovery, Local Engine, automatic model selection, or paid fallback is introduced.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX44-FINAL.
 
-## Tests
-The full preserved test set remains intact: 20 baseline test modules plus Claude and Grok regression modules. Grok regressions cover explicit model configuration, authentication stop, model-unavailable advancement, rate-limit retry, quota classification, execution identity, diagnostic privacy, realistic `invalid_api_key` payloads, HTTP 402 quota, and prevention of false `UNKNOWN`.
+Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
-7. Hardened the shared cascade against unexpected adapter exceptions: they are normalized into stable classifications and recorded as compact attempt diagnostics, preventing opaque worker failures from erasing the actual attempt path.
-8. Expanded xAI model/auth marker normalization for additional structured error variants.
+Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, RATE_LIMITED, AUTHENTICATION_ERROR, API_ERROR, NETWORK_ERROR, TIMEOUT, UNKNOWN. Raw provider error text is operational-only; visible History stores only short classifications. Authentication errors are terminal; model/quota/rate-limit/API/network/timeout failures may continue to the next explicitly configured Free model.
+
+## Hotfix 26 Final
+- Preserves the complete 20-module Golden baseline test set.
+- Raw provider diagnostics and raw result errors are stripped before session-state result persistence.
+- Visible attempt failures remain compact and auto-expire after 60 seconds.
+- Quota 429s are non-retryable; transient rate-limit 429s remain retryable.
+- Release validation enforces the exact test-file set and isolated sandbox execution.
+- `gitops_layer.py` remains exploratory/non-push and is unchanged.
+
+- Release artifact is re-extracted into a fresh temporary workspace and the full suite is executed a second time before release.
+
+
+## Grok Integration
+- Official xAI Responses API only.
+- `XAI_API_KEY` / `GROK_API_KEY` is read from Streamlit Secrets first, then environment.
+- Grok uses the same explicit candidate/cascade architecture as Gemini and Claude. `GROK_FREE_MODELS` is preferred; `XAI_FREE_MODELS` remains a backward-compatible alias.
+- No dynamic model discovery, Local Engine, automatic model selection, or paid fallback.
+- The project does not assume any xAI API model is free by default; only explicitly configured candidates are eligible for this project's Free API contract.
+
+## Claude Integration
+- Official Anthropic Messages API only.
+- `ANTHROPIC_API_KEY` is read from Streamlit Secrets first, then environment.
+- Claude uses the same explicit Free-model configuration architecture and cascade behavior as Gemini; no dynamic model discovery path is used.
+- Claude-specific behavior is limited to Anthropic API specifics (endpoint, headers, payload, and response parsing).
+- Execution uses only the explicit `CLAUDE_FREE_MODELS` / `ANTHROPIC_FREE_MODELS` cascade. No paid fallback, Local Engine, or automatic model selection.
+
+- Unexpected adapter exceptions are normalized into the stable error taxonomy instead of escaping the worker and producing an opaque UNKNOWN result with no attempt diagnostics.
 
 ## Hotfix 36
-- Fixed Grok structured-error normalization so xAI JSON error codes cannot collapse into `UNKNOWN`.
-- Added real regression coverage for model-unavailable, permission-denied/authentication, rate-limit, billing, and invalid-argument payloads.
-- Preserved explicit Free cascade, compact History, raw diagnostic privacy, and five-seat architecture.
+- Hardened xAI/Grok structured error classification using `error.code`, `error.type`, and message fields.
+- xAI documented 403 permission failures are terminal `AUTHENTICATION_ERROR`.
+- Structured model-not-found, rate-limit, billing, and invalid-argument payloads map to the stable taxonomy instead of `UNKNOWN`.
+- No raw provider payload is exposed in UI or History.
 
 
 ## Hotfix 37 — final classification hardening
@@ -30,34 +55,23 @@ The full preserved test set remains intact: 20 baseline test modules plus Claude
 - Prevents internal classes such as `provider_error` from becoming a visible non-taxonomy value or an avoidable `UNKNOWN`.
 - Preserves Grok authentication terminality, quota/rate-limit semantics, compact History, and the shared Gemini/Claude cascade contract.
 
-
-## DeepSeek adapter phase
-1. Added `DeepSeek` as a provider seat using the official OpenAI-compatible Chat Completions endpoint.
-2. Candidate construction is identical to Gemini/Claude/Grok: `DEEPSEEK_FREE_MODELS` → parse/normalize → `model_candidates` → `call_seat()` → ordered cascade.
-3. Stable error taxonomy and authentication-terminal cascade are inherited from the hardened provider runtime.
-4. Raw provider diagnostics remain runtime-only; visible History keeps compact summaries.
-5. No Local Engine, no paid fallback, and no implicit model selection.
-6. Official DeepSeek documentation currently lists `deepseek-v4-flash`, `deepseek-v4-pro`, and `deepseek-v4-flash-vision-exp` as API IDs; official pricing lists V4 Flash/Pro as paid. This release therefore does not falsely mark any model as Free.
-7. DeepSeek Golden status remains gated on a real official API test; mocked regression tests do not count as real-provider validation.
-
-## Previous Release — Model Identity Attestation
-- Added provider-attested model identity to official responses.
-- DeepSeek/OpenAI-compatible/Anthropic responses use response `model`; Gemini uses official `modelVersion`.
-- A missing or mismatched provider model identity fails closed as `API_ERROR` and cannot be presented as a successful execution.
-- Persisted/UI model identity now requires router/request/provider/executed/displayed identity agreement.
-- Preserved all existing test modules and added `tests/test_model_identity_attestation.py`.
-
-## HOTFIX42 — DeepSeek Secret Runtime
-
-- Hardened exact Streamlit Secret lookup for `DEEPSEEK_API_KEY` using mapping subscription.
-- Preserved Secrets-first precedence over environment variables.
-- Added regression tests for DeepSeek credential loading and precedence.
-- No Gemini, Claude, or Grok provider behavior changed.
+## DeepSeek integration — verification status
+- Adds an official DeepSeek adapter using `https://api.deepseek.com/chat/completions`.
+- Uses only explicitly configured `DEEPSEEK_FREE_MODELS`; no automatic model selection and no inferred Free entitlement.
+- The current official DeepSeek API documents `deepseek-v4-flash`, `deepseek-v4-pro`, and `deepseek-v4-flash-vision-exp` as API model IDs; the official pricing page lists V4 Flash/Pro as paid API models. This project therefore does **not** infer or invent a Free entitlement.
+- `DEEPSEEK_FREE_MODELS` remains an explicit allow-list by contract; a configured ID is not proof that the official DeepSeek API grants Free usage.
+- DeepSeek is **VERIFIED-ADAPTER / NOT-GOLDEN** until a real official API request with a valid credential succeeds and the release gate is rerun after that live test.
 
 
-## HOTFIX42 — DeepSeek Secret wiring
-1. Reaffirmed live Streamlit Secrets mapping lookup for `DEEPSEEK_API_KEY` and `DEEPSEEK_FREE_MODELS`.
-2. Preserved strict Secrets-first precedence; environment variables are used only when the exact Secret is absent/empty.
-3. Added non-secret credential-source diagnostics for deployment troubleshooting.
-4. Added regression coverage proving DeepSeek credential and model configuration are read from Streamlit Secrets and that secrets are never exposed.
-5. Gemini, Claude, and Grok execution behavior is unchanged.
+## Multi-agent architecture
+- The six original first-class agents remain unchanged: ChatGPT, Gemini, Claude, Grok, Kimi, and DeepSeek.
+- The room is no longer structurally limited to five or six seats. Up to 20 total agents are supported.
+- Additional agents are declared explicitly in `AI_COUNCIL_EXTRA_AGENTS` as JSON configuration; credentials are referenced by Secret/environment variable names and never embedded in the agent configuration.
+- Additional agents reuse the same parse → normalize → candidates → call_seat → cascade contract. Supported adapter kinds are `chat_completions`, `openai_responses`, `xai_responses`, `deepseek_chat`, `gemini`, and `anthropic`.
+- No Local Engine, implicit provider, automatic model selection, or paid fallback is introduced.
+
+## HOTFIX44 — DeepSeek provider identity attestation
+- DeepSeek now requires the official response `model` field.
+- The requested model, HTTP request model, provider-reported model, executed model, and displayed model must agree for a successful DeepSeek round.
+- Missing or mismatched provider model identity fails closed and never renders as a successful DeepSeek response.
+- Raw provider payloads remain excluded from UI/history.

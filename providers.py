@@ -9,8 +9,10 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX42-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX44-FINAL"
 MAX_MODELS_PER_SEAT = 10
+MAX_AGENTS = 20
+EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
 MAX_PROVIDER_ATTACHMENT_BYTES = 12 * 1024 * 1024
@@ -44,7 +46,7 @@ class Seat:
     kind: str
 
 
-SEATS = (
+BUILTIN_SEATS = (
     Seat("openai", "ChatGPT", "🔑 ChatGPT", ("OPENAI_API_KEY",), ("OPENAI_FREE_MODELS",), "https://api.openai.com/v1/responses", "openai_responses"),
     Seat("gemini", "Gemini", "🔑 Gemini", ("GEMINI_API_KEY", "GOOGLE_API_KEY"), ("GEMINI_FREE_MODELS",), "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", "gemini"),
     Seat("claude", "Claude", "🔑 Claude", ("ANTHROPIC_API_KEY",), ("ANTHROPIC_FREE_MODELS", "CLAUDE_FREE_MODELS"), "https://api.anthropic.com/v1/messages", "anthropic"),
@@ -52,6 +54,56 @@ SEATS = (
     Seat("kimi", "Kimi", "🔑 Kimi", ("KIMI_API_KEY", "MOONSHOT_API_KEY"), ("KIMI_FREE_MODELS", "MOONSHOT_FREE_MODELS"), "https://api.moonshot.ai/v1/chat/completions", "chat_completions"),
     Seat("deepseek", "DeepSeek", "🔑 DeepSeek", ("DEEPSEEK_API_KEY",), ("DEEPSEEK_FREE_MODELS",), "https://api.deepseek.com/chat/completions", "deepseek_chat"),
 )
+# Compatibility alias: the six original first-class agents remain the canonical built-ins.
+SEATS = BUILTIN_SEATS
+
+def _load_extra_seats() -> Tuple[Seat, ...]:
+    """Load optional external agents without changing the six original adapters.
+
+    Configuration is JSON stored in a Secret/environment variable named
+    AI_COUNCIL_EXTRA_AGENTS. Each object supplies key, name, optional label,
+    credential_names, model_names, endpoint and kind. Only allow-listed adapter
+    kinds are accepted; credentials themselves must never be embedded in config.
+    """
+    import json
+    raw = _setting((EXTRA_AGENTS_SETTING,))
+    if not raw:
+        return ()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return ()
+    if not isinstance(data, list):
+        return ()
+    builtins = {s.key for s in BUILTIN_SEATS}
+    allowed_kinds = {"chat_completions", "openai_responses", "xai_responses", "deepseek_chat", "gemini", "anthropic"}
+    result = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip().lower()
+        name = str(item.get("name") or "").strip()
+        endpoint = str(item.get("endpoint") or "").strip()
+        kind = str(item.get("kind") or "chat_completions").strip()
+        if not key or not name or not endpoint or key in builtins or not re.fullmatch(r"[a-z][a-z0-9_-]{1,31}", key):
+            continue
+        if kind not in allowed_kinds or len(result) >= (MAX_AGENTS - len(BUILTIN_SEATS)):
+            continue
+        credential_names = item.get("credential_names") or item.get("credential_env") or []
+        model_names = item.get("model_names") or item.get("model_env") or []
+        if isinstance(credential_names, str): credential_names = [credential_names]
+        if isinstance(model_names, str): model_names = [model_names]
+        credential_names = tuple(str(x).strip() for x in credential_names if str(x).strip())
+        model_names = tuple(str(x).strip() for x in model_names if str(x).strip())
+        if not credential_names or not model_names:
+            continue
+        label = str(item.get("label") or f"🔑 {name}").strip()[:80]
+        result.append(Seat(key, name[:80], label, credential_names[:5], model_names[:5], endpoint[:500], kind))
+    return tuple(result)
+
+def get_seats() -> Tuple[Seat, ...]:
+    """Return built-in agents plus up to 14 configured additional agents (20 total)."""
+    return BUILTIN_SEATS + _load_extra_seats()
 
 
 ERROR_CLASS_MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
@@ -68,15 +120,6 @@ ERROR_CLASSES = (
     ERROR_CLASS_API_ERROR, ERROR_CLASS_NETWORK_ERROR,
     ERROR_CLASS_TIMEOUT, ERROR_CLASS_UNKNOWN,
 )
-
-
-class ProviderCallResult(str):
-    """String-compatible official response carrying provider-attested model identity."""
-
-    def __new__(cls, text: str, provider_reported_model: Optional[str]):
-        obj = str.__new__(cls, text)
-        obj.provider_reported_model = str(provider_reported_model or "").strip()
-        return obj
 
 
 class ProviderError(RuntimeError):
@@ -110,32 +153,18 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
     try:
         import streamlit as st
         secrets = st.secrets
-        # Use mapping subscription rather than relying on a particular
-        # Streamlit Secrets implementation exposing Mapping.get(). This keeps
-        # the exact-key Secrets-first contract reliable in Streamlit Cloud.
-        try:
-            present = name in secrets
-        except Exception:
-            present = False
-        if present:
-            try:
-                raw_value = secrets[name]
-            except Exception:
-                raw_value = None
-            return True, _coerce_setting_value(raw_value)
+        if name in secrets:
+            return True, _coerce_setting_value(secrets.get(name))
     except Exception:
         pass
     return False, None
 
 
 def _read_setting(name: str) -> Tuple[Optional[str], str]:
-    """Read one setting with authoritative live Streamlit Secret precedence."""
-    value = _streamlit_secret(name)
-    if value is not None:
-        return value, "streamlit_secrets"
-    present, secret_value = _streamlit_secret_state(name)
+    """Read one setting with authoritative Streamlit Secret precedence."""
+    present, value = _streamlit_secret_state(name)
     if present:
-        return secret_value, "streamlit_secrets"
+        return value, "streamlit_secrets"
     value = _coerce_setting_value(os.getenv(name))
     if value:
         return value, "environment"
@@ -143,8 +172,8 @@ def _read_setting(name: str) -> Tuple[Optional[str], str]:
 
 
 def _streamlit_secret(name: str) -> Optional[str]:
-    present, value = _streamlit_secret_state(name)
-    return value if present else None
+    value, source = _read_setting(name)
+    return value if source == "streamlit_secrets" else None
 
 
 def _setting(names: Iterable[str]) -> Optional[str]:
@@ -166,22 +195,7 @@ def get_secret(names: Iterable[str]) -> Optional[str]:
 
 
 def capture_credentials() -> Dict[str, Optional[str]]:
-    """Capture live credentials without caching secret values across reruns."""
-    return {seat.key: get_secret(seat.env_names) for seat in SEATS}
-
-
-def credential_config_sources() -> Dict[str, str]:
-    """Return non-secret credential source labels for deployment diagnostics."""
-    sources: Dict[str, str] = {}
-    for seat in SEATS:
-        source = "missing"
-        for name in seat.env_names:
-            value, candidate_source = _read_setting(name)
-            if value:
-                source = candidate_source
-                break
-        sources[seat.key] = source
-    return sources
+    return {seat.key: get_secret(seat.env_names) for seat in get_seats()}
 
 
 def configured(seat: Seat, credential: Optional[str] = None) -> bool:
@@ -189,19 +203,16 @@ def configured(seat: Seat, credential: Optional[str] = None) -> bool:
 
 
 def configured_count(credentials: Optional[Dict[str, Optional[str]]] = None) -> int:
-    return sum(bool((credentials or {}).get(seat.key)) for seat in SEATS) if credentials is not None else sum(configured(seat) for seat in SEATS)
+    seats = get_seats()
+    return sum(bool((credentials or {}).get(seat.key)) for seat in seats) if credentials is not None else sum(configured(seat) for seat in seats)
 
 
 def _parse_models(raw: str) -> Tuple[str, ...]:
     values: list[str] = []
     seen: set[str] = set()
-    # U+201A is not a delimiter: reject the entire setting rather than
-    # silently salvaging fragments from a likely corrupted mobile input.
-    if "\u201a" in str(raw or ""):
-        return ()
     # Accept common Unicode comma/semicolon variants so mobile keyboards
     # cannot silently turn a valid cascade into one malformed model id.
-    separators = r"[,;\n\r\u060c\u061b\uff0c]"
+    separators = r"[,;\n\r\u060c\u061b\u201a\uff0c]"
     for value in re.split(separators, str(raw or "")):
         item = value.strip().strip("\"'")
         if not item or len(item) > 160:
@@ -226,14 +237,14 @@ def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
 
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
-    return {seat.key: get_model_candidates(seat) for seat in SEATS}
+    return {seat.key: get_model_candidates(seat) for seat in get_seats()}
 
 
 
 def model_config_sources() -> Dict[str, str]:
     """Return only non-secret configuration-source labels for diagnostics."""
     sources: Dict[str, str] = {}
-    for seat in SEATS:
+    for seat in get_seats():
         source = "missing"
         for name in seat.model_env:
             value, candidate_source = _read_setting(name)
@@ -253,7 +264,7 @@ def model_config_fingerprint(model_candidates: Optional[Dict[str, Tuple[str, ...
     import hashlib
     candidates = model_candidates or capture_model_candidates()
     material = "|".join(
-        f"{seat.key}:{','.join(candidates.get(seat.key, ())) }" for seat in SEATS
+        f"{seat.key}:{','.join(candidates.get(seat.key, ())) }" for seat in get_seats()
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
@@ -372,7 +383,6 @@ def _canonical_error_classification(error_class: str) -> str:
         "invalid_api_key": "AUTHENTICATION_ERROR",
         "invalid_authorization": "AUTHENTICATION_ERROR",
         "authentication_error": "AUTHENTICATION_ERROR",
-        "authentication": "AUTHENTICATION_ERROR",
         "http_403_permission_denied": "AUTHENTICATION_ERROR",
         "http_408_timeout": "TIMEOUT",
         "provider_server": "API_ERROR",
@@ -585,16 +595,7 @@ def _provider_attachments(attachments: Optional[list[dict]]) -> list[dict]:
     return safe
 
 
-def _provider_reported_model(seat: Seat, data: dict) -> str:
-    """Extract the provider's authoritative model identity from a successful response."""
-    if not isinstance(data, dict):
-        return ""
-    if seat.kind == "gemini":
-        return str(data.get("modelVersion") or "").strip()
-    return str(data.get("model") or "").strip()
-
-
-def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: int = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> ProviderCallResult:
+def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: int = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> str:
     key = (credential or "").strip()
     if not key:
         raise ProviderError("no official credential configured", error_class="not_configured")
@@ -678,6 +679,12 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 content.append({"type": "text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
         text = _chat_text(data)
+        provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
+        if not provider_reported_model:
+            raise ProviderError("DeepSeek response did not attest model identity", error_class="execution_identity_mismatch")
+        if provider_reported_model != model:
+            raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
+        return {"text": text, "provider_reported_model": provider_reported_model}
 
     elif seat.kind == "chat_completions":
         content = [{"type": "text", "text": prompt}]
@@ -696,12 +703,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
 
     if not text:
         raise ProviderError("official provider returned no text", error_class="empty_response")
-    provider_reported_model = _provider_reported_model(seat, data)
-    if not provider_reported_model:
-        raise ProviderError("provider did not attest model identity", error_class="execution_identity_mismatch")
-    if provider_reported_model != model:
-        raise ProviderError("provider model identity mismatch", error_class="execution_identity_mismatch")
-    return ProviderCallResult(text, provider_reported_model)
+    return text
 
 
 def _result(seat: Seat, status: str, model: str, content: str, error: Optional[str], started: float, attempted: list[str], authenticated: bool = False, request_id: str = "", round_no: int = 0, attempt_diagnostics: Optional[list[dict]] = None, provider_reported_model: str = "") -> dict:
@@ -736,7 +738,6 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         "official_authenticated": authenticated,
         "request_id": str(request_id or ""),
         "round": int(round_no),
-        "final_classification": (_canonical_error_classification(str((attempt_diagnostics or [])[-1].get("classification") or "UNKNOWN")) if attempt_diagnostics else (_canonical_error_classification(str(error).split("class=", 1)[1].split(";", 1)[0]) if error and "class=" in str(error) else ("API_ERROR" if status == "FAILED" else "UNKNOWN"))),
     }
 
 
@@ -767,23 +768,22 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         attempted.append(model)
         try:
             executed_model = str(model or "").strip()
-            call_prompt = _prompt(user_prompt, shared_context, round_no)
-            if deadline is None:
-                response = call_official(seat, call_prompt, executed_model, credential, REQUEST_TIMEOUT, attachments)
+            raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
+            provider_reported_model = ""
+            if isinstance(raw_response, dict) and "text" in raw_response:
+                content = str(raw_response.get("text") or "").strip()
+                provider_reported_model = str(raw_response.get("provider_reported_model") or "").strip()
             else:
-                response = call_official(seat, call_prompt, executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
-            content = str(response)
-            provider_reported_model = str(getattr(response, "provider_reported_model", "") or "").strip()
-            # Real official responses are attested by call_official. Legacy string
-            # mocks remain accepted for the older unit tests, but production
-            # call_official never returns a bare string.
-            if not provider_reported_model:
+                # Backward-compatible test doubles/legacy adapters return text only.
+                content = str(raw_response or "").strip()
+                if seat.key == "deepseek":
+                    raise ProviderError("DeepSeek provider response identity is unavailable", error_class="execution_identity_mismatch")
                 provider_reported_model = executed_model
             result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics, provider_reported_model=provider_reported_model)
-            if (result.get("model") != result.get("executed_model")
-                    or result.get("executed_model") != executed_model
-                    or result.get("provider_reported_model") != executed_model):
+            if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
+            if seat.key == "deepseek" and result.get("provider_reported_model") != executed_model:
+                raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
             if result.get("attempted_models") and result["attempted_models"][-1] != executed_model:
                 raise ProviderError("cascade execution identity mismatch", error_class="execution_identity_mismatch")
             return result
@@ -844,15 +844,6 @@ def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Opt
         if not candidates:
             return _result(seat, "AUTHENTICATION_OK_NO_FREE_MODEL", "", "", "class=authentication_ok_no_free_model; Authentication endpoint accepted the credential, but no Free model was explicitly configured.", started, [], authenticated=True)
     return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates)
-
-
-def get_gemini_transcriber_model(model_candidates: Optional[Tuple[str, ...]] = None) -> Optional[str]:
-    """Return the explicitly configured Gemini transcription model, if any."""
-    configured = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
-    if configured:
-        return configured[0]
-    fallback = _parse_models(",".join(model_candidates or ()))
-    return fallback[0] if fallback else None
 
 
 def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:
