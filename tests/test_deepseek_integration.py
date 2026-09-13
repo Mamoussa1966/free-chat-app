@@ -103,6 +103,30 @@ def test_deepseek_history_is_compact_and_raw_payload_is_not_persisted():
     assert raw not in repr(public)
 
 
+
+def test_deepseek_api_key_exact_streamlit_secret_is_read(monkeypatch):
+    import sys
+    import types
+
+    fake_streamlit = types.SimpleNamespace(secrets={"DEEPSEEK_API_KEY": "deepseek-test-secret"})
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+
+    present, value = providers._streamlit_secret_state("DEEPSEEK_API_KEY")
+    assert present is True
+    assert value == "deepseek-test-secret"
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "deepseek-test-secret"
+
+
+def test_deepseek_secret_wins_over_environment(monkeypatch):
+    import sys
+    import types
+
+    fake_streamlit = types.SimpleNamespace(secrets={"DEEPSEEK_API_KEY": "secret-value"})
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "environment-value")
+
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "secret-value"
+
 def test_deepseek_is_not_given_an_implicit_free_model_catalog():
     source = Path(providers.__file__).read_text(encoding="utf-8")
     assert "DEEPSEEK_FREE_MODELS" in source
@@ -115,3 +139,31 @@ def test_deepseek_preserves_full_existing_test_set_plus_this_regression_module()
     names = {p.name for p in (root / "tests").glob("test_*.py") if p.is_file()}
     assert "test_deepseek_integration.py" in names
     assert len(names) == 34
+
+
+def test_deepseek_secret_and_model_catalog_are_live_streamlit_settings(monkeypatch):
+    import sys
+    import types
+
+    fake_streamlit = types.SimpleNamespace(secrets={
+        "DEEPSEEK_API_KEY": "secret-key-value",
+        "DEEPSEEK_FREE_MODELS": "deepseek-model-a,deepseek-model-b",
+    })
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "secret-key-value"
+    assert providers.get_model_candidates(DEEPSEEK) == ("deepseek-model-a", "deepseek-model-b")
+    assert providers.credential_config_sources()["deepseek"] == "streamlit_secrets"
+
+
+def test_deepseek_secret_source_never_exposes_secret_value(monkeypatch):
+    import sys
+    import types
+
+    secret = "secret-never-display-123456"
+    fake_streamlit = types.SimpleNamespace(secrets={"DEEPSEEK_API_KEY": secret})
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+
+    source = providers.credential_config_sources()["deepseek"]
+    assert source == "streamlit_secrets"
+    assert secret not in source
