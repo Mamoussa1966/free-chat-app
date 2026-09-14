@@ -1,4 +1,13 @@
-## HOTFIX46 — DeepSeek Secrets resolver hardening
+## HOTFIX47 — DeepSeek Secret Resolver Hardening
+
+- Hardened Streamlit Secrets discovery for `DEEPSEEK_API_KEY` and `DEEPSEEK_FREE_MODELS`.
+- Added direct, case-insensitive canonical lookup plus provider-scoped TOML table support.
+- Preserved strict provider isolation: unrelated generic `api_key` values cannot cross-bind to DeepSeek.
+- Preserved explicit model-candidate policy; no implicit Free model is introduced.
+- Preserved DeepSeek provider model attestation: request model must equal provider response `model`, then `executed_model` and UI model.
+- Added regression tests for Streamlit-like Secret containers and cross-provider isolation.
+
+## HOTFIX47 — DeepSeek Secrets resolver hardening
 
 - Reworked Streamlit Secrets resolution to support both the native mapping and `st.secrets.to_dict()` representations.
 - Provider-scoped nested tables such as `[deepseek]` and `[providers.deepseek]` are supported without accepting generic `api_key` values from unrelated provider tables.
@@ -6,9 +15,9 @@
 - Preserved Streamlit Secrets precedence over environment variables and the explicit `DEEPSEEK_FREE_MODELS` allow-list contract.
 - No Local Engine, no implicit model selection, and no paid fallback were introduced.
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX46-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX47-FINAL`
 
-## HOTFIX46 — DeepSeek Secrets discovery + provider identity hardening
+## HOTFIX47 — DeepSeek Secrets discovery + provider identity hardening
 
 - Fixed the DeepSeek credential discovery boundary so `DEEPSEEK_API_KEY` is read from Streamlit Secrets before the environment.
 - Added robust root-key, case-insensitive, and nested-TOML Secret lookup without exposing credential values.
@@ -19,9 +28,9 @@ Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX46-FINAL`
 - Provider identity mismatch is terminal for that cascade attempt and can never be rendered as a successful round.
 - Raw provider payloads and credentials remain excluded from visible History.
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX46-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX47-FINAL`
 
-## HOTFIX46 — DeepSeek Secrets discovery + provider identity hardening
+## HOTFIX47 — DeepSeek Secrets discovery + provider identity hardening
 
 Previous release — Multi-agent architecture
 - Preserves the original six first-class provider agents.
@@ -33,7 +42,7 @@ Previous release — Multi-agent architecture
 
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX46-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX47-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
