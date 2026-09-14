@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import providers
 
-def test_extra_agents_are_loaded_after_original_six_and_capped_at_twenty():
+def test_extra_agents_are_loaded_after_original_five_plus_deepseek_and_capped_at_twenty():
     extras = []
     for i in range(20):
         extras.append({
@@ -15,7 +15,9 @@ def test_extra_agents_are_loaded_after_original_six_and_capped_at_twenty():
         })
     with patch("providers._setting", return_value=json.dumps(extras)):
         seats = providers.get_seats()
-    assert [s.key for s in seats[:6]] == ["openai", "gemini", "claude", "grok", "kimi", "deepseek"]
+    assert [s.key for s in seats[:5]] == ["openai", "gemini", "claude", "grok", "kimi"]
+    assert seats[5].key == "deepseek"
+    assert seats[5].room_slot == 7
     assert len(seats) == 20
     assert seats[-1].key == "agent13"
 
