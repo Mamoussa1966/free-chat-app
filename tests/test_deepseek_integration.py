@@ -33,6 +33,8 @@ def test_deepseek_success_records_exact_executed_model():
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("configured-free-a",))
     assert post.call_count == 1
     assert post.call_args.kwargs["json"]["model"] == "configured-free-a"
+    assert isinstance(post.call_args.kwargs["json"]["messages"][0]["content"], str)
+    assert post.call_args.kwargs["json"]["messages"][0]["content"]
     assert result["status"] == "SUCCESS"
     assert result["content"] == "DEEPSEEK_OK"
     assert result["model"] == result["executed_model"] == "configured-free-a"
