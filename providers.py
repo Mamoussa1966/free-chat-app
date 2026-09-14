@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX45-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX46-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -144,85 +144,113 @@ def _coerce_setting_value(value: Any) -> Optional[str]:
 
 
 def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
-    """Return ``(present, value)`` for a Streamlit Secret robustly.
+    """Resolve a Streamlit Secret without cross-provider collisions.
 
-    Streamlit exposes ``st.secrets`` as a mapping, but deployments can use
-    TOML tables and some editors/mobile workflows can introduce casing or
-    nesting differences.  The canonical project key remains exact (for
-    example ``DEEPSEEK_API_KEY``); this resolver additionally recognizes a
-    case-insensitive root key and a matching nested key without ever exposing
-    the secret.  A present-but-empty canonical Secret remains authoritative
-    over the environment.
+    Streamlit Cloud can expose secrets through a root mapping, ``to_dict()``,
+    or TOML tables.  The previous resolver recursively accepted generic keys
+    such as ``api_key``/``key`` from *any* table, which could silently bind the
+    wrong provider.  This resolver first checks the canonical key, then only
+    provider-scoped tables whose name matches the requested setting prefix.
+    Environment fallback remains outside this function and therefore cannot
+    override a non-empty Streamlit Secret.
     """
     target = str(name or "").strip()
     if not target:
         return False, None
+
     try:
         import streamlit as st
         secrets = st.secrets
+    except Exception:
+        return False, None
 
-        # 1) Canonical root-level lookup.
+    def _mapping_items(mapping: Any):
+        """Yield mapping items from Streamlit Secret containers safely."""
+        candidates = []
         try:
-            if target in secrets:
-                return True, _coerce_setting_value(secrets[target])
-        except Exception:
-            try:
-                value = secrets.get(target)
-                if value is not None:
-                    return True, _coerce_setting_value(value)
-            except Exception:
-                pass
-
-        # 2) Case-insensitive root-level lookup.
-        target_upper = target.upper()
-        try:
-            for key in secrets.keys():
-                if str(key).strip().upper() == target_upper:
-                    try:
-                        return True, _coerce_setting_value(secrets[key])
-                    except Exception:
-                        return True, None
+            candidates.append(mapping.to_dict())
         except Exception:
             pass
-
-        # 3) Nested TOML-table lookup: [provider] KEY = ... or
-        #    [deepseek] api_key = ... are accepted as configuration aliases.
-        def _nested_aliases() -> set[str]:
-            aliases = {target_upper}
-            if target_upper.endswith("_API_KEY"):
-                aliases.update({"API_KEY", "KEY", "TOKEN", "API_TOKEN"})
-            if target_upper.endswith("_FREE_MODELS"):
-                aliases.update({"FREE_MODELS", "MODELS", "MODEL_LIST", "MODEL_CATALOG"})
-            return aliases
-
-        aliases = _nested_aliases()
-
-        def walk(mapping: Any, path: str = "") -> Tuple[bool, Optional[str]]:
-            if not isinstance(mapping, dict) and not hasattr(mapping, "keys"):
-                return False, None
+        candidates.append(mapping)
+        seen_ids = set()
+        for candidate in candidates:
+            if candidate is None or id(candidate) in seen_ids:
+                continue
+            seen_ids.add(id(candidate))
             try:
-                keys = list(mapping.keys())
+                for key in candidate.keys():
+                    try:
+                        yield key, candidate[key]
+                    except Exception:
+                        continue
             except Exception:
-                return False, None
-            for key in keys:
-                try:
-                    value = mapping[key]
-                except Exception:
-                    continue
+                continue
+
+    def _direct(mapping: Any, wanted: str) -> Tuple[bool, Optional[str]]:
+        wanted_upper = wanted.upper()
+        for key, value in _mapping_items(mapping):
+            if str(key).strip().upper() == wanted_upper:
+                return True, _coerce_setting_value(value)
+        return False, None
+
+    # 1) Exact/case-insensitive canonical root key.
+    found, value = _direct(secrets, target)
+    if found:
+        return True, value
+
+    target_upper = target.upper()
+    provider_prefix = target_upper.rsplit("_", 2)[0] if target_upper.endswith("_API_KEY") else target_upper.rsplit("_", 2)[0] if target_upper.endswith("_FREE_MODELS") else ""
+    if target_upper.endswith("_API_KEY"):
+        provider_prefix = target_upper[: -len("_API_KEY")]
+        aliases = {"API_KEY", "KEY", "TOKEN", "API_TOKEN"}
+    elif target_upper.endswith("_FREE_MODELS"):
+        provider_prefix = target_upper[: -len("_FREE_MODELS")]
+        aliases = {"FREE_MODELS", "MODELS", "MODEL_LIST", "MODEL_CATALOG"}
+    else:
+        provider_prefix = ""
+        aliases = set()
+
+    # 2) Provider-scoped TOML tables only: [deepseek], [providers.deepseek],
+    #    [DEEPSEEK], etc. Generic api_key values from unrelated tables are not
+    #    accepted, preventing accidental cross-provider credential binding.
+    if provider_prefix:
+        wanted_provider = provider_prefix.lower().replace("-", "_")
+
+        def _walk_provider_table(mapping: Any, path: tuple[str, ...] = ()) -> Tuple[bool, Optional[str]]:
+            for key, value in _mapping_items(mapping):
                 key_text = str(key).strip()
-                key_upper = key_text.upper()
-                if key_upper in aliases:
-                    return True, _coerce_setting_value(value)
+                key_norm = key_text.lower().replace("-", "_")
+                current_path = path + (key_norm,)
                 if hasattr(value, "keys") and not isinstance(value, (str, bytes, list, tuple)):
-                    nested_path = f"{path}.{key_text}" if path else key_text
-                    found, nested_value = walk(value, nested_path)
+                    # Accept a table named exactly after the provider, or a
+                    # conventional parent such as [providers.deepseek].
+                    if key_norm == wanted_provider or (path and path[-1] == "providers" and key_norm == wanted_provider):
+                        for child_key, child_value in _mapping_items(value):
+                            if str(child_key).strip().upper() in aliases:
+                                return True, _coerce_setting_value(child_value)
+                    found, nested_value = _walk_provider_table(value, current_path)
                     if found:
                         return found, nested_value
             return False, None
 
-        return walk(secrets)
-    except Exception:
+        found, value = _walk_provider_table(secrets)
+        if found:
+            return True, value
+
+    # 3) Last-resort nested canonical key only; this supports unusual TOML
+    #    layouts such as [config.deepseek] DEEPSEEK_API_KEY = "..." without
+    #    accepting an unrelated generic ``api_key`` from another provider.
+    def _walk_canonical(mapping: Any) -> Tuple[bool, Optional[str]]:
+        for key, value in _mapping_items(mapping):
+            if str(key).strip().upper() == target_upper:
+                return True, _coerce_setting_value(value)
+            if hasattr(value, "keys") and not isinstance(value, (str, bytes, list, tuple)):
+                found, nested_value = _walk_canonical(value)
+                if found:
+                    return found, nested_value
         return False, None
+
+    return _walk_canonical(secrets)
 
 
 def _read_setting(name: str) -> Tuple[Optional[str], str]:

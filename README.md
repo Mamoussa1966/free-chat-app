@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX45-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX46-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -47,7 +47,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 
 ## DeepSeek integration — verification status
 - Adds an official DeepSeek adapter using `https://api.deepseek.com/chat/completions`.
-- HOTFIX45 hardens Streamlit Secrets discovery for DeepSeek (canonical, case-insensitive, and nested TOML lookup) while preserving Secrets-first precedence and no secret leakage.
+- HOTFIX46 hardens Streamlit Secrets discovery for DeepSeek (canonical, case-insensitive, and nested TOML lookup) while preserving Secrets-first precedence and no secret leakage.
 - Uses only explicitly configured `DEEPSEEK_FREE_MODELS`; no automatic model selection and no inferred Free entitlement.
 - The current official DeepSeek API documents `deepseek-v4-flash`, `deepseek-v4-pro`, and `deepseek-v4-flash-vision-exp` as API model IDs; the official pricing page lists V4 Flash/Pro as paid API models. This project therefore does **not** infer or invent a Free entitlement.
 - `DEEPSEEK_FREE_MODELS` remains an explicit allow-list by contract; a configured ID is not proof that the official DeepSeek API grants Free usage.
