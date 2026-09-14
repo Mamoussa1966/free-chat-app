@@ -10,7 +10,7 @@ def test_model_identity_is_end_to_end_attested(monkeypatch):
     requested = "deepseek-v4-flash"
     captured = {}
 
-    def fake_post(endpoint, headers, payload, timeout, deadline):
+    def fake_post(endpoint, headers, payload, timeout, deadline, retries=None):
         captured["request_model"] = payload["model"]
         return {
             "id": "test-response-id",
@@ -35,7 +35,7 @@ def test_model_identity_is_end_to_end_attested(monkeypatch):
 def test_model_identity_mismatch_fails_closed(monkeypatch):
     seat = _deepseek()
 
-    def fake_post(endpoint, headers, payload, timeout, deadline):
+    def fake_post(endpoint, headers, payload, timeout, deadline, retries=None):
         return {
             "id": "test-response-id",
             "model": "different-model",
@@ -57,7 +57,7 @@ def test_model_identity_mismatch_fails_closed(monkeypatch):
 def test_missing_provider_model_identity_fails_closed(monkeypatch):
     seat = _deepseek()
 
-    def fake_post(endpoint, headers, payload, timeout, deadline):
+    def fake_post(endpoint, headers, payload, timeout, deadline, retries=None):
         return {
             "id": "test-response-id",
             "choices": [{"message": {"role": "assistant", "content": "NO_ATTESTATION"}}],

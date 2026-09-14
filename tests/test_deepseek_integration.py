@@ -349,3 +349,4 @@ def test_deepseek_secret_and_model_catalog_are_both_required_before_network(monk
 
     assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "sk-only"
     assert providers.get_model_candidates(DEEPSEEK) == ()
+
