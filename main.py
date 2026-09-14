@@ -186,7 +186,7 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     allowed = {
         "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
         "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
-        "TIMEOUT", "UNKNOWN",
+        "TIMEOUT", "NO_RESPONSE_AFTER_CASCADE", "UNKNOWN",
     }
     summaries: list[dict] = []
     for detail in details or []:
@@ -545,7 +545,7 @@ def _result_error_classification(result: dict) -> str:
         if value in {
             "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
             "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
-            "TIMEOUT", "UNKNOWN",
+            "TIMEOUT", "NO_RESPONSE_AFTER_CASCADE", "UNKNOWN",
         }:
             return value
     raw = str(result.get("error") or "")
@@ -576,8 +576,12 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         st.caption("Classification: AUTHENTICATION_ERROR")
     else:
         summaries = list(result.get("attempt_summaries", []) or [])
+        display_class = str(result.get("classification") or "UNKNOWN").strip().upper()
+        if display_class == "TIMEOUT":
+            display_class = "NO_RESPONSE_AFTER_CASCADE"
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
-            st.write("Official API request failed; raw provider payload is not shown in the UI.")
+            st.write("Official API did not produce a response within the configured per-model window; the explicit Free cascade was allowed to continue. Raw provider payload is not shown in the UI.")
+            st.caption(f"Final classification: **{display_class}**")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
             if summaries:
                 last = summaries[-1]

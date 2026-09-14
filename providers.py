@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX65-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX66-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -42,11 +42,11 @@ REQUEST_TIMEOUT = 2
 # maximum wall-clock HTTP timeout of 2 seconds. The explicit model cascade is
 # the only failover mechanism; there is no hidden retry budget.
 CASCADE_MODEL_TIMEOUT_SECONDS = 2.0
-# Hard per-seat response budget. A seat may attempt several explicitly configured
-# cascade models, but the complete seat execution is never allowed to exceed
-# this wall-clock budget. The first model gets the full budget; later cascade
-# models receive only the time remaining.
-PROVIDER_SEAT_BUDGET_SECONDS = _bounded_int_env("PROVIDER_SEAT_BUDGET_SECONDS", 2, 1, 2)
+# Hard per-seat cascade budget. Each individual model attempt remains capped at
+# CASCADE_MODEL_TIMEOUT_SECONDS, while the seat budget is large enough to let the
+# explicit Free cascade continue across all configured candidates instead of
+# turning the first slow model into a seat-wide stop.
+PROVIDER_SEAT_BUDGET_SECONDS = _bounded_int_env("PROVIDER_SEAT_BUDGET_SECONDS", 20, 2, 20)
 MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 512, 128, 4096)
 
 # DeepSeek V4 defaults to thinking mode when omitted. The council is a fast
