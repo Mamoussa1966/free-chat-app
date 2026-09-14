@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX48-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX50-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -143,22 +143,26 @@ def _coerce_setting_value(value: Any) -> Optional[str]:
     return text or None
 
 
+def _normalize_secret_key(value: Any) -> str:
+    """Normalize a TOML/Streamlit secret key without exposing its value."""
+    return str(value or "").replace("\ufeff", "").replace("\u200b", "").strip().upper()
+
+
 def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
-    """Resolve a Streamlit Secret deterministically and provider-safely.
+    """Resolve a Streamlit Secret deterministically and fail closed.
 
-    The resolver deliberately supports the forms Streamlit Cloud exposes in
-    practice:
-      * root TOML keys: ``DEEPSEEK_API_KEY = "..."``
-      * case variants of canonical keys
-      * provider-scoped tables: ``[deepseek] api_key = "..."``
-      * nested provider tables such as ``[providers.deepseek]``
-      * nested canonical keys such as ``[config.deepseek] DEEPSEEK_API_KEY = "..."``
+    Streamlit Cloud exposes ``st.secrets`` as a mapping-like object.  The
+    resolver first checks the exact canonical key, then performs a recursive
+    *key-name-only* walk.  The recursive walk handles nested TOML tables and
+    Streamlit mapping implementations without ever accepting an unrelated
+    generic ``api_key`` from another provider.
 
-    Importantly, a generic ``api_key`` from an unrelated table is NEVER
-    accepted.  A present-but-empty canonical Secret remains authoritative and
-    therefore prevents an environment value from silently overriding it.
+    The important invariant is that a canonical Secret that exists but is
+    empty is still reported as PRESENT.  This preserves Secret-over-ENV
+    precedence.  Values are returned only to the provider layer and are never
+    rendered by diagnostics.
     """
-    target = str(name or "").strip()
+    target = _normalize_secret_key(name)
     if not target:
         return False, None
 
@@ -168,38 +172,43 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
     except Exception:
         return False, None
 
+    # Materialize Streamlit Secrets first. Streamlit Cloud exposes a
+    # specialized mapping object; using its TOML snapshot makes the lookup
+    # deterministic across deployments and nested-table representations.
+    try:
+        snapshot = secrets.to_dict()
+        if isinstance(snapshot, dict):
+            secrets = snapshot
+    except Exception:
+        pass
+
     from collections.abc import Mapping
 
-    # Streamlit Secret objects have changed concrete mapping implementations
-    # across releases. Prefer a plain snapshot when available, then retain
-    # the object itself as a fallback. This keeps provider resolution inside
-    # the Streamlit trust boundary and avoids relying on one private class.
-    try:
-        secret_snapshot = dict(secrets)
-    except Exception:
-        secret_snapshot = None
-
-    def _is_mapping(value: Any) -> bool:
-        return isinstance(value, Mapping) or (
-            hasattr(value, "keys") and hasattr(value, "__getitem__") and
-            not isinstance(value, (str, bytes, bytearray, list, tuple, set))
+    def is_mapping(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            return True
+        return (
+            hasattr(value, "keys") and hasattr(value, "__getitem__")
+            and not isinstance(value, (str, bytes, bytearray, list, tuple, set))
         )
 
-    def _items(mapping: Any):
-        """Best-effort mapping enumeration across Streamlit secret objects."""
+    def mapping_items(value: Any):
+        """Enumerate Streamlit Secrets and nested TOML tables robustly."""
         candidates = []
         try:
-            converted = mapping.to_dict()
-            if converted is not mapping:
+            converted = value.to_dict()
+            if converted is not value:
                 candidates.append(converted)
         except Exception:
             pass
-        candidates.append(mapping)
+        candidates.append(value)
+
         seen = set()
         for candidate in candidates:
-            if candidate is None or id(candidate) in seen:
+            marker = id(candidate)
+            if candidate is None or marker in seen:
                 continue
-            seen.add(id(candidate))
+            seen.add(marker)
             try:
                 keys = candidate.keys()
             except Exception:
@@ -213,91 +222,85 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
             except Exception:
                 continue
 
-    target_upper = target.upper()
-    provider_prefix = ""
-    aliases: set[str] = set()
-    if target_upper.endswith("_API_KEY"):
-        provider_prefix = target_upper[:-len("_API_KEY")]
-        aliases = {"API_KEY", "KEY", "TOKEN", "API_TOKEN"}
-    elif target_upper.endswith("_FREE_MODELS"):
-        provider_prefix = target_upper[:-len("_FREE_MODELS")]
-        aliases = {"FREE_MODELS", "MODELS", "MODEL_LIST", "MODEL_CATALOG"}
+    def coerce(value: Any) -> Optional[str]:
+        # Secret values may be TOML arrays for model lists.  For API keys we
+        # still return a bounded string; the caller only treats non-empty
+        # scalar values as credentials.
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            value = ",".join(str(item) for item in value)
+        text = str(value).strip()
+        return text or None
 
-    # 1) Direct canonical root key. Try both normal mapping access and the
-    # Streamlit-specific .get()/[] interfaces before walking the structure.
-    root_sources = [x for x in (secret_snapshot, secrets) if x is not None]
-    for root in root_sources:
-        for wanted in (target, target_upper):
+    # 1. Exact root lookup. This is the normal Streamlit Cloud case.
+    for wanted in (str(name).strip(), target):
+        for root in (secrets,):
             try:
                 value = root[wanted]
-                return True, _coerce_setting_value(value)
+                return True, coerce(value)
             except Exception:
                 pass
             try:
                 value = root.get(wanted)
                 if value is not None:
-                    return True, _coerce_setting_value(value)
+                    return True, coerce(value)
             except Exception:
                 pass
-    for wanted in (target, target_upper):
-        try:
-            value = secrets[wanted]
-            return True, _coerce_setting_value(value)
-        except Exception:
-            pass
-        try:
-            value = secrets.get(wanted)
-            if value is not None:
-                return True, _coerce_setting_value(value)
-        except Exception:
-            pass
-    for key, value in _items(secrets):
-        if str(key).strip().upper() == target_upper:
-            return True, _coerce_setting_value(value)
 
-    if not provider_prefix:
-        return False, None
+    # 2. Provider-scoped TOML tables. Accept only a table whose component
+    # name exactly matches the provider derived from the canonical key. This
+    # preserves support for [deepseek], [providers.deepseek], etc. while
+    # preventing an unrelated generic api_key from cross-binding.
+    provider_prefix = ""
+    aliases: set[str] = set()
+    if target.endswith("_API_KEY"):
+        provider_prefix = target[:-len("_API_KEY")].lower().replace("-", "_")
+        aliases = {"API_KEY", "KEY", "TOKEN", "API_TOKEN"}
+    elif target.endswith("_FREE_MODELS"):
+        provider_prefix = target[:-len("_FREE_MODELS")].lower().replace("-", "_")
+        aliases = {"FREE_MODELS", "MODELS", "MODEL_LIST", "MODEL_CATALOG"}
 
-    wanted_provider = provider_prefix.lower().replace("-", "_")
-
-    # 2) Walk provider-scoped tables.  We accept a table whose component name
-    # exactly matches the provider, including [providers.deepseek].
-    def _walk_provider(mapping: Any, path: tuple[str, ...] = ()) -> Tuple[bool, Optional[str]]:
-        for key, value in _items(mapping):
-            key_norm = str(key).strip().lower().replace("-", "_")
-            if not _is_mapping(value):
-                continue
-            current = path + (key_norm,)
-            if key_norm == wanted_provider or (path and path[-1] == "providers" and key_norm == wanted_provider):
-                for child_key, child_value in _items(value):
-                    if str(child_key).strip().upper() in aliases:
-                        return True, _coerce_setting_value(child_value)
-                    # Also accept the exact canonical key inside the provider
-                    # table; this covers mixed TOML conventions safely.
-                    if str(child_key).strip().upper() == target_upper:
-                        return True, _coerce_setting_value(child_value)
-            found, nested = _walk_provider(value, current)
-            if found:
-                return found, nested
-        return False, None
-
-    found, value = _walk_provider(secrets)
-    if found:
-        return True, value
-
-    # 3) Final canonical-only recursive walk. This is intentionally limited to
-    # the exact requested key, so unrelated generic keys cannot cross-bind.
-    def _walk_canonical(mapping: Any) -> Tuple[bool, Optional[str]]:
-        for key, value in _items(mapping):
-            if str(key).strip().upper() == target_upper:
-                return True, _coerce_setting_value(value)
-            if _is_mapping(value):
-                found, nested = _walk_canonical(value)
+    def walk_provider(mapping: Any, path: tuple[str, ...], seen_ids: set[int]) -> Tuple[bool, Optional[str]]:
+        marker = id(mapping)
+        if marker in seen_ids or not is_mapping(mapping):
+            return False, None
+        seen_ids.add(marker)
+        for key, value in mapping_items(mapping):
+            key_norm = _normalize_secret_key(key).lower().replace("-", "_")
+            if is_mapping(value):
+                if key_norm == provider_prefix:
+                    for child_key, child_value in mapping_items(value):
+                        child_norm = _normalize_secret_key(child_key)
+                        if child_norm == target or child_norm in aliases:
+                            return True, coerce(child_value)
+                found, nested = walk_provider(value, path + (key_norm,), seen_ids)
                 if found:
-                    return found, nested
+                    return True, nested
         return False, None
 
-    return _walk_canonical(secrets)
+    if provider_prefix:
+        found, value = walk_provider(secrets, (), set())
+        if found:
+            return True, value
+
+    # 3. Exact canonical-key recursive walk. This also handles a UTF-8 BOM
+    # or zero-width characters accidentally introduced into a TOML key.
+    def walk_exact(mapping: Any, seen_ids: set[int]) -> Tuple[bool, Optional[str]]:
+        marker = id(mapping)
+        if marker in seen_ids or not is_mapping(mapping):
+            return False, None
+        seen_ids.add(marker)
+        for key, value in mapping_items(mapping):
+            if _normalize_secret_key(key) == target:
+                return True, coerce(value)
+            if is_mapping(value):
+                found, nested = walk_exact(value, seen_ids)
+                if found:
+                    return True, nested
+        return False, None
+
+    return walk_exact(secrets, set())
 
 def _read_setting(name: str) -> Tuple[Optional[str], str]:
     """Read one setting with authoritative Streamlit Secret precedence."""
