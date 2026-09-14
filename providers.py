@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX55-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -20,6 +20,9 @@ MAX_ERROR_CHARS = 700
 MAX_RESPONSE_CHARS = 40_000
 MAX_RESPONSE_BODY_CHARS = 4_000_000
 RETRIES = 1
+# Gemini is latency-sensitive in the council UI. Its cascade already provides
+# model-level retry/failover, so avoid a second hidden HTTP retry and cap each
+# individual Gemini attempt to a short, configurable window.
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 
 
@@ -31,13 +34,13 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(value, maximum))
 
 
-# Gemini is latency-sensitive in the interactive council. Keep its per-attempt
-# timeout short and let the explicit Free-model cascade advance instead of
-# paying the global retry cost twice. This does not disable the cascade.
-GEMINI_REQUEST_TIMEOUT = _bounded_int_env("GEMINI_TIMEOUT_SECONDS", 12, 5, 30)
-
 REQUEST_TIMEOUT = _bounded_int_env("PROVIDER_TIMEOUT_SECONDS", 45, 5, 90)
 MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 1200, 128, 4096)
+# Gemini is latency-sensitive in the council UI. Its cascade already provides
+# model-level failover, so avoid a second hidden HTTP retry and cap each
+# individual Gemini attempt to a short, configurable window.
+GEMINI_REQUEST_TIMEOUT_SECONDS = _bounded_int_env("GEMINI_REQUEST_TIMEOUT_SECONDS", 5, 2, 15)
+GEMINI_RETRIES = 0
 
 
 @dataclass(frozen=True)
@@ -308,10 +311,15 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
     return walk_exact(secrets, set())
 
 def _read_setting(name: str) -> Tuple[Optional[str], str]:
-    """Read one setting with authoritative Streamlit Secret precedence."""
+    """Read one setting with strict Streamlit Secret precedence.
+
+    A present Streamlit key owns the configuration slot even when its value is
+    empty. This prevents a stale environment variable from silently replacing
+    a dashboard Secret and makes the source state diagnosable.
+    """
     present, value = _streamlit_secret_state(name)
     if present:
-        return value, "streamlit_secrets"
+        return value, "streamlit_secrets" if value else "streamlit_secrets_empty"
     value = _coerce_setting_value(os.getenv(name))
     if value:
         return value, "environment"
@@ -327,12 +335,14 @@ def _streamlit_secret(name: str) -> Optional[str]:
 def _setting(names: Iterable[str]) -> Optional[str]:
     """Read configuration from Streamlit Secrets first, then environment.
 
-    A non-empty Streamlit Secret is authoritative for that exact key. The
-    environment is consulted only when the Secret is absent/empty. No model
-    catalog is merged, inferred, or silently substituted.
+    For each canonical name, a present Streamlit Secret is authoritative. An
+    explicitly empty Secret therefore blocks an environment value for that
+    same name; no stale configuration can leak across the trust boundary.
     """
     for name in names:
-        value, _ = _read_setting(name)
+        value, source = _read_setting(name)
+        if source.startswith("streamlit_secrets"):
+            return value
         if value:
             return value
     return None
@@ -395,12 +405,15 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
 
 
 def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
-    # Streamlit Secret is authoritative, including an explicitly empty Secret.
-    # This also makes runtime changes to st.secrets immediately observable.
+    # Preserve the public/test seam _streamlit_secret while also distinguishing
+    # a genuinely absent key from a present-but-empty Streamlit Secret.
     for name in seat.model_env:
         secret = _streamlit_secret(name)
         if secret is not None:
             return _parse_models(secret)
+        present, secret_state = _streamlit_secret_state(name)
+        if present:
+            return _parse_models(secret_state or "")
     return _parse_models(_setting(seat.model_env) or "")
 
 
@@ -625,16 +638,16 @@ def _bounded_timeout(timeout: float, deadline: Optional[float]) -> float:
     return max(0.5, min(float(timeout), remaining))
 
 
-def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Optional[float] = None) -> dict:
+def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Optional[float] = None, retries: Optional[int] = None) -> dict:
     last: Optional[ProviderError] = None
-    effective_retries = 0 if "generativelanguage.googleapis.com" in str(url) else RETRIES
-    for attempt in range(effective_retries + 1):
+    retry_budget = RETRIES if retries is None else max(0, int(retries))
+    for attempt in range(retry_budget + 1):
         request_timeout = _bounded_timeout(timeout, deadline)
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=request_timeout)
         except requests.Timeout as exc:
             last = ProviderError("network timeout", error_class="timeout")
-            if attempt < RETRIES and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
+            if attempt < retry_budget and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
                 delay = _retry_delay(None, attempt)
                 if deadline is not None:
                     delay = min(delay, max(0.0, (_remaining(deadline) or 0) - 0.05))
@@ -644,7 +657,7 @@ def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Opti
             raise last from exc
         except requests.RequestException as exc:
             last = ProviderError(f"network error: {exc.__class__.__name__}", error_class="network")
-            if attempt < RETRIES and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
+            if attempt < retry_budget and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
                 delay = min(_retry_delay(None, attempt), max(0.0, (_remaining(deadline) or 0) - 0.05)) if deadline is not None else _retry_delay(None, attempt)
                 if delay > 0:
                     time.sleep(delay)
@@ -654,7 +667,7 @@ def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Opti
         if response.status_code >= 400:
             body = _sanitize(response.text[:1600])
             last = ProviderError(f"HTTP {response.status_code}: {body or 'empty error body'}", response.status_code, _classify(response.status_code, body))
-            if _retryable(response.status_code, body) and attempt < RETRIES and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
+            if _retryable(response.status_code, body) and attempt < retry_budget and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
                 delay = _retry_delay(response, attempt)
                 if deadline is not None:
                     delay = min(delay, max(0.0, (_remaining(deadline) or 0) - 0.05))
@@ -803,7 +816,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                     parts.append({"text": f"Attached file: {att['name']}\n{extract_text(att)}"})
             else:
                 parts.append({"text": f"Attached binary file not extracted: {att['name']}"})
-        data = _post(seat.endpoint.format(model=model), {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}}, timeout, deadline)
+        data = _post(seat.endpoint.format(model=model), {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}}, min(timeout, GEMINI_REQUEST_TIMEOUT_SECONDS), deadline, GEMINI_RETRIES)
         text = _gemini_text(data)
 
     elif seat.kind == "anthropic":
@@ -851,6 +864,9 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 content_parts.append(f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }")
         content = "\n\n".join(x for x in content_parts if x).strip()
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
+        provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
+        if not provider_reported_model or provider_reported_model != model:
+            raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
         text = _chat_text(data)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
         if not provider_reported_model:
@@ -870,12 +886,17 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 extracted = extract_text(att)
                 content.append({"type": "text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
+        provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
+        if not provider_reported_model or provider_reported_model != model:
+            raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
         text = _chat_text(data)
     else:
         raise ProviderError("unsupported provider contract", error_class="configuration")
 
     if not text:
         raise ProviderError("official provider returned no text", error_class="empty_response")
+    if seat.key == "deepseek":
+        return {"text": text, "provider_reported_model": provider_reported_model}
     return text
 
 
@@ -904,6 +925,8 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
                 "status_code": d.get("status_code"),
                 "classification": _canonical_error_classification(str(d.get("classification") or "UNKNOWN")),
                 "retryable": bool(d.get("retryable", False)),
+                **({"latency": float(d.get("latency"))} if d.get("latency") is not None else {}),
+                **({"timeout_seconds": float(d.get("timeout_seconds"))} if d.get("timeout_seconds") is not None else {}),
                 **({"created_at_epoch": float(d.get("_display_created_at"))} if d.get("_display_created_at") is not None else {}),
             }
             for d in (attempt_diagnostics or [])
@@ -939,14 +962,15 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
             break
         attempted.append(model)
-        attempt_started = time.perf_counter()
         try:
             executed_model = str(model or "").strip()
-            provider_timeout = GEMINI_REQUEST_TIMEOUT if seat.key == "gemini" else REQUEST_TIMEOUT
+            attempt_started = time.perf_counter()
+            effective_timeout = min(REQUEST_TIMEOUT, GEMINI_REQUEST_TIMEOUT_SECONDS) if seat.key == "gemini" else REQUEST_TIMEOUT
             if deadline is None:
-                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, provider_timeout, attachments)
+                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, effective_timeout, attachments)
             else:
-                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, provider_timeout, attachments, deadline)
+                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, effective_timeout, attachments, deadline)
+            attempt_latency = round(time.perf_counter() - attempt_started, 3)
             provider_reported_model = ""
             if isinstance(raw_response, dict) and "text" in raw_response:
                 content = str(raw_response.get("text") or "").strip()
@@ -957,9 +981,9 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 if seat.key == "deepseek":
                     raise ProviderError("DeepSeek provider response identity is unavailable", error_class="execution_identity_mismatch")
                 provider_reported_model = executed_model
-            success_duration = round(time.perf_counter() - attempt_started, 3)
             result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics, provider_reported_model=provider_reported_model)
-            result["last_attempt_duration"] = success_duration
+            result["successful_attempt_latency"] = attempt_latency
+            result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
             if seat.key == "deepseek" and result.get("provider_reported_model") != executed_model:
@@ -979,7 +1003,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification_label": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
                 "retryable": exc.error_class not in terminal and classification != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
-                "duration": round(time.perf_counter() - attempt_started, 3),
+                **({"latency": round(time.perf_counter() - attempt_started, 3), "timeout_seconds": effective_timeout} if seat.key == "gemini" else {}),
                 # UI-only timestamp; raw provider error remains runtime-only.
                 "_display_created_at": time.time(),
             })
@@ -1006,7 +1030,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification_label": _friendly_error_class(internal),
                 "error": _diagnostic(wrapped, credential),
                 "retryable": normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
-                "duration": round(time.perf_counter() - attempt_started, 3),
+                **({"latency": round(time.perf_counter() - attempt_started, 3), "timeout_seconds": effective_timeout} if seat.key == "gemini" else {}),
                 "_display_created_at": time.time(),
             })
             if normalized == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:

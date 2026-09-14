@@ -1,14 +1,8 @@
-# HOTFIX55-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL
 
-## Gemini latency hardening
-- The previous release remains the baseline; all existing application files and test modules are preserved.
-- Gemini interactive requests now use a dedicated 12-second default timeout, configurable with `GEMINI_TIMEOUT_SECONDS` and bounded to 5–30 seconds.
-- Gemini does not pay the generic adapter retry once a request times out/returns a retryable HTTP response; the explicit Free API Cascade #1→#10 advances to the next configured model instead.
-- Added compact per-attempt duration telemetry without exposing credentials or raw provider payloads.
-- Model identity attestation and fail-closed mismatch behavior remain unchanged.
-- No Local Engine, paid fallback, or implicit model selection was introduced.
+# HOTFIX56 — Gemini latency hardening
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX55-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL
 
 # previous multi-agent release MULTIAGENT FINAL
 
@@ -169,7 +163,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Release packaging continues to re-extract the exact ZIP and rerun the complete suite before acceptance.
 
 
-## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX55-FINAL
+## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL
 
 - Preserved the complete current project tree and all existing `tests/test_*.py` modules; the release test registry is now dynamic rather than hard-coded to an older test count.
 - Added the canonical `.streamlit/secrets.toml.example` path while retaining the user's existing files.
@@ -178,3 +172,11 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Preserved execution/provider identity checks and strengthened UI execution-model display.
 - Council aggregation now deduplicates duplicate worker results at the orchestration boundary without weakening the low-level history-identity invariant.
 - Internal worker failures are normalized to `API_ERROR` rather than an opaque `UNKNOWN`.
+
+## HOTFIX56 Gemini latency hardening
+- Built directly from the previous release codebase; existing application files and test modules are preserved.
+- Gemini per-model request timeout is capped at 10 seconds by default and is configurable with `GEMINI_REQUEST_TIMEOUT_SECONDS` (5–30).
+- Gemini HTTP-level retries are disabled by default because the explicit Free-model cascade already provides failover; this removes hidden retry latency.
+- Every cascade attempt records latency and effective timeout for operational diagnostics.
+- Successful Gemini results expose total request latency plus successful-attempt latency; raw provider payloads remain excluded from UI/history.
+- Model identity attestation and the Free API Cascade contract remain unchanged.

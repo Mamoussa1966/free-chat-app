@@ -200,11 +200,6 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
             "classification": classification,
             "retryable": bool(detail.get("retryable", False)),
         }
-        if detail.get("duration") is not None:
-            try:
-                summary["duration"] = round(float(detail.get("duration")), 3)
-            except (TypeError, ValueError):
-                pass
         # The timestamp is runtime metadata used only for the 60-second UI TTL.
         # Do not synthesize it here: real provider attempts stamp it at creation time.
         if "_display_created_at" in detail:
@@ -515,11 +510,6 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             for detail in message.get("attempt_summaries", []) or []:
                 _render_temporary_attempt_diagnostic(detail)
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
-            durations = [d.get("duration") for d in (message.get("attempt_summaries", []) or []) if d.get("duration") is not None]
-            if message.get("last_attempt_duration") is not None:
-                durations.append(message.get("last_attempt_duration"))
-            if durations:
-                st.caption(f"Attempt timings: " + " → ".join(f"{float(d):.2f}s" for d in durations))
             if message.get("provider_reported_model"):
                 st.caption(f"Provider model: `{message.get('provider_reported_model')}`")
             st.markdown(message.get("content", ""))
@@ -570,7 +560,10 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
     if status == "SUCCESS":
         display_model = result.get('executed_model') or result['model']
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — {result['latency']}s")
+        attempt_latency = result.get("successful_attempt_latency")
+        timeout_text = f" · timeout {result.get('effective_timeout')}s" if result.get("effective_timeout") else ""
+        attempt_text = f" · attempt {attempt_latency}s" if attempt_latency is not None else ""
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result['latency']}s{attempt_text}{timeout_text}")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
