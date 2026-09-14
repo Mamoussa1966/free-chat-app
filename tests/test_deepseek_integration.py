@@ -204,6 +204,44 @@ def test_deepseek_secret_detection_accepts_case_and_nested_toml_keys(monkeypatch
     assert providers.get_model_candidates(DEEPSEEK) == ("deepseek-v4-flash",)
 
 
+def test_deepseek_streamlit_secret_resolver_handles_streamlit_like_object(monkeypatch):
+    import streamlit as st
+
+    class FakeSecrets:
+        def __init__(self):
+            self._data = {
+                "DEEPSEEK_API_KEY": "sk-streamlit-like",
+                "DEEPSEEK_FREE_MODELS": ["deepseek-chat", "deepseek-reasoner"],
+            }
+        def to_dict(self):
+            return dict(self._data)
+        def keys(self):
+            return self._data.keys()
+        def __getitem__(self, key):
+            return self._data[key]
+        def get(self, key, default=None):
+            return self._data.get(key, default)
+
+    monkeypatch.setattr(st, "secrets", FakeSecrets(), raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_FREE_MODELS", raising=False)
+
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "sk-streamlit-like"
+    assert providers.get_model_candidates(DEEPSEEK) == ("deepseek-chat", "deepseek-reasoner")
+    assert providers.credential_sources()["deepseek"] == "streamlit_secrets"
+    assert providers.model_config_sources()["deepseek"] == "streamlit_secrets"
+
+
+def test_deepseek_secret_resolver_never_cross_binds_unrelated_generic_api_key(monkeypatch):
+    import streamlit as st
+    monkeypatch.setattr(st, "secrets", {
+        "other_provider": {"api_key": "sk-other", "free_models": "other-model"},
+        "deepseek": {"free_models": "deepseek-chat"},
+    }, raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) is None
+    assert providers.credential_sources()["deepseek"] == "missing"
+
 def test_deepseek_secret_precedence_is_preserved(monkeypatch):
     import streamlit as st
     monkeypatch.setattr(st, "secrets", {"DEEPSEEK_API_KEY": "secret-value"}, raising=False)
