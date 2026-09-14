@@ -1,4 +1,14 @@
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX54-FINAL
+# HOTFIX55-FINAL
+
+## Gemini latency hardening
+- The previous release remains the baseline; all existing application files and test modules are preserved.
+- Gemini interactive requests now use a dedicated 12-second default timeout, configurable with `GEMINI_TIMEOUT_SECONDS` and bounded to 5–30 seconds.
+- Gemini does not pay the generic adapter retry once a request times out/returns a retryable HTTP response; the explicit Free API Cascade #1→#10 advances to the next configured model instead.
+- Added compact per-attempt duration telemetry without exposing credentials or raw provider payloads.
+- Model identity attestation and fail-closed mismatch behavior remain unchanged.
+- No Local Engine, paid fallback, or implicit model selection was introduced.
+
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX55-FINAL
 
 # previous multi-agent release MULTIAGENT FINAL
 
@@ -159,7 +169,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Release packaging continues to re-extract the exact ZIP and rerun the complete suite before acceptance.
 
 
-## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX54-FINAL
+## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX55-FINAL
 
 - Preserved the complete current project tree and all existing `tests/test_*.py` modules; the release test registry is now dynamic rather than hard-coded to an older test count.
 - Added the canonical `.streamlit/secrets.toml.example` path while retaining the user's existing files.

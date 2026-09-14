@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX54-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX55-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -69,3 +69,9 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 
 ## PREVIOUS_RELEASE dynamic seat registry
 The six original provider seats remain first-class. `AI_COUNCIL_EXTRA_AGENTS` can add up to 14 more official API seats (20 total). Runtime execution, aggregation, diagnostics, history identity, and sidebar configuration all use the dynamic `get_seats()` registry.
+
+## Hotfix 55 — Gemini latency hardening
+- Gemini interactive attempts default to a 12-second timeout (`GEMINI_TIMEOUT_SECONDS`), bounded to 5–30 seconds.
+- Gemini HTTP attempts do not perform the extra adapter-level retry; the explicit Free-model cascade remains responsible for advancing to the next configured model.
+- Per-attempt duration telemetry is retained as compact, non-sensitive metadata.
+- No Local Engine, paid fallback, implicit model selection, or model-identity attestation bypass was added.

@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX54-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX55-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -30,6 +30,11 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
         value = default
     return max(minimum, min(value, maximum))
 
+
+# Gemini is latency-sensitive in the interactive council. Keep its per-attempt
+# timeout short and let the explicit Free-model cascade advance instead of
+# paying the global retry cost twice. This does not disable the cascade.
+GEMINI_REQUEST_TIMEOUT = _bounded_int_env("GEMINI_TIMEOUT_SECONDS", 12, 5, 30)
 
 REQUEST_TIMEOUT = _bounded_int_env("PROVIDER_TIMEOUT_SECONDS", 45, 5, 90)
 MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 1200, 128, 4096)
@@ -622,7 +627,8 @@ def _bounded_timeout(timeout: float, deadline: Optional[float]) -> float:
 
 def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Optional[float] = None) -> dict:
     last: Optional[ProviderError] = None
-    for attempt in range(RETRIES + 1):
+    effective_retries = 0 if "generativelanguage.googleapis.com" in str(url) else RETRIES
+    for attempt in range(effective_retries + 1):
         request_timeout = _bounded_timeout(timeout, deadline)
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=request_timeout)
@@ -933,12 +939,14 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
             break
         attempted.append(model)
+        attempt_started = time.perf_counter()
         try:
             executed_model = str(model or "").strip()
+            provider_timeout = GEMINI_REQUEST_TIMEOUT if seat.key == "gemini" else REQUEST_TIMEOUT
             if deadline is None:
-                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments)
+                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, provider_timeout, attachments)
             else:
-                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
+                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, provider_timeout, attachments, deadline)
             provider_reported_model = ""
             if isinstance(raw_response, dict) and "text" in raw_response:
                 content = str(raw_response.get("text") or "").strip()
@@ -949,7 +957,9 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 if seat.key == "deepseek":
                     raise ProviderError("DeepSeek provider response identity is unavailable", error_class="execution_identity_mismatch")
                 provider_reported_model = executed_model
+            success_duration = round(time.perf_counter() - attempt_started, 3)
             result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics, provider_reported_model=provider_reported_model)
+            result["last_attempt_duration"] = success_duration
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
             if seat.key == "deepseek" and result.get("provider_reported_model") != executed_model:
@@ -969,6 +979,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification_label": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
                 "retryable": exc.error_class not in terminal and classification != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
+                "duration": round(time.perf_counter() - attempt_started, 3),
                 # UI-only timestamp; raw provider error remains runtime-only.
                 "_display_created_at": time.time(),
             })
@@ -995,6 +1006,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification_label": _friendly_error_class(internal),
                 "error": _diagnostic(wrapped, credential),
                 "retryable": normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
+                "duration": round(time.perf_counter() - attempt_started, 3),
                 "_display_created_at": time.time(),
             })
             if normalized == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
