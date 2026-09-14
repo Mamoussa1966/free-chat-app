@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX47-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX48-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -170,6 +170,15 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
 
     from collections.abc import Mapping
 
+    # Streamlit Secret objects have changed concrete mapping implementations
+    # across releases. Prefer a plain snapshot when available, then retain
+    # the object itself as a fallback. This keeps provider resolution inside
+    # the Streamlit trust boundary and avoids relying on one private class.
+    try:
+        secret_snapshot = dict(secrets)
+    except Exception:
+        secret_snapshot = None
+
     def _is_mapping(value: Any) -> bool:
         return isinstance(value, Mapping) or (
             hasattr(value, "keys") and hasattr(value, "__getitem__") and
@@ -216,6 +225,20 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
 
     # 1) Direct canonical root key. Try both normal mapping access and the
     # Streamlit-specific .get()/[] interfaces before walking the structure.
+    root_sources = [x for x in (secret_snapshot, secrets) if x is not None]
+    for root in root_sources:
+        for wanted in (target, target_upper):
+            try:
+                value = root[wanted]
+                return True, _coerce_setting_value(value)
+            except Exception:
+                pass
+            try:
+                value = root.get(wanted)
+                if value is not None:
+                    return True, _coerce_setting_value(value)
+            except Exception:
+                pass
     for wanted in (target, target_upper):
         try:
             value = secrets[wanted]
@@ -796,17 +819,20 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
         # DeepSeek official OpenAI-compatible Chat Completions API.
         # Free eligibility is NEVER inferred here; only explicitly configured
         # DEEPSEEK_FREE_MODELS are eligible for the project cascade.
-        content = [{"type": "text", "text": prompt}]
+        # DeepSeek's official OpenAI-compatible chat endpoint accepts the user
+        # message content as text. Do not send OpenAI multimodal content-block
+        # arrays here; the standard DeepSeek chat contract is text-first.
+        content_parts = [prompt]
         for att in safe_attachments:
             if att["omitted"]:
-                content.append({"type": "text", "text": f"Attachment omitted by safety cap: {att['name']}"})
+                content_parts.append(f"Attachment omitted by safety cap: {att['name']}")
             elif is_image(att):
-                # The general DeepSeek chat endpoint is text-first; image support
-                # is intentionally not inferred from a model name.
-                content.append({"type": "text", "text": f"Image attachment not sent to DeepSeek chat endpoint: {att['name']}"})
+                # Image transport is deliberately not inferred from a model name.
+                content_parts.append(f"Image attachment not sent to DeepSeek chat endpoint: {att['name']}")
             else:
                 extracted = extract_text(att)
-                content.append({"type": "text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
+                content_parts.append(f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }")
+        content = "\n\n".join(x for x in content_parts if x).strip()
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
         text = _chat_text(data)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""

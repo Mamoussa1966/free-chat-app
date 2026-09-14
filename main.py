@@ -265,7 +265,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(get_seats())), thread_name_prefix="council") as pool:
         futures = {
             pool.submit(call_seat, seat, user_prompt, snapshot, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key), deadline, request_id): seat
-            for seat in SEATS
+            for seat in get_seats()
         }
         for future in as_completed(futures):
             seat = futures[future]
@@ -275,7 +275,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id, round_no)
     for seat in get_seats():
         results.setdefault(seat.key, _worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates, request_id, round_no))
-    return [results[seat.key] for seat in SEATS]
+    return [results[seat.key] for seat in get_seats()]
 
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
@@ -322,14 +322,14 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
 def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list[dict]:
     results: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(get_seats())), thread_name_prefix="diagnostic") as pool:
-        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in SEATS}
+        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in get_seats()}
         for future in as_completed(futures):
             seat = futures[future]
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id="diagnostic", round_no=0)
-    return [results[seat.key] for seat in SEATS]
+    return [results[seat.key] for seat in get_seats()]
 
 
 def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> int:
@@ -341,7 +341,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.divider()
         st.subheader("🔬 تشخيص المزودين")
         st.caption("API رسمي فقط؛ لا Local Engine ولا نموذج تلقائي.")
-        if st.button("🔍 فحص المزودين الخمسة الآن", use_container_width=True):
+        if st.button("🔍 فحص جميع الوكلاء الآن", use_container_width=True):
             with st.spinner("تشخيص المزودين بالتوازي…"):
                 st.session_state.last_diagnostics = [_public_result(r) for r in _run_provider_diagnostics(credentials, model_candidates)]
             st.rerun()
