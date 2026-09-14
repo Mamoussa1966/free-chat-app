@@ -1,4 +1,17 @@
-## HOTFIX44 — DeepSeek provider identity attestation
+## HOTFIX45 — DeepSeek Secrets discovery + provider identity hardening
+
+- Fixed the DeepSeek credential discovery boundary so `DEEPSEEK_API_KEY` is read from Streamlit Secrets before the environment.
+- Added robust root-key, case-insensitive, and nested-TOML Secret lookup without exposing credential values.
+- Added non-secret credential-source diagnostics so the UI can distinguish `streamlit_secrets`, `environment`, and `missing`.
+- Preserved explicit `DEEPSEEK_FREE_MODELS` only; no implicit DeepSeek model catalog is introduced.
+- Preserved the official endpoint `https://api.deepseek.com/chat/completions`.
+- Enforced provider-attested model identity for every official seat in the UI path: provider-reported model must exist and equal the executed model.
+- Provider identity mismatch is terminal for that cascade attempt and can never be rendered as a successful round.
+- Raw provider payloads and credentials remain excluded from visible History.
+
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX45-FINAL`
+
+## HOTFIX45 — DeepSeek Secrets discovery + provider identity hardening
 
 Previous release — Multi-agent architecture
 - Preserves the original six first-class provider agents.
@@ -10,7 +23,7 @@ Previous release — Multi-agent architecture
 
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX44-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX45-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -70,7 +83,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Additional agents reuse the same parse → normalize → candidates → call_seat → cascade contract. Supported adapter kinds are `chat_completions`, `openai_responses`, `xai_responses`, `deepseek_chat`, `gemini`, and `anthropic`.
 - No Local Engine, implicit provider, automatic model selection, or paid fallback is introduced.
 
-## HOTFIX44 — DeepSeek provider identity attestation
+## Historical provider-identity hardening
 - DeepSeek now requires the official response `model` field.
 - The requested model, HTTP request model, provider-reported model, executed model, and displayed model must agree for a successful DeepSeek round.
 - Missing or mismatched provider model identity fails closed and never renders as a successful DeepSeek response.

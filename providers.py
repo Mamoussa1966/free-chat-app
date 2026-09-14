@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX44-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX45-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -144,20 +144,85 @@ def _coerce_setting_value(value: Any) -> Optional[str]:
 
 
 def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
-    """Return (present, value) for one Streamlit Secret.
+    """Return ``(present, value)`` for a Streamlit Secret robustly.
 
-    Presence is distinct from truthiness: an explicitly present empty Secret
-    must not be replaced by an Environment Variable. This is required for the
-    project's strict Secrets-first contract.
+    Streamlit exposes ``st.secrets`` as a mapping, but deployments can use
+    TOML tables and some editors/mobile workflows can introduce casing or
+    nesting differences.  The canonical project key remains exact (for
+    example ``DEEPSEEK_API_KEY``); this resolver additionally recognizes a
+    case-insensitive root key and a matching nested key without ever exposing
+    the secret.  A present-but-empty canonical Secret remains authoritative
+    over the environment.
     """
+    target = str(name or "").strip()
+    if not target:
+        return False, None
     try:
         import streamlit as st
         secrets = st.secrets
-        if name in secrets:
-            return True, _coerce_setting_value(secrets.get(name))
+
+        # 1) Canonical root-level lookup.
+        try:
+            if target in secrets:
+                return True, _coerce_setting_value(secrets[target])
+        except Exception:
+            try:
+                value = secrets.get(target)
+                if value is not None:
+                    return True, _coerce_setting_value(value)
+            except Exception:
+                pass
+
+        # 2) Case-insensitive root-level lookup.
+        target_upper = target.upper()
+        try:
+            for key in secrets.keys():
+                if str(key).strip().upper() == target_upper:
+                    try:
+                        return True, _coerce_setting_value(secrets[key])
+                    except Exception:
+                        return True, None
+        except Exception:
+            pass
+
+        # 3) Nested TOML-table lookup: [provider] KEY = ... or
+        #    [deepseek] api_key = ... are accepted as configuration aliases.
+        def _nested_aliases() -> set[str]:
+            aliases = {target_upper}
+            if target_upper.endswith("_API_KEY"):
+                aliases.update({"API_KEY", "KEY", "TOKEN", "API_TOKEN"})
+            if target_upper.endswith("_FREE_MODELS"):
+                aliases.update({"FREE_MODELS", "MODELS", "MODEL_LIST", "MODEL_CATALOG"})
+            return aliases
+
+        aliases = _nested_aliases()
+
+        def walk(mapping: Any, path: str = "") -> Tuple[bool, Optional[str]]:
+            if not isinstance(mapping, dict) and not hasattr(mapping, "keys"):
+                return False, None
+            try:
+                keys = list(mapping.keys())
+            except Exception:
+                return False, None
+            for key in keys:
+                try:
+                    value = mapping[key]
+                except Exception:
+                    continue
+                key_text = str(key).strip()
+                key_upper = key_text.upper()
+                if key_upper in aliases:
+                    return True, _coerce_setting_value(value)
+                if hasattr(value, "keys") and not isinstance(value, (str, bytes, list, tuple)):
+                    nested_path = f"{path}.{key_text}" if path else key_text
+                    found, nested_value = walk(value, nested_path)
+                    if found:
+                        return found, nested_value
+            return False, None
+
+        return walk(secrets)
     except Exception:
-        pass
-    return False, None
+        return False, None
 
 
 def _read_setting(name: str) -> Tuple[Optional[str], str]:
@@ -192,6 +257,20 @@ def _setting(names: Iterable[str]) -> Optional[str]:
 
 def get_secret(names: Iterable[str]) -> Optional[str]:
     return _setting(names)
+
+
+def credential_sources() -> Dict[str, str]:
+    """Return non-secret credential source labels for every active seat."""
+    sources: Dict[str, str] = {}
+    for seat in get_seats():
+        source = "missing"
+        for name in seat.env_names:
+            value, candidate_source = _read_setting(name)
+            if value:
+                source = candidate_source
+                break
+        sources[seat.key] = source
+    return sources
 
 
 def capture_credentials() -> Dict[str, Optional[str]]:
@@ -760,7 +839,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
 
     last_error: Optional[ProviderError] = None
     attempt_diagnostics: list[dict] = []
-    terminal = {"not_configured", "configuration", "deadline_exceeded"}
+    terminal = {"not_configured", "configuration", "deadline_exceeded", "execution_identity_mismatch"}
     for index, model in enumerate(candidates):
         if deadline is not None and (_remaining(deadline) or 0) <= 0:
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")

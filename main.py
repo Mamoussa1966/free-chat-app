@@ -13,7 +13,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import SEATS, get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -400,8 +400,11 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
         st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(get_seats())}")
         st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
+        credential_source_map = credential_sources()
+        credential_source_text = " • ".join(f"{seat.name}: {credential_source_map.get(seat.key, 'missing')}" for seat in get_seats())
+        st.caption(f"مصدر الاعتمادات: {credential_source_text}")
         sources = model_config_sources()
-        source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in SEATS)
+        source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in get_seats())
         st.caption(f"مصدر إعداد النماذج: {source_text}")
         st.caption("Streamlit Secrets لها الأولوية؛ Environment Variables تُستخدم فقط عند غياب Secret غير الفارغ.")
         st.caption("وجود المفتاح لا يثبت Free Tier أو quota.")
@@ -484,8 +487,11 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                     st.error("⚠️ Cascade identity mismatch: آخر محاولة لا تطابق النموذج المنفذ.")
                     continue
                 provider_reported_model = str(message.get("provider_reported_model") or "").strip()
-                if message.get("seat_key") == "deepseek" and provider_reported_model != executed_model:
-                    st.error("⚠️ Provider identity mismatch: هوية DeepSeek التي أعادها المزود لا تطابق النموذج المنفذ.")
+                if not provider_reported_model:
+                    st.error("⚠️ Provider identity missing: لا يمكن عرض نجاح رسمي بدون هوية النموذج من المزود.")
+                    continue
+                if provider_reported_model != executed_model:
+                    st.error("⚠️ Provider identity mismatch: هوية النموذج التي أعادها المزود لا تطابق النموذج المنفذ.")
                     continue
             request_id = str(message.get("request_id") or "").strip()
             request_no = _request_display_number(chat, request_id) if request_id else None
