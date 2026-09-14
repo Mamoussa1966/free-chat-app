@@ -48,6 +48,18 @@ def test_main_executes_dynamic_get_seats_not_static_builtin_alias():
     assert "return [results[seat.key] for seat in seats]" in source
 
 
+def test_room_seat_contract_reserves_user_as_seat_six_and_deepseek_as_seat_seven():
+    seats = providers.get_seats()
+    slots = {seat.key: seat.room_slot for seat in seats}
+    assert slots["openai"] == 1
+    assert slots["gemini"] == 2
+    assert slots["claude"] == 3
+    assert slots["grok"] == 4
+    assert slots["kimi"] == 5
+    assert slots["deepseek"] == 7
+    assert 6 not in slots.values()
+
+
 def test_deepseek_contract_is_explicit_and_independent():
     seat = next(s for s in providers.get_seats() if s.key == "deepseek")
     assert seat.env_names == ("DEEPSEEK_API_KEY",)
