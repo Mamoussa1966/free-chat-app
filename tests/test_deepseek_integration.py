@@ -144,7 +144,8 @@ def test_deepseek_preserves_full_existing_test_set_plus_this_regression_module()
     root = Path(__file__).resolve().parents[1]
     names = {p.name for p in (root / "tests").glob("test_*.py") if p.is_file()}
     assert "test_deepseek_integration.py" in names
-    assert len(names) == 24
+    import build_release
+    assert names == build_release.EXPECTED_TEST_FILES
 
 
 def test_deepseek_provider_model_is_attested_end_to_end():

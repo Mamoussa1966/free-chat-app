@@ -16,7 +16,7 @@ def test_release_metadata_has_single_current_version():
     assert "APP_VERSION = PROVIDER_VERSION" in main
     assert f'VERSION = "{version}"' in providers
     assert version in release
-    assert f"HOTFIX{re.search(r'HOTFIX(\d+)', version).group(1)}_DEEPSEEK_ADAPTER_FINAL.zip" in builder
+    assert f"HOTFIX{re.search(r'HOTFIX(\d+)', version).group(1)}_FINAL.zip" in builder
 
 
 def test_no_stale_hotfix_identifiers_remain_outside_this_regression_test():

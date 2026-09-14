@@ -15,9 +15,9 @@ class CoreTests(unittest.TestCase):
         with patch("providers._setting", return_value=None):
             self.assertEqual(get_model_candidates(SEATS[0]), ())
 
-    def test_unicode_mobile_separators_are_normalized(self):
+    def test_unicode_mobile_separators_are_rejected_as_ambiguous(self):
         raw = "gemini-a‚gemini-b،gemini-c，gemini-d؛gemini-e"
-        self.assertEqual(_parse_models(raw), ("gemini-a", "gemini-b", "gemini-c", "gemini-d", "gemini-e"))
+        self.assertEqual(_parse_models(raw), ())
 
     def test_model_candidates_are_explicit_and_capped(self):
         configured = ",".join(f"model-{i}" for i in range(1, 13))
