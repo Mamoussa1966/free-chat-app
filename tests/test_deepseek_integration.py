@@ -250,3 +250,101 @@ def test_deepseek_secret_precedence_is_preserved(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "environment-value")
     assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "secret-value"
     assert providers.credential_sources()["deepseek"] == "streamlit_secrets"
+
+
+def test_deepseek_secret_key_name_normalization_handles_bom_and_zero_width(monkeypatch):
+    import streamlit as st
+    monkeypatch.setattr(st, "secrets", {
+        "\ufeffdeepseek_api_key\u200b": "sk-hidden-key",
+        "\ufeffDEEPSEEK_FREE_MODELS\u200b": ["deepseek-chat", "deepseek-reasoner"],
+    }, raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_FREE_MODELS", raising=False)
+
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "sk-hidden-key"
+    assert providers.get_model_candidates(DEEPSEEK) == ("deepseek-chat", "deepseek-reasoner")
+    assert providers.credential_sources()["deepseek"] == "streamlit_secrets"
+    assert providers.model_config_sources()["deepseek"] == "streamlit_secrets"
+
+
+def test_deepseek_canonical_secret_wins_over_nested_same_provider_value(monkeypatch):
+    import streamlit as st
+    monkeypatch.setattr(st, "secrets", {
+        "DEEPSEEK_API_KEY": "root-key",
+        "deepseek": {"api_key": "nested-key"},
+    }, raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "environment-key")
+
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "root-key"
+    assert providers.credential_sources()["deepseek"] == "streamlit_secrets"
+
+
+def test_deepseek_secret_materialized_toml_snapshot_is_used(monkeypatch):
+    """Regression: resolve canonical DeepSeek keys from Streamlit's TOML snapshot."""
+    import streamlit as st
+
+    class SnapshotSecrets:
+        def to_dict(self):
+            return {
+                "DEEPSEEK_API_KEY": "sk-snapshot-key",
+                "DEEPSEEK_FREE_MODELS": "deepseek-v4-flash,deepseek-v4-pro",
+            }
+        def keys(self):
+            return self.to_dict().keys()
+        def __getitem__(self, key):
+            return self.to_dict()[key]
+
+    monkeypatch.setattr(st, "secrets", SnapshotSecrets(), raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_FREE_MODELS", raising=False)
+
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "sk-snapshot-key"
+    assert providers.get_model_candidates(DEEPSEEK) == (
+        "deepseek-v4-flash", "deepseek-v4-pro"
+    )
+    assert providers.credential_sources()["deepseek"] == "streamlit_secrets"
+    assert providers.model_config_sources()["deepseek"] == "streamlit_secrets"
+
+
+def test_deepseek_real_adapter_builds_official_request_and_attests_response_model():
+    """The adapter must send the selected model and require provider identity."""
+    response = _response(
+        200,
+        '{"id":"r-real-shape","model":"deepseek-v4-flash","choices":[{"message":{"content":"OK"}}]}',
+        {
+            "id": "r-real-shape",
+            "model": "deepseek-v4-flash",
+            "choices": [{"message": {"content": "OK"}}],
+        },
+    )
+    with patch("providers.requests.post", return_value=response) as post:
+        result = call_seat(
+            DEEPSEEK,
+            "identity",
+            "",
+            1,
+            False,
+            "TEST_KEY",
+            [],
+            ("deepseek-v4-flash",),
+            request_id="deepseek-real-shape-1",
+        )
+
+    assert post.call_count == 1
+    assert post.call_args.args[0] == "https://api.deepseek.com/chat/completions"
+    assert post.call_args.kwargs["json"]["model"] == "deepseek-v4-flash"
+    assert result["status"] == "SUCCESS"
+    assert result["provider_reported_model"] == "deepseek-v4-flash"
+    assert result["executed_model"] == "deepseek-v4-flash"
+    assert result["model"] == "deepseek-v4-flash"
+
+
+def test_deepseek_secret_and_model_catalog_are_both_required_before_network(monkeypatch):
+    """No DeepSeek request is allowed when either required setting is absent."""
+    import streamlit as st
+    monkeypatch.setattr(st, "secrets", {"DEEPSEEK_API_KEY": "sk-only"}, raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_FREE_MODELS", raising=False)
+
+    assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "sk-only"
+    assert providers.get_model_candidates(DEEPSEEK) == ()
