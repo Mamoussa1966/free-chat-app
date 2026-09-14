@@ -343,6 +343,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
     seats = get_seats()
     with st.sidebar:
         st.header("⚙️ إعدادات المجلس")
+        st.caption("المقاعد: ChatGPT 1 · Gemini 2 · Claude 3 · Grok 4 · Kimi 5 · أنت 6 · DeepSeek 7 · وكلاء إضافيون من 8")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
         st.session_state.rounds = rounds
         st.caption("🆓 Free API Cascade: Free #1 → Free #10 لكل مزود. لا Local Engine ولا Paid fallback.")
@@ -404,9 +405,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.subheader("🔌 الاعتمادات والنماذج")
         for seat in seats:
             models = tuple(model_candidates.get(seat.key) or ())
-            st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}**")
+            st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}** · المقعد {seat.room_slot}")
             st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
-        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(seats)}")
+        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(seats)} وكلاء API · المقعد 6 محجوز للمستخدم")
         st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
         credential_source_map = credential_sources()
         credential_source_text = " • ".join(f"{seat.name}: {credential_source_map.get(seat.key, 'missing')}" for seat in seats)
@@ -430,7 +431,7 @@ def _voice_player(text: str, label: str = "🔊 استمع") -> None:
 def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
     voice_submission = None
     with st.container(height=500, border=True):
-        st.subheader("👤 أنت")
+        st.subheader("👤 أنت · المقعد 6")
         user_messages = [m for m in chat.get("messages", []) if m.get("role") == "user"]
         if not user_messages:
             st.caption("اكتب رسالة أو سجّل صوتًا أو أرفق ملفات.")
@@ -476,7 +477,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
 
 def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
-        st.subheader(seat.label)
+        st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
         models = tuple(model_candidates.get(seat.key) or ())
         st.caption("Free #1 → " + f"`{models[0]}`" if models else "لا يوجد Free API model مُكوّن")
         messages = [m for m in chat.get("messages", []) if m.get("seat") == seat.name]
@@ -644,7 +645,7 @@ def run_app() -> None:
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
     st.title("🏛️ AI Council — Shared Context Arena")
-    st.caption(f"{APP_VERSION} • المستخدم + {len(get_seats())} مقاعد • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    st.caption(f"{APP_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()

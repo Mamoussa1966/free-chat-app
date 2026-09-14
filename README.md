@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX57-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -73,3 +73,12 @@ The six original provider seats remain first-class. `AI_COUNCIL_EXTRA_AGENTS` ca
 
 ## Gemini latency hardening
 Gemini uses a short per-model timeout (default 10 seconds, configurable 5–30) and no hidden HTTP retry. The explicit Free-model cascade remains the failover mechanism. UI telemetry reports total latency and successful-attempt latency.
+
+
+## Room seat contract — HOTFIX57
+- AI seats 1–5: ChatGPT, Gemini, Claude, Grok, Kimi.
+- Human operator: seat 6; it is never part of the provider registry.
+- DeepSeek: seat 7; official API adapter, never an implicit/free model.
+- Dynamic extra agents begin at seat 8.
+- `DEEPSEEK_API_KEY` and `DEEPSEEK_FREE_MODELS` are resolved from Streamlit Secrets first.
+- No API key value is rendered or persisted to chat history.

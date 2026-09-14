@@ -1,8 +1,8 @@
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX57-FINAL
 
-# HOTFIX56 — Gemini latency hardening
+# HOTFIX57 — Gemini latency hardening
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX57-FINAL
 
 # previous multi-agent release MULTIAGENT FINAL
 
@@ -163,7 +163,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Release packaging continues to re-extract the exact ZIP and rerun the complete suite before acceptance.
 
 
-## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL
+## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX57-FINAL
 
 - Preserved the complete current project tree and all existing `tests/test_*.py` modules; the release test registry is now dynamic rather than hard-coded to an older test count.
 - Added the canonical `.streamlit/secrets.toml.example` path while retaining the user's existing files.
@@ -173,10 +173,20 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Council aggregation now deduplicates duplicate worker results at the orchestration boundary without weakening the low-level history-identity invariant.
 - Internal worker failures are normalized to `API_ERROR` rather than an opaque `UNKNOWN`.
 
-## HOTFIX56 Gemini latency hardening
+## HOTFIX57 Gemini latency hardening
 - Built directly from the previous release codebase; existing application files and test modules are preserved.
 - Gemini per-model request timeout is capped at 10 seconds by default and is configurable with `GEMINI_REQUEST_TIMEOUT_SECONDS` (5–30).
 - Gemini HTTP-level retries are disabled by default because the explicit Free-model cascade already provides failover; this removes hidden retry latency.
 - Every cascade attempt records latency and effective timeout for operational diagnostics.
 - Successful Gemini results expose total request latency plus successful-attempt latency; raw provider payloads remain excluded from UI/history.
 - Model identity attestation and the Free API Cascade contract remain unchanged.
+
+
+# HOTFIX57 — ROOM SEAT / DEEPSEEK FINAL
+
+- Corrected the room architecture: the human operator is reserved as seat 6 and is not an API provider seat.
+- DeepSeek is explicitly seat 7, not seat 6.
+- Dynamic agents begin at seat 8.
+- Preserved the six official API adapters and the existing test files.
+- Added a regression test preventing any provider from occupying room seat 6.
+- Preserved the explicit `DEEPSEEK_API_KEY` → `DEEPSEEK_FREE_MODELS` contract and official `https://api.deepseek.com/chat/completions` path.

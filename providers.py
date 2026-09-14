@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX56-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX57-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -52,15 +52,23 @@ class Seat:
     model_env: Tuple[str, ...]
     endpoint: str
     kind: str
+    room_slot: int
 
 
+# Room seating contract:
+#   AI seats 1..5 = the original five agents
+#   user seat 6   = the human operator (not an API Seat)
+#   DeepSeek seat 7 = the first added official AI agent
+#   dynamic agents start at seat 8
+# The human seat is intentionally NOT part of BUILTIN_SEATS/get_seats().
+# Therefore adding DeepSeek can never overwrite or renumber the user's seat.
 BUILTIN_SEATS = (
-    Seat("openai", "ChatGPT", "🔑 ChatGPT", ("OPENAI_API_KEY",), ("OPENAI_FREE_MODELS",), "https://api.openai.com/v1/responses", "openai_responses"),
-    Seat("gemini", "Gemini", "🔑 Gemini", ("GEMINI_API_KEY", "GOOGLE_API_KEY"), ("GEMINI_FREE_MODELS",), "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", "gemini"),
-    Seat("claude", "Claude", "🔑 Claude", ("ANTHROPIC_API_KEY",), ("ANTHROPIC_FREE_MODELS", "CLAUDE_FREE_MODELS"), "https://api.anthropic.com/v1/messages", "anthropic"),
-    Seat("grok", "Grok", "🔑 Grok", ("XAI_API_KEY", "GROK_API_KEY"), ("GROK_FREE_MODELS", "XAI_FREE_MODELS"), "https://api.x.ai/v1/responses", "xai_responses"),
-    Seat("kimi", "Kimi", "🔑 Kimi", ("KIMI_API_KEY", "MOONSHOT_API_KEY"), ("KIMI_FREE_MODELS", "MOONSHOT_FREE_MODELS"), "https://api.moonshot.ai/v1/chat/completions", "chat_completions"),
-    Seat("deepseek", "DeepSeek", "🔑 DeepSeek", ("DEEPSEEK_API_KEY",), ("DEEPSEEK_FREE_MODELS",), "https://api.deepseek.com/chat/completions", "deepseek_chat"),
+    Seat("openai", "ChatGPT", "🔑 ChatGPT", ("OPENAI_API_KEY",), ("OPENAI_FREE_MODELS",), "https://api.openai.com/v1/responses", "openai_responses", 1),
+    Seat("gemini", "Gemini", "🔑 Gemini", ("GEMINI_API_KEY", "GOOGLE_API_KEY"), ("GEMINI_FREE_MODELS",), "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", "gemini", 2),
+    Seat("claude", "Claude", "🔑 Claude", ("ANTHROPIC_API_KEY",), ("ANTHROPIC_FREE_MODELS", "CLAUDE_FREE_MODELS"), "https://api.anthropic.com/v1/messages", "anthropic", 3),
+    Seat("grok", "Grok", "🔑 Grok", ("XAI_API_KEY", "GROK_API_KEY"), ("GROK_FREE_MODELS", "XAI_FREE_MODELS"), "https://api.x.ai/v1/responses", "xai_responses", 4),
+    Seat("kimi", "Kimi", "🔑 Kimi", ("KIMI_API_KEY", "MOONSHOT_API_KEY"), ("KIMI_FREE_MODELS", "MOONSHOT_FREE_MODELS"), "https://api.moonshot.ai/v1/chat/completions", "chat_completions", 5),
+    Seat("deepseek", "DeepSeek", "🔑 DeepSeek", ("DEEPSEEK_API_KEY",), ("DEEPSEEK_FREE_MODELS",), "https://api.deepseek.com/chat/completions", "deepseek_chat", 7),
 )
 # Compatibility alias: the six original first-class agents remain the canonical built-ins.
 SEATS = BUILTIN_SEATS
@@ -106,7 +114,9 @@ def _load_extra_seats() -> Tuple[Seat, ...]:
         if not credential_names or not model_names:
             continue
         label = str(item.get("label") or f"🔑 {name}").strip()[:80]
-        result.append(Seat(key, name[:80], label, credential_names[:5], model_names[:5], endpoint[:500], kind))
+        # Reserve room slot 6 for the human operator. Dynamic agents therefore
+        # begin at room slot 8, after the DeepSeek seat 7.
+        result.append(Seat(key, name[:80], label, credential_names[:5], model_names[:5], endpoint[:500], kind, 8 + len(result)))
     return tuple(result)
 
 def get_seats() -> Tuple[Seat, ...]:
