@@ -1,12 +1,12 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
 Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, RATE_LIMITED, AUTHENTICATION_ERROR, API_ERROR, NETWORK_ERROR, TIMEOUT, UNKNOWN. Raw provider error text is operational-only; visible History stores only short classifications. Authentication errors are terminal; model/quota/rate-limit/API/network/timeout failures may continue to the next explicitly configured Free model.
 
-## HOTFIX62 — hard 2-second cascade attempt contract
+## HOTFIX63 — hard 2-second cascade attempt contract
 - Every official API cascade-model attempt has a hard 2-second HTTP timeout.
 - The timeout applies uniformly to Gemini, DeepSeek, ChatGPT/OpenAI-compatible, Claude, Grok, Kimi, and dynamic seats.
 - Hidden HTTP retries are disabled; configured Free-model candidates remain the only failover path.
@@ -79,10 +79,10 @@ The six original provider seats remain first-class. `AI_COUNCIL_EXTRA_AGENTS` ca
 
 
 ## Gemini latency hardening
-Gemini uses a short per-model timeout (default 10 seconds, configurable 5–30) and no hidden HTTP retry. The explicit Free-model cascade remains the failover mechanism. UI telemetry reports total latency and successful-attempt latency.
+Every official cascade-model attempt uses a hard 2-second HTTP timeout; no hidden HTTP retry is used and no hidden HTTP retry. The explicit Free-model cascade remains the failover mechanism. UI telemetry reports total latency and successful-attempt latency.
 
 
-## Room seat contract — HOTFIX62
+## Room seat contract — HOTFIX63
 - AI seats 1–5: ChatGPT, Gemini, Claude, Grok, Kimi.
 - Human operator: seat 6; it is never part of the provider registry.
 - DeepSeek: seat 7; official API adapter, never an implicit/free model.
@@ -90,7 +90,7 @@ Gemini uses a short per-model timeout (default 10 seconds, configurable 5–30) 
 - `DEEPSEEK_API_KEY` and `DEEPSEEK_FREE_MODELS` are resolved from Streamlit Secrets first.
 - No API key value is rendered or persisted to chat history.
 
-## HOTFIX62 latency and failure observability
+## HOTFIX63 latency and failure observability
 - Gemini default per-attempt HTTP timeout is 4 seconds; the explicit Free cascade remains the only model failover mechanism.
 - Every failed seat now carries a stable public `classification`, so the UI does not degrade a real authentication/quota/network/timeout failure to `UNKNOWN`.
 - DeepSeek uses the official OpenAI-compatible `/chat/completions` contract with `stream: false`, explicit thinking mode, configured model identity attestation, and current documented V4 model IDs.

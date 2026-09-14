@@ -1,17 +1,29 @@
-# HOTFIX62 — 2-second cascade attempt hardening
+# HOTFIX63 — strict per-cascade-attempt latency
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL
 
-- Built directly from HOTFIX62 while preserving the complete project tree and all existing test modules.
+- Built directly from HOTFIX63 and preserves the complete current project tree and all existing test modules.
+- Enforces a hard 2.0-second HTTP timeout budget for every individual cascade-model attempt across all official API adapters.
+- Hidden HTTP retries remain disabled in provider adapters; cascade failover remains the only model-level retry mechanism.
+- Attempt telemetry now records latency and timeout for every provider, not Gemini only.
+- Reduces the default output-token budget to 512 to improve the probability of completing useful short answers within the 2-second attempt budget; it remains configurable via `MAX_OUTPUT_TOKENS`.
+- Preserves room seats: ChatGPT 1, Gemini 2, Claude 3, Grok 4, Kimi 5, human user 6, DeepSeek 7, configured extra agents 8–20.
+- Preserves explicit `DEEPSEEK_FREE_MODELS` only; no automatic model, paid fallback, or Local Engine.
+
+# HOTFIX63 — 2-second cascade attempt hardening
+
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL
+
+- Built directly from HOTFIX63 while preserving the complete project tree and all existing test modules.
 - Enforces a hard 2.0-second timeout for every individual cascade-model HTTP attempt across all official adapters and dynamic seats.
 - Disables hidden HTTP retries from extending an individual attempt beyond the 2-second contract.
 - Keeps the explicit Free-model cascade as the only model failover mechanism.
 - Keeps user seat 6 reserved for the human operator, DeepSeek at seat 7, and dynamic seats 8–20.
 - Adds regression coverage for the uniform 2-second attempt contract.
 
-# HOTFIX62 — DeepSeek execution/identity hardening
+# HOTFIX63 — DeepSeek execution/identity hardening
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL
 
 - Preserves the current six official API agents plus the human operator as room seat 6; DeepSeek remains room seat 7 and configured extras start at seat 8.
 - Preserves every existing `tests/test_*.py` module and the current dynamic test-set invariant.
@@ -20,11 +32,11 @@ V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL
 - Failure rendering no longer falls back to `UNKNOWN` merely because a result has no raw error payload; it derives the stable public classification from the sanitized result metadata.
 - No Local Engine, no paid fallback, and no credential values are packaged or rendered.
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL
 
-# HOTFIX62 — Gemini latency hardening
+# HOTFIX63 — Gemini latency hardening
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL
 
 # previous multi-agent release MULTIAGENT FINAL
 
@@ -185,7 +197,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Release packaging continues to re-extract the exact ZIP and rerun the complete suite before acceptance.
 
 
-## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL
+## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL
 
 - Preserved the complete current project tree and all existing `tests/test_*.py` modules; the release test registry is now dynamic rather than hard-coded to an older test count.
 - Added the canonical `.streamlit/secrets.toml.example` path while retaining the user's existing files.
@@ -195,7 +207,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Council aggregation now deduplicates duplicate worker results at the orchestration boundary without weakening the low-level history-identity invariant.
 - Internal worker failures are normalized to `API_ERROR` rather than an opaque `UNKNOWN`.
 
-## HOTFIX62 Gemini latency hardening
+## HOTFIX63 Gemini latency hardening
 - Built directly from the previous release codebase; existing application files and test modules are preserved.
 - Gemini per-model request timeout is capped at 10 seconds by default and is configurable with `GEMINI_REQUEST_TIMEOUT_SECONDS` (5–30).
 - Gemini HTTP-level retries are disabled by default because the explicit Free-model cascade already provides failover; this removes hidden retry latency.
@@ -204,7 +216,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Model identity attestation and the Free API Cascade contract remain unchanged.
 
 
-# HOTFIX62 — ROOM SEAT / DEEPSEEK FINAL
+# HOTFIX63 — ROOM SEAT / DEEPSEEK FINAL
 
 - Corrected the room architecture: the human operator is reserved as seat 6 and is not an API provider seat.
 - DeepSeek is explicitly seat 7, not seat 6.
@@ -214,7 +226,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Preserved the explicit `DEEPSEEK_API_KEY` → `DEEPSEEK_FREE_MODELS` contract and official `https://api.deepseek.com/chat/completions` path.
 
 
-# HOTFIX62
+# HOTFIX63
 
 1. Preserves the six-agent API registry plus user seat 6 and DeepSeek seat 7.
 2. Keeps the existing 36 test modules; no existing test file is removed or replaced.
