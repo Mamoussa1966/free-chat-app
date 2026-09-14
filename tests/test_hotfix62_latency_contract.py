@@ -27,4 +27,4 @@ def test_hidden_http_retries_cannot_extend_attempt_budget():
     assert providers.RETRIES == 1  # low-level compatibility only; adapters pass retries=0
     assert providers.CASCADE_MODEL_TIMEOUT_SECONDS == 2.0
     assert providers.REQUEST_TIMEOUT == 2
-    assert providers.PROVIDER_SEAT_BUDGET_SECONDS == 20
+    assert providers.PROVIDER_SEAT_BUDGET_SECONDS == 2
