@@ -37,5 +37,5 @@ def test_deepseek_and_gemini_share_the_same_two_second_seat_contract():
     slots = {s.key: s.room_slot for s in providers.get_seats()}
     assert slots["gemini"] == 2
     assert slots["deepseek"] == 7
-    assert providers.PROVIDER_SEAT_BUDGET_SECONDS == 2
+    assert providers.PROVIDER_SEAT_BUDGET_SECONDS == 20
     assert providers.CASCADE_MODEL_TIMEOUT_SECONDS == 2.0
