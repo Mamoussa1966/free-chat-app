@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX53-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX54-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -314,8 +314,9 @@ def _read_setting(name: str) -> Tuple[Optional[str], str]:
 
 
 def _streamlit_secret(name: str) -> Optional[str]:
-    value, source = _read_setting(name)
-    return value if source == "streamlit_secrets" else None
+    """Return the Streamlit Secret value, preserving an explicitly empty Secret."""
+    present, value = _streamlit_secret_state(name)
+    return value if present else None
 
 
 def _setting(names: Iterable[str]) -> Optional[str]:
@@ -368,7 +369,7 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
     seen: set[str] = set()
     # Accept common Unicode comma/semicolon variants so mobile keyboards
     # cannot silently turn a valid cascade into one malformed model id.
-    separators = r"[,;\n\r\u060c\u061b\u201a\uff0c]"
+    separators = r"[,;\n\r]"
     for value in re.split(separators, str(raw or "")):
         item = value.strip().strip("\"'")
         if not item or len(item) > 160:
@@ -389,6 +390,12 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
 
 
 def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
+    # Streamlit Secret is authoritative, including an explicitly empty Secret.
+    # This also makes runtime changes to st.secrets immediately observable.
+    for name in seat.model_env:
+        secret = _streamlit_secret(name)
+        if secret is not None:
+            return _parse_models(secret)
     return _parse_models(_setting(seat.model_env) or "")
 
 
@@ -539,6 +546,7 @@ def _canonical_error_classification(error_class: str) -> str:
         "invalid_api_key": "AUTHENTICATION_ERROR",
         "invalid_authorization": "AUTHENTICATION_ERROR",
         "authentication_error": "AUTHENTICATION_ERROR",
+        "authentication": "AUTHENTICATION_ERROR",
         "http_403_permission_denied": "AUTHENTICATION_ERROR",
         "http_408_timeout": "TIMEOUT",
         "provider_server": "API_ERROR",
@@ -927,7 +935,10 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         attempted.append(model)
         try:
             executed_model = str(model or "").strip()
-            raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
+            if deadline is None:
+                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments)
+            else:
+                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, REQUEST_TIMEOUT, attachments, deadline)
             provider_reported_model = ""
             if isinstance(raw_response, dict) and "text" in raw_response:
                 content = str(raw_response.get("text") or "").strip()
@@ -1003,6 +1014,16 @@ def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Opt
         if not candidates:
             return _result(seat, "AUTHENTICATION_OK_NO_FREE_MODEL", "", "", "class=authentication_ok_no_free_model; Authentication endpoint accepted the credential, but no Free model was explicitly configured.", started, [], authenticated=True)
     return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates)
+
+
+def get_gemini_transcriber_model(model_candidates: Optional[Tuple[str, ...]] = None) -> str:
+    """Return the explicitly configured Gemini transcription model, or the first explicit Free candidate."""
+    configured_model = _setting(("GEMINI_TRANSCRIBE_MODEL",))
+    candidates = _parse_models(configured_model or "")
+    if candidates:
+        return candidates[0]
+    fallback = tuple(model_candidates or ())
+    return fallback[0] if fallback else ""
 
 
 def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:

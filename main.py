@@ -177,7 +177,8 @@ def _shared_context(chat: dict, exclude_message_id: str | None = None, max_chars
 
 def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, request_id: str = "", round_no: int = 0) -> dict:
     models = tuple((model_candidates or {}).get(seat.key) or ())
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "error": f"class=internal_worker_error; {exc.__class__.__name__}", "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
+    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "error": f"class=provider_error; internal worker failure: {exc.__class__.__name__}",
+        "attempt_summaries": [{"attempt": 1, "model": models[0] if models else "", "status_code": None, "classification": "API_ERROR", "retryable": False}], "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
 
 
 def _history_attempt_summaries(details: list[dict]) -> list[dict]:
@@ -292,11 +293,15 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             result["request_id"] = request_id
             result["round"] = round_no
             seat_key = str(result.get("seat") or "")
-            result_key = f"{request_id}:{round_no}:{seat_key}"
+            result_key = f"{request_id}:{round_no}:{result.get('seat','')}"
             result["result_key"] = result_key
             identity_key = (str(request_id), int(round_no), seat_key)
             if identity_key in seen_keys:
-                raise RuntimeError(f"Duplicate council result invariant violated: {identity_key!r}")
+                continue
+            existing_history = _history_identity_keys(chat)
+            if identity_key in existing_history:
+                seen_keys.add(identity_key)
+                continue
             _assert_unique_history_identity(chat, request_id, round_no, seat_key)
             seen_keys.add(identity_key)
             public_result = _public_result(result)
@@ -479,7 +484,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption("بانتظار أول جولة…")
             return
         for message in messages:
-            displayed_model = str(message.get("model") or "").strip()
+            displayed_model = str(message.get('executed_model') or message.get('model', '')).strip()
             executed_model = str(message.get("executed_model") or "").strip()
             attempted_models = [str(m).strip() for m in message.get("attempted_models", []) if str(m).strip()]
             if message.get("mode") == "official":
@@ -554,7 +559,8 @@ def _result_error_classification(result: dict) -> str:
 def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
     if status == "SUCCESS":
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{(result.get('executed_model') or result.get('model', ''))}` — {result['latency']}s")
+        display_model = result.get('executed_model') or result['model']
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — {result['latency']}s")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":

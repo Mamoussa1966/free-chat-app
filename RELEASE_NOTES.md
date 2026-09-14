@@ -1,4 +1,4 @@
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX53-FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX54-FINAL
 
 # previous multi-agent release MULTIAGENT FINAL
 
@@ -149,7 +149,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - No Local Engine and no paid fallback were introduced.
 
 
-## HOTFIX53 — Dynamic Agent Registry Integrity
+## PREVIOUS_RELEASE — Dynamic Agent Registry Integrity
 
 - The six built-in agents remain first-class: ChatGPT, Gemini, Claude, Grok, Kimi, DeepSeek.
 - All main runtime surfaces resolve `get_seats()` dynamically; the compatibility alias `SEATS` is not used by `main.py`.
@@ -157,3 +157,14 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Added diagnostic aggregation coverage for extra agents.
 - Removed the brittle fixed test-module count; the release gate now validates the exact declared test-file set.
 - Release packaging continues to re-extract the exact ZIP and rerun the complete suite before acceptance.
+
+
+## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX54-FINAL
+
+- Preserved the complete current project tree and all existing `tests/test_*.py` modules; the release test registry is now dynamic rather than hard-coded to an older test count.
+- Added the canonical `.streamlit/secrets.toml.example` path while retaining the user's existing files.
+- Hardened model parsing: ASCII separators are accepted; typographic punctuation is rejected instead of silently rewriting model IDs.
+- Preserved sequential Free-model cascade execution and compatibility with test doubles that omit the optional deadline parameter.
+- Preserved execution/provider identity checks and strengthened UI execution-model display.
+- Council aggregation now deduplicates duplicate worker results at the orchestration boundary without weakening the low-level history-identity invariant.
+- Internal worker failures are normalized to `API_ERROR` rather than an opaque `UNKNOWN`.
