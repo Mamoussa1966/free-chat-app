@@ -577,13 +577,10 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     else:
         summaries = list(result.get("attempt_summaries", []) or [])
         display_class = str(result.get("classification") or "UNKNOWN").strip().upper()
-        # A transport timeout is an internal execution event, not proof that the
-        # provider deliberately failed to answer. Keep the public failure label
-        # neutral and separate from the transport timeout classification.
         if display_class == "TIMEOUT":
             display_class = "NO_RESPONSE_AFTER_CASCADE"
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
-            st.write("Official API did not complete a response in the current attempt; the explicit Free cascade continued to the next configured model when possible. Raw provider payload is not shown in the UI.")
+            st.write("Official API did not produce a response within the configured per-model window; the explicit Free cascade was allowed to continue. Raw provider payload is not shown in the UI.")
             st.caption(f"Final classification: **{display_class}**")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
             if summaries:
