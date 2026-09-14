@@ -1,4 +1,6 @@
-# HOTFIX50 FINAL
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX53-FINAL
+
+# previous multi-agent release MULTIAGENT FINAL
 
 ## DeepSeek configuration discovery hardening
 
@@ -9,7 +11,7 @@
 - No implicit DeepSeek model catalog is introduced.
 - Official DeepSeek endpoint and provider-model identity attestation remain unchanged.
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX50-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-previous multi-agent release-FINAL`
 
 # previous release-FINAL
 
@@ -132,3 +134,26 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - The requested model, HTTP request model, provider-reported model, executed model, and displayed model must agree for a successful DeepSeek round.
 - Missing or mismatched provider model identity fails closed and never renders as a successful DeepSeek response.
 - Raw provider payloads remain excluded from UI/history.
+
+## previous multi-agent release
+1. Removed the last stale `SEATS` dependency from `main.py`; history lookup now uses the same dynamic seat registry as execution and diagnostics.
+2. Added an integration regression covering an extra configured seat end-to-end through `_run_round`, ensuring its result is not silently discarded.
+3. Kept the six original seats unchanged and retained the 20-seat cap.
+
+# PREVIOUS_RELEASE FINAL — Dynamic 20-seat registry hardening
+
+- The runtime now snapshots `get_seats()` once per round, diagnostic pass, and sidebar render.
+- No execution, aggregation, diagnostics, credential display, or model display path uses the legacy fixed `SEATS` alias.
+- Added regression coverage for dynamic extra-agent diagnostics and end-to-end round aggregation.
+- The six original first-class agents remain unchanged; up to 14 configured extra agents remain supported (20 total).
+- No Local Engine and no paid fallback were introduced.
+
+
+## HOTFIX53 — Dynamic Agent Registry Integrity
+
+- The six built-in agents remain first-class: ChatGPT, Gemini, Claude, Grok, Kimi, DeepSeek.
+- All main runtime surfaces resolve `get_seats()` dynamically; the compatibility alias `SEATS` is not used by `main.py`.
+- Added a real round-aggregation regression proving an extra configured agent survives execution and appears in `chat["messages"]`.
+- Added diagnostic aggregation coverage for extra agents.
+- Removed the brittle fixed test-module count; the release gate now validates the exact declared test-file set.
+- Release packaging continues to re-extract the exact ZIP and rerun the complete suite before acceptance.

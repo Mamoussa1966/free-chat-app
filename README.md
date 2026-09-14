@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX50-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX53-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -47,7 +47,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 
 ## DeepSeek integration — verification status
 - Adds an official DeepSeek adapter using `https://api.deepseek.com/chat/completions`.
-- HOTFIX50 hardens Streamlit Secrets discovery for DeepSeek (canonical, case-insensitive, and nested TOML lookup) while preserving Secrets-first precedence and no secret leakage.
+- PREVIOUS_RELEASE hardens Streamlit Secrets discovery for DeepSeek (canonical, case-insensitive, and nested TOML lookup) while preserving Secrets-first precedence and no secret leakage.
 - Uses only explicitly configured `DEEPSEEK_FREE_MODELS`; no automatic model selection and no inferred Free entitlement.
 - The current official DeepSeek API documents `deepseek-v4-flash`, `deepseek-v4-pro`, and `deepseek-v4-flash-vision-exp` as API model IDs; the official pricing page lists V4 Flash/Pro as paid API models. This project therefore does **not** infer or invent a Free entitlement.
 - `DEEPSEEK_FREE_MODELS` remains an explicit allow-list by contract; a configured ID is not proof that the official DeepSeek API grants Free usage.
@@ -60,3 +60,12 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Additional agents are declared explicitly in `AI_COUNCIL_EXTRA_AGENTS` as JSON configuration; credentials are referenced by Secret/environment variable names and never embedded in the agent configuration.
 - Additional agents reuse the same parse → normalize → candidates → call_seat → cascade contract. Supported adapter kinds are `chat_completions`, `openai_responses`, `xai_responses`, `deepseek_chat`, `gemini`, and `anthropic`.
 - No Local Engine, implicit provider, automatic model selection, or paid fallback is introduced.
+
+## PREVIOUS_RELEASE
+- Fixed the remaining static `SEATS` lookup in `main.py`; all execution, history identity, diagnostics, and UI paths now resolve the active dynamic seat set through `get_seats()`.
+- Added a true integration regression proving a configured extra agent is executed by the council round and its result is returned/displayable.
+- Preserved the six original first-class seats and the 20-seat dynamic architecture.
+
+
+## PREVIOUS_RELEASE dynamic seat registry
+The six original provider seats remain first-class. `AI_COUNCIL_EXTRA_AGENTS` can add up to 14 more official API seats (20 total). Runtime execution, aggregation, diagnostics, history identity, and sidebar configuration all use the dynamic `get_seats()` registry.

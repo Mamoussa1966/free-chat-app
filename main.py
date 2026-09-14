@@ -13,7 +13,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -78,7 +78,7 @@ def _history_identity_keys(chat: dict) -> set[tuple[str, int, str]]:
         request_id = str(message.get("request_id") or "").strip()
         seat = str(message.get("seat_key") or "").strip()
         if not seat:
-            seat = next((str(s.key) for s in SEATS if s.name == message.get("seat")), "")
+            seat = next((str(s.key) for s in get_seats() if s.name == message.get("seat")), "")
         try:
             round_no = int(message.get("round"))
         except (TypeError, ValueError):
@@ -260,12 +260,13 @@ if (el) setTimeout(()=>{{ el.remove(); }}, {int(remaining * 1000)});
 
 
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float, request_id: str) -> list[dict]:
+    seats = get_seats()
     snapshot = _shared_context(chat, exclude_message_id=current_user_message_id)
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(get_seats())), thread_name_prefix="council") as pool:
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(seats)), thread_name_prefix="council") as pool:
         futures = {
             pool.submit(call_seat, seat, user_prompt, snapshot, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key), deadline, request_id): seat
-            for seat in get_seats()
+            for seat in seats
         }
         for future in as_completed(futures):
             seat = futures[future]
@@ -273,9 +274,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id, round_no)
-    for seat in get_seats():
+    for seat in seats:
         results.setdefault(seat.key, _worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates, request_id, round_no))
-    return [results[seat.key] for seat in get_seats()]
+    return [results[seat.key] for seat in seats]
 
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
@@ -320,19 +321,21 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
 
 
 def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list[dict]:
+    seats = get_seats()
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(get_seats())), thread_name_prefix="diagnostic") as pool:
-        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in get_seats()}
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(seats)), thread_name_prefix="diagnostic") as pool:
+        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in seats}
         for future in as_completed(futures):
             seat = futures[future]
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id="diagnostic", round_no=0)
-    return [results[seat.key] for seat in get_seats()]
+    return [results[seat.key] for seat in seats]
 
 
 def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> int:
+    seats = get_seats()
     with st.sidebar:
         st.header("⚙️ إعدادات المجلس")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
@@ -394,17 +397,17 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.divider()
         st.divider()
         st.subheader("🔌 الاعتمادات والنماذج")
-        for seat in get_seats():
+        for seat in seats:
             models = tuple(model_candidates.get(seat.key) or ())
             st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}**")
             st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
-        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(get_seats())}")
+        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(seats)}")
         st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
         credential_source_map = credential_sources()
-        credential_source_text = " • ".join(f"{seat.name}: {credential_source_map.get(seat.key, 'missing')}" for seat in get_seats())
+        credential_source_text = " • ".join(f"{seat.name}: {credential_source_map.get(seat.key, 'missing')}" for seat in seats)
         st.caption(f"مصدر الاعتمادات: {credential_source_text}")
         sources = model_config_sources()
-        source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in get_seats())
+        source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in seats)
         st.caption(f"مصدر إعداد النماذج: {source_text}")
         st.caption("Streamlit Secrets لها الأولوية؛ Environment Variables تُستخدم فقط عند غياب Secret غير الفارغ.")
         st.caption("وجود المفتاح لا يثبت Free Tier أو quota.")
