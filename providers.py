@@ -9,9 +9,9 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX58-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX61-FINAL"
 MAX_MODELS_PER_SEAT = 10
-MAX_AGENTS = 20
+MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
 MAX_USER_PROMPT_CHARS = 20_000
 MAX_SHARED_CONTEXT_CHARS = 30_000
@@ -46,7 +46,7 @@ if DEEPSEEK_THINKING_MODE not in {"enabled", "disabled"}:
 # Gemini is latency-sensitive in the council UI. Its cascade already provides
 # model-level failover, so avoid a second hidden HTTP retry and cap each
 # individual Gemini attempt to a short, configurable window.
-GEMINI_REQUEST_TIMEOUT_SECONDS = _bounded_int_env("GEMINI_REQUEST_TIMEOUT_SECONDS", 5, 2, 15)
+GEMINI_REQUEST_TIMEOUT_SECONDS = _bounded_int_env("GEMINI_REQUEST_TIMEOUT_SECONDS", 4, 2, 15)
 GEMINI_RETRIES = 0
 
 
@@ -127,7 +127,7 @@ def _load_extra_seats() -> Tuple[Seat, ...]:
     return tuple(result)
 
 def get_seats() -> Tuple[Seat, ...]:
-    """Return built-in agents plus up to 14 configured additional agents (20 total)."""
+    """Return built-in agents plus up to 13 configured additional agents (19 API seats; room seats 1-20 include human seat 6)."""
     return BUILTIN_SEATS + _load_extra_seats()
 
 
@@ -795,6 +795,37 @@ def _provider_attachments(attachments: Optional[list[dict]]) -> list[dict]:
     return safe
 
 
+def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
+    """Accept canonical DeepSeek IDs and their documented deployed-version aliases.
+
+    DeepSeek exposes stable API model IDs (for example ``deepseek-v4-flash``)
+    while documenting the currently deployed version separately (for example
+    ``DeepSeek-V4-Flash-0731``).  The request must still use the configured
+    model ID; only the provider-reported response identity is normalized for
+    attestation.  Unknown/mismatched identities remain fail-closed.
+    """
+    req = str(requested or "").strip().lower()
+    rep = str(reported or "").strip().lower()
+    if not req or not rep:
+        return False
+    if req == rep:
+        return True
+    aliases = {
+        "deepseek-v4-flash": {
+            "deepseek-v4-flash-0731",
+            "deepseek-v4-flash-preview",
+        },
+        "deepseek-v4-pro": {
+            "deepseek-v4-pro-0813",
+            "deepseek-v4-pro-preview",
+        },
+        "deepseek-v4-flash-vision-exp": {
+            "deepseek-v4-flash-vision-exp",
+        },
+    }
+    return rep in aliases.get(req, set())
+
+
 def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: int = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> str:
     key = (credential or "").strip()
     if not key:
@@ -880,15 +911,22 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 extracted = extract_text(att)
                 content_parts.append(f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }")
         content = "\n\n".join(x for x in content_parts if x).strip()
-        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS, "thinking": {"type": DEEPSEEK_THINKING_MODE}}, timeout, deadline)
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "stream": False,
+            "thinking": {"type": DEEPSEEK_THINKING_MODE},
+        }
+        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, payload, timeout, deadline)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
-        if not provider_reported_model or provider_reported_model != model:
+        if not _deepseek_model_identity_matches(model, provider_reported_model):
             raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
         text = _chat_text(data)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
         if not provider_reported_model:
             raise ProviderError("DeepSeek response did not attest model identity", error_class="execution_identity_mismatch")
-        if provider_reported_model != model:
+        if not _deepseek_model_identity_matches(model, provider_reported_model):
             raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
         return {"text": text, "provider_reported_model": provider_reported_model}
 
@@ -919,6 +957,15 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
 
 def _result(seat: Seat, status: str, model: str, content: str, error: Optional[str], started: float, attempted: list[str], authenticated: bool = False, request_id: str = "", round_no: int = 0, attempt_diagnostics: Optional[list[dict]] = None, provider_reported_model: str = "") -> dict:
     normalized_model = str(model or "").strip()
+    safe_classification = ""
+    if error:
+        match = re.search(r"(?:^|[;\s])class=([A-Za-z0-9_:-]+)", str(error), flags=re.IGNORECASE)
+        if match:
+            safe_classification = _canonical_error_classification(match.group(1))
+    if status == "NO_FREE_MODEL_CONFIGURED":
+        safe_classification = "MODEL_UNAVAILABLE"
+    elif status == "FAILED" and not safe_classification:
+        safe_classification = "UNKNOWN"
     return {
         "seat": seat.key,
         "name": seat.name,
@@ -928,6 +975,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         "model": normalized_model,
         "executed_model": normalized_model,
         "provider_reported_model": str(provider_reported_model or "").strip(),
+        "classification": safe_classification,
         "content": content,
         "error": error,
         "latency": round(time.perf_counter() - started, 3),
@@ -1003,7 +1051,9 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
-            if seat.key == "deepseek" and result.get("provider_reported_model") != executed_model:
+            if seat.key == "deepseek" and not _deepseek_model_identity_matches(
+                    executed_model, result.get("provider_reported_model")
+                ):
                 raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
             if result.get("attempted_models") and result["attempted_models"][-1] != executed_model:
                 raise ProviderError("cascade execution identity mismatch", error_class="execution_identity_mismatch")

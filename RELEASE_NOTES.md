@@ -1,8 +1,19 @@
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX58-FINAL
+# HOTFIX61 — DeepSeek execution/identity hardening
 
-# HOTFIX58 — Gemini latency hardening
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX61-FINAL
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX58-FINAL
+- Preserves the current six official API agents plus the human operator as room seat 6; DeepSeek remains room seat 7 and configured extras start at seat 8.
+- Preserves every existing `tests/test_*.py` module and the current dynamic test-set invariant.
+- DeepSeek continues to use only explicit `DEEPSEEK_API_KEY` and `DEEPSEEK_FREE_MODELS` configuration; no implicit free model is introduced.
+- DeepSeek V4 provider identity attestation now accepts the documented deployed-version aliases for a requested stable model ID (for example `deepseek-v4-flash` ↔ `deepseek-v4-flash-0731`) while rejecting unrelated identities.
+- Failure rendering no longer falls back to `UNKNOWN` merely because a result has no raw error payload; it derives the stable public classification from the sanitized result metadata.
+- No Local Engine, no paid fallback, and no credential values are packaged or rendered.
+
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX61-FINAL
+
+# HOTFIX61 — Gemini latency hardening
+
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX61-FINAL
 
 # previous multi-agent release MULTIAGENT FINAL
 
@@ -163,7 +174,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Release packaging continues to re-extract the exact ZIP and rerun the complete suite before acceptance.
 
 
-## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX58-FINAL
+## V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX61-FINAL
 
 - Preserved the complete current project tree and all existing `tests/test_*.py` modules; the release test registry is now dynamic rather than hard-coded to an older test count.
 - Added the canonical `.streamlit/secrets.toml.example` path while retaining the user's existing files.
@@ -173,7 +184,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Council aggregation now deduplicates duplicate worker results at the orchestration boundary without weakening the low-level history-identity invariant.
 - Internal worker failures are normalized to `API_ERROR` rather than an opaque `UNKNOWN`.
 
-## HOTFIX58 Gemini latency hardening
+## HOTFIX61 Gemini latency hardening
 - Built directly from the previous release codebase; existing application files and test modules are preserved.
 - Gemini per-model request timeout is capped at 10 seconds by default and is configurable with `GEMINI_REQUEST_TIMEOUT_SECONDS` (5–30).
 - Gemini HTTP-level retries are disabled by default because the explicit Free-model cascade already provides failover; this removes hidden retry latency.
@@ -182,7 +193,7 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Model identity attestation and the Free API Cascade contract remain unchanged.
 
 
-# HOTFIX58 — ROOM SEAT / DEEPSEEK FINAL
+# HOTFIX61 — ROOM SEAT / DEEPSEEK FINAL
 
 - Corrected the room architecture: the human operator is reserved as seat 6 and is not an API provider seat.
 - DeepSeek is explicitly seat 7, not seat 6.
@@ -190,3 +201,13 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 - Preserved the six official API adapters and the existing test files.
 - Added a regression test preventing any provider from occupying room seat 6.
 - Preserved the explicit `DEEPSEEK_API_KEY` → `DEEPSEEK_FREE_MODELS` contract and official `https://api.deepseek.com/chat/completions` path.
+
+
+# HOTFIX61
+
+1. Preserves the six-agent API registry plus user seat 6 and DeepSeek seat 7.
+2. Keeps the existing 36 test modules; no existing test file is removed or replaced.
+3. Makes final failure classification a first-class UI-safe field instead of relying only on transient diagnostics.
+4. Tightens Gemini latency by reducing the default per-attempt timeout from 5s to 4s while retaining explicit cascade failover.
+5. Makes the DeepSeek Chat Completions payload explicit with `stream: false` and preserves provider model identity attestation.
+6. Release packaging continues to derive the exact test-file set dynamically and round-trips the ZIP before acceptance.

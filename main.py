@@ -177,7 +177,7 @@ def _shared_context(chat: dict, exclude_message_id: str | None = None, max_chars
 
 def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, request_id: str = "", round_no: int = 0) -> dict:
     models = tuple((model_candidates or {}).get(seat.key) or ())
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "error": f"class=provider_error; internal worker failure: {exc.__class__.__name__}",
+    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "classification": "API_ERROR", "error": f"class=provider_error; internal worker failure: {exc.__class__.__name__}",
         "attempt_summaries": [{"attempt": 1, "model": models[0] if models else "", "status_code": None, "classification": "API_ERROR", "retryable": False}], "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
 
 
@@ -217,6 +217,10 @@ def _public_result(result: dict) -> dict:
     public = dict(result or {})
     details = list(public.get("attempt_diagnostics", []) or [])
     public["attempt_summaries"] = _history_attempt_summaries(details)
+    classification = str(public.get("classification") or "").strip().upper()
+    if classification not in {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN"}:
+        classification = "UNKNOWN"
+    public["classification"] = classification
     public.pop("attempt_diagnostics", None)
     public.pop("error", None)
     return public
@@ -585,7 +589,8 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
                 for detail in summaries:
                     _render_temporary_attempt_diagnostic(detail)
             else:
-                st.caption("Final classification: **UNKNOWN**")
+                classification = str(result.get("classification") or "").strip().upper() or _result_error_classification(result)
+                st.caption(f"Final classification: **{classification}**")
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
