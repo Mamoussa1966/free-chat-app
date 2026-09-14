@@ -44,7 +44,8 @@ def test_all_existing_test_modules_are_preserved_and_new_regression_is_present()
     assert "test_claude_integration.py" in test_names
     assert "test_grok_integration.py" in test_names
     assert "test_deepseek_integration.py" in test_names
-    assert len(test_names) == 24
+    import build_release
+    assert test_names == build_release.EXPECTED_TEST_FILES
 
 
 def test_packaged_zip_excludes_runtime_caches(tmp_path):
