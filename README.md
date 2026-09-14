@@ -1,16 +1,16 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX64-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
 Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, RATE_LIMITED, AUTHENTICATION_ERROR, API_ERROR, NETWORK_ERROR, TIMEOUT, UNKNOWN. Raw provider error text is operational-only; visible History stores only short classifications. Authentication errors are terminal; model/quota/rate-limit/API/network/timeout failures may continue to the next explicitly configured Free model.
 
-## HOTFIX63 — hard 2-second cascade attempt contract
+## HOTFIX64 — hard 2-second seat budget + cascade contract
 - Every official API cascade-model attempt has a hard 2-second HTTP timeout.
 - The timeout applies uniformly to Gemini, DeepSeek, ChatGPT/OpenAI-compatible, Claude, Grok, Kimi, and dynamic seats.
 - Hidden HTTP retries are disabled; configured Free-model candidates remain the only failover path.
-- A provider may therefore consume up to 2 seconds per attempted model, but one slow model can never hold its own HTTP request beyond that attempt budget.
+- Each individual HTTP attempt is capped at 2 seconds, and the complete provider seat is capped at 2 seconds total. This prevents a six-model cascade from turning into a 12-second wait.
 - The user remains room seat 6; DeepSeek remains seat 7; dynamic seats start at 8; total room capacity remains 20.
 
 ## Hotfix 26 Final
@@ -75,14 +75,14 @@ Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, 
 
 
 ## PREVIOUS_RELEASE dynamic seat registry
-The six original provider seats remain first-class. `AI_COUNCIL_EXTRA_AGENTS` can add up to 14 more official API seats (20 total). Runtime execution, aggregation, diagnostics, history identity, and sidebar configuration all use the dynamic `get_seats()` registry.
+The six original provider seats remain first-class. `AI_COUNCIL_EXTRA_AGENTS` can add up to 13 more official API seats (19 API seats + human seat 6 = 20 room seats). Runtime execution, aggregation, diagnostics, history identity, and sidebar configuration all use the dynamic `get_seats()` registry.
 
 
 ## Gemini latency hardening
 Every official cascade-model attempt uses a hard 2-second HTTP timeout; no hidden HTTP retry is used and no hidden HTTP retry. The explicit Free-model cascade remains the failover mechanism. UI telemetry reports total latency and successful-attempt latency.
 
 
-## Room seat contract — HOTFIX63
+## Room seat contract — HOTFIX64
 - AI seats 1–5: ChatGPT, Gemini, Claude, Grok, Kimi.
 - Human operator: seat 6; it is never part of the provider registry.
 - DeepSeek: seat 7; official API adapter, never an implicit/free model.
@@ -90,7 +90,7 @@ Every official cascade-model attempt uses a hard 2-second HTTP timeout; no hidde
 - `DEEPSEEK_API_KEY` and `DEEPSEEK_FREE_MODELS` are resolved from Streamlit Secrets first.
 - No API key value is rendered or persisted to chat history.
 
-## HOTFIX63 latency and failure observability
-- Gemini default per-attempt HTTP timeout is 4 seconds; the explicit Free cascade remains the only model failover mechanism.
+## HOTFIX64 latency and failure observability
+- Every provider seat has a hard 2-second wall-clock budget. The explicit Free cascade remains the only model failover mechanism; later models receive only the time remaining in that seat budget.
 - Every failed seat now carries a stable public `classification`, so the UI does not degrade a real authentication/quota/network/timeout failure to `UNKNOWN`.
 - DeepSeek uses the official OpenAI-compatible `/chat/completions` contract with `stream: false`, explicit thinking mode, configured model identity attestation, and current documented V4 model IDs.

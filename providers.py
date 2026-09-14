@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX63-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX64-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -42,6 +42,11 @@ REQUEST_TIMEOUT = 2
 # maximum wall-clock HTTP timeout of 2 seconds. The explicit model cascade is
 # the only failover mechanism; there is no hidden retry budget.
 CASCADE_MODEL_TIMEOUT_SECONDS = 2.0
+# Hard per-seat response budget. A seat may attempt several explicitly configured
+# cascade models, but the complete seat execution is never allowed to exceed
+# this wall-clock budget. The first model gets the full budget; later cascade
+# models receive only the time remaining.
+PROVIDER_SEAT_BUDGET_SECONDS = _bounded_int_env("PROVIDER_SEAT_BUDGET_SECONDS", 2, 1, 2)
 MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 512, 128, 4096)
 
 # DeepSeek V4 defaults to thinking mode when omitted. The council is a fast
@@ -1020,6 +1025,12 @@ def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) 
 def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "") -> dict:
     del local_fallback
     started = time.perf_counter()
+    # The round deadline may be much larger than the provider latency contract.
+    # Clamp every seat to its own hard real-time budget so a long cascade cannot
+    # make Gemini/DeepSeek (or any other seat) wait 4, 6, or 10 seconds.
+    seat_deadline = started + float(PROVIDER_SEAT_BUDGET_SECONDS)
+    if deadline is not None:
+        seat_deadline = min(seat_deadline, float(deadline))
     candidates = _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT]
     attempted: list[str] = []
     if not candidates:
@@ -1031,18 +1042,23 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     attempt_diagnostics: list[dict] = []
     terminal = {"not_configured", "configuration", "deadline_exceeded", "execution_identity_mismatch"}
     for index, model in enumerate(candidates):
-        if deadline is not None and (_remaining(deadline) or 0) <= 0:
+        if (_remaining(seat_deadline) or 0) <= 0:
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
             break
         attempted.append(model)
         try:
             executed_model = str(model or "").strip()
             attempt_started = time.perf_counter()
-            effective_timeout = CASCADE_MODEL_TIMEOUT_SECONDS
+            remaining_seat = _remaining(seat_deadline) or 0.0
+            effective_timeout = CASCADE_MODEL_TIMEOUT_SECONDS if remaining_seat >= (CASCADE_MODEL_TIMEOUT_SECONDS - 0.001) else round(remaining_seat, 3)
+            if effective_timeout <= 0:
+                raise ProviderError("provider seat budget exceeded", error_class="deadline_exceeded")
             if deadline is None:
+                # Preserve compatibility with existing test doubles/legacy adapters
+                # that implement call_official with the historical six-argument seam.
                 raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, effective_timeout, attachments)
             else:
-                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, effective_timeout, attachments, deadline)
+                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, effective_timeout, attachments, seat_deadline)
             attempt_latency = round(time.perf_counter() - attempt_started, 3)
             provider_reported_model = ""
             if isinstance(raw_response, dict) and "text" in raw_response:
