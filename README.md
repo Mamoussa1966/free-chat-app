@@ -1,16 +1,16 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX68-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX69-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
 Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, RATE_LIMITED, AUTHENTICATION_ERROR, API_ERROR, NETWORK_ERROR, TIMEOUT, UNKNOWN. Raw provider error text is operational-only; visible History stores only short classifications. Authentication errors are terminal; model/quota/rate-limit/API/network/timeout failures may continue to the next explicitly configured Free model.
 
-## Current release — hard 2-second seat budget + cascade contract
-- Every official API cascade-model attempt has a hard 2-second HTTP timeout.
-- The timeout applies uniformly to Gemini, DeepSeek, ChatGPT/OpenAI-compatible, Claude, Grok, Kimi, and dynamic seats.
-- Hidden HTTP retries are disabled; configured Free-model candidates remain the only failover path.
-- Each individual HTTP attempt is capped at 2 seconds, and the complete provider seat is capped at 2 seconds total. This prevents a six-model cascade from turning into a 12-second wait.
+## Current release — hard unlimited-time seat budget + cascade contract
+- Official API calls use **no artificial transport timeout** (`requests` timeout is `None`).
+- No per-seat wall-clock timeout or 2-second execution budget remains.
+- Hidden HTTP retries remain disabled; explicitly configured Free-model candidates remain the only failover path.
+- Provider latency is therefore determined by the official API, network, and provider-side processing rather than an application-imposed 2-second cutoff.
 - The user remains room seat 6; DeepSeek remains seat 7; dynamic seats start at 8; total room capacity remains 20.
 
 ## Hotfix 26 Final
@@ -79,7 +79,7 @@ The six original provider seats remain first-class. `AI_COUNCIL_EXTRA_AGENTS` ca
 
 
 ## Gemini latency hardening
-Every official cascade-model attempt uses a hard 2-second HTTP timeout; no hidden HTTP retry is used and no hidden HTTP retry. The explicit Free-model cascade remains the failover mechanism. UI telemetry reports total latency and successful-attempt latency.
+Official cascade-model attempts use no artificial HTTP timeout and no hidden HTTP retry. The explicit Free-model cascade remains the failover mechanism. UI telemetry reports total latency and successful-attempt latency.
 
 
 ## Room seat contract
@@ -91,7 +91,7 @@ Every official cascade-model attempt uses a hard 2-second HTTP timeout; no hidde
 - No API key value is rendered or persisted to chat history.
 
 ## Latency and failure observability
-- Every provider seat has a hard 2-second wall-clock budget. The explicit Free cascade remains the only model failover mechanism; later models receive only the time remaining in that seat budget.
+- Provider seats have no application-imposed wall-clock budget. The explicit Free cascade remains the only model failover mechanism.
 - Every failed seat now carries a stable public `classification`, so the UI does not degrade a real authentication/quota/network/timeout failure to `UNKNOWN`.
 - DeepSeek uses the official OpenAI-compatible `/chat/completions` contract with `stream: false`, explicit thinking mode, configured model identity attestation, and current documented V4 model IDs.
 

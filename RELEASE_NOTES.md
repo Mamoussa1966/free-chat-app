@@ -1,25 +1,23 @@
 # Current release — Timeout-only finalization
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX68-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX69-FINAL`
 
 ## Scope
 
 Built directly from the existing current project tree. No provider, seat, cascade-order, credential, model-list, architecture, Local Engine, paid-fallback, or automatic-selection changes are introduced.
 
-## Timeout contract
+## Unlimited response-time contract
 
-- Every individual provider cascade attempt is hard-capped at **2.0 seconds**.
-- The explicit Free-model cascade remains the only sequential failover mechanism.
-- Hidden HTTP retries remain disabled for the cascade path.
-- A timed-out model proceeds to the next explicitly configured model when the remaining seat budget permits.
-- Gemini and DeepSeek use the same two-second per-attempt contract.
-- Existing Gemini, Claude, Grok, Kimi, DeepSeek, dynamic 20-seat, human seat 6, and diagnostics behavior is preserved.
-- No credentials are packaged.
+- The previous 2.0-second per-attempt HTTP timeout has been removed.
+- The previous 2.0-second per-seat wall-clock budget has been removed.
+- Official provider requests now use no artificial transport timeout (`requests` timeout is `None`).
+- The council no longer aborts a provider merely because it exceeded 2 seconds.
+- Hidden HTTP retries remain disabled; the explicit Free-model cascade remains the only sequential failover mechanism.
+- No provider, model list, seat numbering, credentials, Local Engine, paid fallback, or automatic model selection changes were introduced.
 
-## Important latency semantics
+## Latency semantics
 
-The 2.0-second value is an upper bound for an individual HTTP attempt, not a guarantee that a complete Streamlit round or provider response will render in 2.0 seconds. Network scheduling, Streamlit reruns, provider-side processing, and subsequent cascade attempts can make the displayed total round time larger.
-
+There is now no application-imposed 2-second cutoff. Actual response time remains dependent on network conditions, provider-side processing, rate limits, and the configured cascade. Removing the timeout cannot force an external provider to respond faster; it removes the application's artificial cutoff so a valid official request can complete.
 
 ## No-timeout public finalization
 1. Preserved the runtime timeout behavior.

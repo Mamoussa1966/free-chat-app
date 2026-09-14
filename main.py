@@ -20,7 +20,7 @@ MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
 MAX_ROUNDS = 4
-MAX_EXECUTION_SECONDS = 180
+MAX_EXECUTION_SECONDS = None
 MAX_PROMPT_CHARS = 20_000
 MAX_CHAT_MESSAGES = 200
 MAX_REQUEST_IDS = 50
@@ -281,7 +281,7 @@ if (el) setTimeout(()=>{{ el.remove(); }}, {int(remaining * 1000)});
     )
 
 
-def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float, request_id: str) -> list[dict]:
+def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str) -> list[dict]:
     seats = get_seats()
     snapshot = _shared_context(chat, exclude_message_id=current_user_message_id)
     results: dict[str, dict] = {}
@@ -302,12 +302,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
-    deadline = time.monotonic() + MAX_EXECUTION_SECONDS
+    deadline = None
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
     for round_no in range(1, total_rounds + 1):
-        if time.monotonic() >= deadline:
-            break
         round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
         seen_keys = set()
         for result in round_results:
@@ -596,9 +594,8 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     if status == "SUCCESS":
         display_model = result.get('executed_model') or result['model']
         attempt_latency = result.get("successful_attempt_latency")
-        timeout_text = f" · timeout {result.get('effective_timeout')}s" if result.get("effective_timeout") else ""
         attempt_text = f" · attempt {attempt_latency}s" if attempt_latency is not None else ""
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result['latency']}s{attempt_text}{timeout_text}")
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result['latency']}s{attempt_text}")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":

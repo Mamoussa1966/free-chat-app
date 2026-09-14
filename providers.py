@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX68-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX69-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -37,16 +37,15 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(value, maximum))
 
 
-REQUEST_TIMEOUT = 2
-# HARD REAL-TIME CONTRACT: every individual cascade-model attempt gets a
-# maximum wall-clock HTTP timeout of 2 seconds. The explicit model cascade is
-# the only failover mechanism; there is no hidden retry budget.
-CASCADE_MODEL_TIMEOUT_SECONDS = 2.0
-# Hard per-seat response budget. A seat may attempt several explicitly configured
-# cascade models, but the complete seat execution is never allowed to exceed
-# this wall-clock budget. The first model gets the full budget; later cascade
-# models receive only the time remaining.
-PROVIDER_SEAT_BUDGET_SECONDS = _bounded_int_env("PROVIDER_SEAT_BUDGET_SECONDS", 2, 1, 2)
+REQUEST_TIMEOUT = None
+# UNLIMITED RESPONSE-TIME CONTRACT: no artificial HTTP timeout is imposed on
+# official provider calls. The explicit Free model cascade remains the only
+# model failover mechanism; there is no hidden retry budget.
+CASCADE_MODEL_TIMEOUT_SECONDS = None
+# No per-seat wall-clock deadline. A provider is allowed to complete its
+# official request regardless of latency. This removes the previous 2-second
+# transport and seat-budget restriction without changing model selection.
+PROVIDER_SEAT_BUDGET_SECONDS = None
 MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 512, 128, 4096)
 
 # DeepSeek V4 defaults to thinking mode when omitted. The council is a fast
@@ -58,7 +57,7 @@ if DEEPSEEK_THINKING_MODE not in {"enabled", "disabled"}:
 # Gemini is latency-sensitive in the council UI. Its cascade already provides
 # model-level failover, so avoid a second hidden HTTP retry and cap each
 # individual Gemini attempt to a short, configurable window.
-GEMINI_REQUEST_TIMEOUT_SECONDS = CASCADE_MODEL_TIMEOUT_SECONDS
+GEMINI_REQUEST_TIMEOUT_SECONDS = None
 GEMINI_RETRIES = 0
 
 
@@ -658,17 +657,25 @@ def _remaining(deadline: Optional[float]) -> Optional[float]:
     return max(0.0, deadline - time.monotonic())
 
 
-def _bounded_timeout(timeout: float, deadline: Optional[float]) -> float:
+def _bounded_timeout(timeout: Optional[float], deadline: Optional[float]) -> Optional[float]:
+    # None means no artificial transport timeout. If a caller supplies an
+    # explicit deadline, it still governs that caller-owned operation.
+    if timeout is None:
+        remaining = _remaining(deadline)
+        if remaining is None:
+            return None
+        if remaining <= 0:
+            raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
+        return remaining
     remaining = _remaining(deadline)
     if remaining is None:
         return float(timeout)
     if remaining <= 0:
         raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
-    # Never extend a caller deadline merely to satisfy a minimum socket timeout.
     return min(float(timeout), remaining)
 
 
-def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Optional[float] = None, retries: Optional[int] = None) -> dict:
+def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = None, deadline: Optional[float] = None, retries: Optional[int] = None) -> dict:
     last: Optional[ProviderError] = None
     retry_budget = RETRIES if retries is None else max(0, int(retries))
     for attempt in range(retry_budget + 1):
@@ -839,7 +846,7 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
     return rep in aliases.get(req, set())
 
 
-def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: int = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> str:
+def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: Optional[float] = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> str:
     key = (credential or "").strip()
     if not key:
         raise ProviderError("no official credential configured", error_class="not_configured")
@@ -877,7 +884,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                     parts.append({"text": f"Attached file: {att['name']}\n{extract_text(att)}"})
             else:
                 parts.append({"text": f"Attached binary file not extracted: {att['name']}"})
-        data = _post(seat.endpoint.format(model=model), {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}}, min(timeout, GEMINI_REQUEST_TIMEOUT_SECONDS), deadline, 0)
+        data = _post(seat.endpoint.format(model=model), {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}}, timeout, deadline, 0)
         text = _gemini_text(data)
 
     elif seat.kind == "anthropic":
@@ -1025,12 +1032,9 @@ def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) 
 def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "") -> dict:
     del local_fallback
     started = time.perf_counter()
-    # The round deadline may be much larger than the provider latency contract.
-    # Clamp every seat to its own hard real-time budget so a long cascade cannot
-    # make Gemini/DeepSeek (or any other seat) wait 4, 6, or 10 seconds.
-    seat_deadline = started + float(PROVIDER_SEAT_BUDGET_SECONDS)
-    if deadline is not None:
-        seat_deadline = min(seat_deadline, float(deadline))
+    # No artificial provider/seat timeout is imposed. An optional caller-owned
+    # deadline is honored only when explicitly supplied by the caller.
+    seat_deadline = float(deadline) if deadline is not None else None
     candidates = _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT]
     attempted: list[str] = []
     if not candidates:
@@ -1042,17 +1046,19 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     attempt_diagnostics: list[dict] = []
     terminal = {"not_configured", "configuration", "deadline_exceeded", "execution_identity_mismatch"}
     for index, model in enumerate(candidates):
-        if (_remaining(seat_deadline) or 0) <= 0:
+        if seat_deadline is not None and (_remaining(seat_deadline) or 0) <= 0:
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
             break
         attempted.append(model)
         try:
             executed_model = str(model or "").strip()
             attempt_started = time.perf_counter()
-            remaining_seat = _remaining(seat_deadline) or 0.0
-            effective_timeout = CASCADE_MODEL_TIMEOUT_SECONDS if remaining_seat >= (CASCADE_MODEL_TIMEOUT_SECONDS - 0.001) else round(remaining_seat, 3)
-            if effective_timeout <= 0:
-                raise ProviderError("provider seat budget exceeded", error_class="deadline_exceeded")
+            effective_timeout = None
+            if seat_deadline is not None:
+                remaining_seat = _remaining(seat_deadline) or 0.0
+                if remaining_seat <= 0:
+                    raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
+                effective_timeout = remaining_seat
             if deadline is None:
                 # Preserve compatibility with existing test doubles/legacy adapters
                 # that implement call_official with the historical six-argument seam.
