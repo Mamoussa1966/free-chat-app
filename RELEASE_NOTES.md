@@ -1,16 +1,29 @@
-# V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX67-FINAL
+# Current release — Timeout-only finalization
 
-- Built from the immediately preceding timeout-focused release baseline.
-- Preserves the complete existing project tree, Free Cascade ordering, provider seats, and user seat 6 / DeepSeek seat 7 architecture.
-- Keeps the individual cascade-model HTTP timeout at 2 seconds.
-- Expands only the per-seat cascade execution window to 20 seconds, allowing the explicit Free cascade to continue through configured models instead of terminating after the first 2-second attempt.
-- No additional HTTP retries are introduced.
-- TIMEOUT remains an internal transport diagnostic only. The visible terminal classification for an exhausted no-response cascade is NO_RESPONSE_AFTER_CASCADE, so a missing provider response is not presented as the cause being "TIMEOUT".
-- No Local Engine, no paid fallback, and no automatic model selection.
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX68-FINAL`
 
-# HOTFIX67 — No-response / timeout separation
-- Built directly from HOTFIX67 multi-agent final.
-- Preserves all provider adapters, model cascades, room seats, Secrets contract, and 20-seat architecture.
-- Keeps transport TIMEOUT as an internal diagnostic classification.
-- Separates the public UI wording from the transport timeout so a provider that does not complete an attempt is not described as deliberately "no response because of timeout".
-- No Local Engine, paid fallback, automatic model selection, model deletion, seat renumbering, or credential changes.
+## Scope
+
+Built directly from the existing current project tree. No provider, seat, cascade-order, credential, model-list, architecture, Local Engine, paid-fallback, or automatic-selection changes are introduced.
+
+## Timeout contract
+
+- Every individual provider cascade attempt is hard-capped at **2.0 seconds**.
+- The explicit Free-model cascade remains the only sequential failover mechanism.
+- Hidden HTTP retries remain disabled for the cascade path.
+- A timed-out model proceeds to the next explicitly configured model when the remaining seat budget permits.
+- Gemini and DeepSeek use the same two-second per-attempt contract.
+- Existing Gemini, Claude, Grok, Kimi, DeepSeek, dynamic 20-seat, human seat 6, and diagnostics behavior is preserved.
+- No credentials are packaged.
+
+## Important latency semantics
+
+The 2.0-second value is an upper bound for an individual HTTP attempt, not a guarantee that a complete Streamlit round or provider response will render in 2.0 seconds. Network scheduling, Streamlit reruns, provider-side processing, and subsequent cascade attempts can make the displayed total round time larger.
+
+
+## No-timeout public finalization
+1. Preserved the runtime timeout behavior.
+2. Converted public timeout outcomes to neutral `NO_RESPONSE` status/classification.
+3. Suppressed failed-attempt timeout expanders for pure latency cutoffs.
+4. Added regression tests proving `TIMEOUT` does not leak into public result rendering.
+5. No provider model catalog, seat numbering, credentials, cascade order, or architecture changed.

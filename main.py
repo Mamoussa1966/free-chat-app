@@ -26,6 +26,9 @@ MAX_CHAT_MESSAGES = 200
 MAX_REQUEST_IDS = 50
 MAX_WORKERS = 8
 ERROR_DISPLAY_TTL_SECONDS = 60
+# UI-only classification: a latency cutoff is an internal transport event,
+# not a user-facing diagnosis of why a provider did not answer.
+PUBLIC_NO_RESPONSE = "NO_RESPONSE"
 
 
 def _now() -> str:
@@ -186,12 +189,18 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     allowed = {
         "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
         "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
-        "TIMEOUT", "NO_RESPONSE_AFTER_CASCADE", "UNKNOWN",
+        "TIMEOUT", "UNKNOWN",
     }
     summaries: list[dict] = []
     for detail in details or []:
         classification = _canonical_error_classification(str(detail.get("classification") or "UNKNOWN"))
-        if classification not in allowed:
+        # Keep TIMEOUT internal to the provider transport layer. In visible
+        # History/UI, a provider that did not answer inside the latency window
+        # is reported as NO_RESPONSE, so users are not told that "no response"
+        # is itself a provider/API error.
+        if classification == "TIMEOUT":
+            classification = PUBLIC_NO_RESPONSE
+        if classification not in allowed | {PUBLIC_NO_RESPONSE}:
             classification = "UNKNOWN"
         summary = {
             "attempt": detail.get("attempt"),
@@ -220,6 +229,12 @@ def _public_result(result: dict) -> dict:
     classification = str(public.get("classification") or "").strip().upper()
     if classification not in {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN"}:
         classification = "UNKNOWN"
+    if classification == "TIMEOUT":
+        classification = PUBLIC_NO_RESPONSE
+        # A transport timeout is an internal control-flow event.  Publicly
+        # expose it only as a neutral no-response state so the UI cannot label
+        # a provider as having an API timeout/error.
+        public["status"] = PUBLIC_NO_RESPONSE
     public["classification"] = classification
     public.pop("attempt_diagnostics", None)
     public.pop("error", None)
@@ -239,6 +254,8 @@ def _render_temporary_attempt_diagnostic(detail: dict) -> None:
     """Render a compact attempt error for 60 seconds, without exposing raw provider payloads."""
     model = str(detail.get("model") or "").strip()
     classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
+    if classification == "TIMEOUT":
+        classification = PUBLIC_NO_RESPONSE
     code = detail.get("status_code")
     code_text = f" · HTTP {code}" if code else ""
     remaining = _attempt_display_remaining(detail)
@@ -545,9 +562,22 @@ def _result_error_classification(result: dict) -> str:
         if value in {
             "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
             "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
-            "TIMEOUT", "NO_RESPONSE_AFTER_CASCADE", "UNKNOWN",
+            "TIMEOUT", "UNKNOWN",
         }:
-            return value
+            return PUBLIC_NO_RESPONSE if value == "TIMEOUT" else value
+    # Public/history results intentionally no longer retain raw diagnostics.
+    # Resolve the already-sanitized attempt summaries as a second source.
+    summaries = result.get("attempt_summaries", []) or []
+    for detail in reversed(summaries):
+        value = str(detail.get("classification") or "").strip().upper()
+        if value == PUBLIC_NO_RESPONSE:
+            return PUBLIC_NO_RESPONSE
+        if value in {
+            "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
+            "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+            "TIMEOUT", "UNKNOWN",
+        }:
+            return PUBLIC_NO_RESPONSE if value == "TIMEOUT" else value
     raw = str(result.get("error") or "")
     match = re.search(r"(?:^|[;\s])class=([A-Za-z0-9_:-]+)", raw, flags=re.IGNORECASE)
     if match:
@@ -574,29 +604,33 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
         st.warning(f"🟡 {result['label']} — نقطة المصادقة قبلت المفتاح، لكن لا يوجد Free model مُكوّن.")
         st.caption("Classification: AUTHENTICATION_ERROR")
+    elif status == PUBLIC_NO_RESPONSE:
+        # Never surface the internal TIMEOUT classification or failed-attempt
+        # diagnostics for a pure latency cutoff.  The provider simply did not
+        # produce a response inside the fast-response window.
+        st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم تصل استجابة سريعة من المزود.")
     else:
         summaries = list(result.get("attempt_summaries", []) or [])
-        display_class = str(result.get("classification") or "UNKNOWN").strip().upper()
-        # A transport timeout is an internal execution event, not proof that the
-        # provider deliberately failed to answer. Keep the public failure label
-        # neutral and separate from the transport timeout classification.
-        if display_class == "TIMEOUT":
-            display_class = "NO_RESPONSE_AFTER_CASCADE"
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
-            st.write("Official API did not complete a response in the current attempt; the explicit Free cascade continued to the next configured model when possible. Raw provider payload is not shown in the UI.")
-            st.caption(f"Final classification: **{display_class}**")
+            st.write("Official API request failed; raw provider payload is not shown in the UI.")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
             if summaries:
                 last = summaries[-1]
                 final_class = str(last.get("classification") or "UNKNOWN").upper()
+                if final_class == "TIMEOUT":
+                    final_class = PUBLIC_NO_RESPONSE
                 final_model = str(last.get("model") or "").strip()
                 final_code = last.get("status_code")
                 final_code_text = f" · HTTP {final_code}" if final_code else ""
                 st.caption(f"Final classification: **{final_class}** · `{final_model}`{final_code_text}")
+                if final_class == PUBLIC_NO_RESPONSE:
+                    st.caption("لم تصل استجابة من هذا المزود داخل نافذة الاستجابة السريعة؛ لم يتم عرض TIMEOUT كتشخيص للمستخدم.")
                 for detail in summaries:
                     _render_temporary_attempt_diagnostic(detail)
             else:
                 classification = str(result.get("classification") or "").strip().upper() or _result_error_classification(result)
+                if classification == "TIMEOUT":
+                    classification = PUBLIC_NO_RESPONSE
                 st.caption(f"Final classification: **{classification}**")
 
 
