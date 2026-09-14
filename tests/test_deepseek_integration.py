@@ -350,3 +350,26 @@ def test_deepseek_secret_and_model_catalog_are_both_required_before_network(monk
     assert providers.get_secret(("DEEPSEEK_API_KEY",)) == "sk-only"
     assert providers.get_model_candidates(DEEPSEEK) == ()
 
+
+
+def test_deepseek_versioned_provider_identity_alias_is_accepted():
+    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "deepseek-v4-flash-0731")
+    assert providers._deepseek_model_identity_matches("deepseek-v4-pro", "deepseek-v4-pro-0813")
+    assert not providers._deepseek_model_identity_matches("deepseek-v4-flash", "deepseek-v4-pro-0813")
+
+
+def test_deepseek_versioned_provider_identity_alias_completes_successfully():
+    response = _response(
+        200,
+        '{"id":"r4","model":"deepseek-v4-flash-0731","choices":[{"message":{"content":"ALIAS_OK"}}]}',
+        {"id": "r4", "model": "deepseek-v4-flash-0731", "choices": [{"message": {"content": "ALIAS_OK"}}]},
+    )
+    with patch("providers.requests.post", return_value=response) as post:
+        result = call_seat(
+            DEEPSEEK, "identity", "", 1, False, "TEST_KEY", [],
+            ("deepseek-v4-flash",), request_id="identity-4",
+        )
+    assert post.call_count == 1
+    assert result["status"] == "SUCCESS"
+    assert result["executed_model"] == "deepseek-v4-flash"
+    assert result["provider_reported_model"] == "deepseek-v4-flash-0731"

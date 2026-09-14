@@ -18,8 +18,9 @@ def test_extra_agents_are_loaded_after_original_five_plus_deepseek_and_capped_at
     assert [s.key for s in seats[:5]] == ["openai", "gemini", "claude", "grok", "kimi"]
     assert seats[5].key == "deepseek"
     assert seats[5].room_slot == 7
-    assert len(seats) == 20
-    assert seats[-1].key == "agent13"
+    assert len(seats) == 19
+    assert seats[-1].key == "agent12"
+    assert [s.room_slot for s in seats] == [1, 2, 3, 4, 5, 7] + list(range(8, 21))
 
 def test_extra_agent_credentials_and_models_are_explicit():
     config = [{
