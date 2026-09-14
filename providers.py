@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX57-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX58-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 20
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -36,6 +36,13 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
 
 REQUEST_TIMEOUT = _bounded_int_env("PROVIDER_TIMEOUT_SECONDS", 45, 5, 90)
 MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 1200, 128, 4096)
+
+# DeepSeek V4 defaults to thinking mode when omitted. The council is a fast
+# conversational room, so the dedicated DeepSeek adapter explicitly disables
+# thinking unless the operator opts in. This does not select or invent a model.
+DEEPSEEK_THINKING_MODE = str(os.getenv("DEEPSEEK_THINKING_MODE", "disabled")).strip().lower()
+if DEEPSEEK_THINKING_MODE not in {"enabled", "disabled"}:
+    DEEPSEEK_THINKING_MODE = "disabled"
 # Gemini is latency-sensitive in the council UI. Its cascade already provides
 # model-level failover, so avoid a second hidden HTTP retry and cap each
 # individual Gemini attempt to a short, configurable window.
@@ -873,7 +880,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 extracted = extract_text(att)
                 content_parts.append(f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }")
         content = "\n\n".join(x for x in content_parts if x).strip()
-        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
+        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS, "thinking": {"type": DEEPSEEK_THINKING_MODE}}, timeout, deadline)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
         if not provider_reported_model or provider_reported_model != model:
             raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
