@@ -50,7 +50,9 @@ def test_deepseek_payload_is_explicit_non_streaming_and_identity_attested():
 
 
 def test_gemini_default_timeout_is_latency_bounded():
-    assert providers.GEMINI_REQUEST_TIMEOUT_SECONDS == 4
+    assert providers.GEMINI_REQUEST_TIMEOUT_SECONDS == 2.0
+    assert providers.CASCADE_MODEL_TIMEOUT_SECONDS == 2.0
+    assert providers.REQUEST_TIMEOUT == 2
     assert providers.GEMINI_RETRIES == 0
 
 

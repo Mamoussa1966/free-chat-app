@@ -85,8 +85,8 @@ def test_deepseek_429_rate_limit_is_rate_limited_and_cascade_continues():
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("free-a", "free-b"))
-    assert post.call_count == 3
-    assert result["status"] == "SUCCESS"
+    assert post.call_count == 2
+    assert result["status"] == "FAILED"
     assert providers._canonical_error_classification(providers._classify(429, "too many requests; retry-after 1")) == "RATE_LIMITED"
 
 

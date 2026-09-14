@@ -24,7 +24,7 @@ def test_gemini_uses_latency_cap_and_no_hidden_http_retry(monkeypatch):
     )
 
     assert result["status"] == "SUCCESS"
-    assert seen["timeout"] == min(providers.REQUEST_TIMEOUT, providers.GEMINI_REQUEST_TIMEOUT_SECONDS)
+    assert seen["timeout"] == providers.CASCADE_MODEL_TIMEOUT_SECONDS
     assert seen["retries"] == providers.GEMINI_RETRIES == 0
     assert result["successful_attempt_latency"] >= 0
     assert result["effective_timeout"] == seen["timeout"]
@@ -46,4 +46,4 @@ def test_failed_attempts_record_latency_and_timeout(monkeypatch):
     assert result["status"] == "FAILED"
     detail = result["attempt_diagnostics"][0]
     assert detail["latency"] >= 0
-    assert detail["timeout_seconds"] == min(providers.REQUEST_TIMEOUT, providers.GEMINI_REQUEST_TIMEOUT_SECONDS)
+    assert detail["timeout_seconds"] == providers.CASCADE_MODEL_TIMEOUT_SECONDS

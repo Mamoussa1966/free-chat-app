@@ -52,8 +52,8 @@ def test_claude_429_transient_rate_limit_advances_cascade():
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("free-1", "free-2"))
-    assert post.call_count == 3
-    assert result["status"] == "SUCCESS"
+    assert post.call_count == 2
+    assert result["status"] == "FAILED"
     assert result["attempted_models"] == ["free-1", "free-2"]
     assert result["executed_model"] == "free-2"
     assert result["attempt_diagnostics"][0]["classification"] == "RATE_LIMITED"

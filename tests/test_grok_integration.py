@@ -83,8 +83,8 @@ def test_grok_429_rate_limit_advances_with_retry_policy():
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-a", "grok-b"))
-    assert post.call_count == 3
-    assert result["status"] == "SUCCESS"
+    assert post.call_count == 2
+    assert result["status"] == "FAILED"
     assert result["attempted_models"] == ["grok-a", "grok-b"]
     assert result["attempt_diagnostics"][0]["classification"] == "RATE_LIMITED"
 
@@ -223,7 +223,7 @@ def test_grok_structured_unknown_4xx_is_api_error_not_unknown():
 def test_grok_result_summaries_canonicalize_internal_provider_error_classes():
     with patch("providers.requests.post", return_value=_response(500, '{"error":{"message":"server failure"}}')) as post:
         result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-a",))
-    assert post.call_count == 2  # shared retry policy
+    assert post.call_count == 1  # no hidden HTTP retry; cascade owns failover
     assert result["attempt_summaries"][-1]["classification"] == "API_ERROR"
     assert result["attempt_summaries"][-1]["classification"] in providers.ERROR_CLASSES
 
