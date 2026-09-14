@@ -14,8 +14,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 # Release artifact compatibility markers:
-# AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX61_FINAL.zip
-# AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX61_MULTIAGENT_FINAL.zip
+# AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX62_FINAL.zip
+# AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX62_MULTIAGENT_FINAL.zip
 REQUIRED = [
     "app.py", "main.py", "providers.py", "attachment_utils.py", "gitops_layer.py",
     "requirements.txt", "VERSION.txt", "README.md", "RELEASE_NOTES.md", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json",
@@ -235,7 +235,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX61_MULTIAGENT_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX62_MULTIAGENT_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()

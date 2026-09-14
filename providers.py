@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX61-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX62-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -20,6 +20,9 @@ MAX_ERROR_CHARS = 700
 MAX_RESPONSE_CHARS = 40_000
 MAX_RESPONSE_BODY_CHARS = 4_000_000
 RETRIES = 1
+# Provider adapters explicitly pass retries=0 below. RETRIES remains available
+# for low-level runtime tests/backward compatibility but cannot extend a model
+# cascade attempt in production.
 # Gemini is latency-sensitive in the council UI. Its cascade already provides
 # model-level retry/failover, so avoid a second hidden HTTP retry and cap each
 # individual Gemini attempt to a short, configurable window.
@@ -34,7 +37,11 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(value, maximum))
 
 
-REQUEST_TIMEOUT = _bounded_int_env("PROVIDER_TIMEOUT_SECONDS", 45, 5, 90)
+REQUEST_TIMEOUT = 2
+# HARD REAL-TIME CONTRACT: every individual cascade-model attempt gets a
+# maximum wall-clock HTTP timeout of 2 seconds. The explicit model cascade is
+# the only failover mechanism; there is no hidden retry budget.
+CASCADE_MODEL_TIMEOUT_SECONDS = 2.0
 MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 1200, 128, 4096)
 
 # DeepSeek V4 defaults to thinking mode when omitted. The council is a fast
@@ -46,7 +53,7 @@ if DEEPSEEK_THINKING_MODE not in {"enabled", "disabled"}:
 # Gemini is latency-sensitive in the council UI. Its cascade already provides
 # model-level failover, so avoid a second hidden HTTP retry and cap each
 # individual Gemini attempt to a short, configurable window.
-GEMINI_REQUEST_TIMEOUT_SECONDS = _bounded_int_env("GEMINI_REQUEST_TIMEOUT_SECONDS", 4, 2, 15)
+GEMINI_REQUEST_TIMEOUT_SECONDS = CASCADE_MODEL_TIMEOUT_SECONDS
 GEMINI_RETRIES = 0
 
 
@@ -649,10 +656,11 @@ def _remaining(deadline: Optional[float]) -> Optional[float]:
 def _bounded_timeout(timeout: float, deadline: Optional[float]) -> float:
     remaining = _remaining(deadline)
     if remaining is None:
-        return max(0.5, float(timeout))
+        return float(timeout)
     if remaining <= 0:
         raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
-    return max(0.5, min(float(timeout), remaining))
+    # Never extend a caller deadline merely to satisfy a minimum socket timeout.
+    return min(float(timeout), remaining)
 
 
 def _post(url: str, headers: dict, payload: dict, timeout: float, deadline: Optional[float] = None, retries: Optional[int] = None) -> dict:
@@ -849,7 +857,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                     content.append({"type": "input_text", "text": f"Attached file: {att['name']}\n{extracted}"})
                 else:
                     content.append({"type": "input_text", "text": f"Attached binary file not in a supported text/image extraction path: {att['name']}"})
-        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
+        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline, 0)
         text = _openai_text(data)
 
     elif seat.kind == "gemini":
@@ -864,7 +872,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                     parts.append({"text": f"Attached file: {att['name']}\n{extract_text(att)}"})
             else:
                 parts.append({"text": f"Attached binary file not extracted: {att['name']}"})
-        data = _post(seat.endpoint.format(model=model), {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}}, min(timeout, GEMINI_REQUEST_TIMEOUT_SECONDS), deadline, GEMINI_RETRIES)
+        data = _post(seat.endpoint.format(model=model), {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}}, min(timeout, GEMINI_REQUEST_TIMEOUT_SECONDS), deadline, 0)
         text = _gemini_text(data)
 
     elif seat.kind == "anthropic":
@@ -877,7 +885,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
             else:
                 extracted = extract_text(att)
                 content.append({"type": "text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
-        data = _post(seat.endpoint, {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, {"model": model, "max_tokens": MAX_OUTPUT_TOKENS, "messages": [{"role": "user", "content": content}]}, timeout, deadline)
+        data = _post(seat.endpoint, {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, {"model": model, "max_tokens": MAX_OUTPUT_TOKENS, "messages": [{"role": "user", "content": content}]}, timeout, deadline, 0)
         text = _anthropic_text(data)
 
     elif seat.kind == "xai_responses":
@@ -890,7 +898,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
             else:
                 extracted = extract_text(att)
                 content.append({"type": "input_text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
-        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
+        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline, 0)
         text = _openai_text(data)
 
     elif seat.kind == "deepseek_chat":
@@ -918,7 +926,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
             "stream": False,
             "thinking": {"type": DEEPSEEK_THINKING_MODE},
         }
-        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, payload, timeout, deadline)
+        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, payload, timeout, deadline, 0)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
         if not _deepseek_model_identity_matches(model, provider_reported_model):
             raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
@@ -940,7 +948,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
             else:
                 extracted = extract_text(att)
                 content.append({"type": "text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
-        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline)
+        data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline, 0)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
         if not provider_reported_model or provider_reported_model != model:
             raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
@@ -1030,7 +1038,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         try:
             executed_model = str(model or "").strip()
             attempt_started = time.perf_counter()
-            effective_timeout = min(REQUEST_TIMEOUT, GEMINI_REQUEST_TIMEOUT_SECONDS) if seat.key == "gemini" else REQUEST_TIMEOUT
+            effective_timeout = CASCADE_MODEL_TIMEOUT_SECONDS
             if deadline is None:
                 raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no), executed_model, credential, effective_timeout, attachments)
             else:
