@@ -1,6 +1,6 @@
 # Current release — Timeout-only finalization
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX69-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX70-FINAL`
 
 ## Scope
 

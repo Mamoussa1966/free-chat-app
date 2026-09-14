@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX69-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX70-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -23,9 +23,6 @@ RETRIES = 1
 # Provider adapters explicitly pass retries=0 below. RETRIES remains available
 # for low-level runtime tests/backward compatibility but cannot extend a model
 # cascade attempt in production.
-# Gemini is latency-sensitive in the council UI. Its cascade already provides
-# model-level retry/failover, so avoid a second hidden HTTP retry and cap each
-# individual Gemini attempt to a short, configurable window.
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 
 
@@ -54,9 +51,6 @@ MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 512, 128, 4096)
 DEEPSEEK_THINKING_MODE = str(os.getenv("DEEPSEEK_THINKING_MODE", "disabled")).strip().lower()
 if DEEPSEEK_THINKING_MODE not in {"enabled", "disabled"}:
     DEEPSEEK_THINKING_MODE = "disabled"
-# Gemini is latency-sensitive in the council UI. Its cascade already provides
-# model-level failover, so avoid a second hidden HTTP retry and cap each
-# individual Gemini attempt to a short, configurable window.
 GEMINI_REQUEST_TIMEOUT_SECONDS = None
 GEMINI_RETRIES = 0
 
