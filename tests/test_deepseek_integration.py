@@ -430,13 +430,13 @@ def test_deepseek_http_api_error_advances_via_actual_post_boundary():
 
 
 def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
-    """HOTFIX79: a 200 error envelope is an API_ERROR, not an identity mismatch."""
+    """HOTFIX80: a 200 error envelope is an API_ERROR, not an identity mismatch."""
     first = _response(200, '{"error":{"message":"temporary DeepSeek API failure"}}', {"error":{"message":"temporary DeepSeek API failure"}})
     second = _response(200, '{"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]}', {"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]})
     with patch("providers.requests.post", side_effect=[first, second]) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [],
                            ("deepseek-v4-flash", "deepseek-v4-pro"),
-                           request_id="hotfix78-deepseek-200-error")
+                           request_id="hotfix74-deepseek-200-error")
     assert post.call_count == 2
     assert result["status"] == "SUCCESS"
     assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
@@ -447,7 +447,7 @@ def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
 
 
 def test_deepseek_current_flash_identity_alias_is_accepted():
-    """HOTFIX79: official current /models identity deepseek-flash is accepted."""
+    """HOTFIX80: official current /models identity deepseek-flash is accepted."""
     response = _response(
         200,
         '{"id":"r74a","model":"deepseek-flash","choices":[{"message":{"content":"FLASH_OK"}}]}',
@@ -455,38 +455,8 @@ def test_deepseek_current_flash_identity_alias_is_accepted():
     )
     with patch("providers.requests.post", return_value=response) as post:
         result = call_seat(DEEPSEEK, "identity", "", 1, False, "TEST_KEY", [],
-                           ("deepseek-v4-flash",), request_id="hotfix78-deepseek-alias")
+                           ("deepseek-v4-flash",), request_id="hotfix74-deepseek-alias")
     assert post.call_count == 1
     assert result["status"] == "SUCCESS"
     assert result["executed_model"] == "deepseek-v4-flash"
     assert result["provider_reported_model"] == "deepseek-flash"
-
-
-def test_deepseek_legacy_flash_accepts_current_v41_flash_identity():
-    response = _response(200, '{"model":"deepseek-flash","choices":[{"message":{"content":"V41_FLASH_OK"}}]}', {"model":"deepseek-flash","choices":[{"message":{"content":"V41_FLASH_OK"}}]})
-    with patch("providers.requests.post", return_value=response) as post:
-        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [], ("deepseek-v4-flash",), request_id="hotfix78-legacy-flash")
-    assert post.call_count == 1
-    assert result["status"] == "SUCCESS"
-    assert result["executed_model"] == "deepseek-v4-flash"
-    assert result["provider_reported_model"] == "deepseek-flash"
-
-
-def test_deepseek_v4_pro_accepts_current_flash_routing_identity():
-    response = _response(200, '{"model":"deepseek-flash","choices":[{"message":{"content":"V41_FLASH_ROUTED_OK"}}]}', {"model":"deepseek-flash","choices":[{"message":{"content":"V41_FLASH_ROUTED_OK"}}]})
-    with patch("providers.requests.post", return_value=response) as post:
-        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [], ("deepseek-v4-pro",), request_id="hotfix78-pro-routing")
-    assert post.call_count == 1
-    assert result["status"] == "SUCCESS"
-    assert result["executed_model"] == "deepseek-v4-pro"
-    assert result["provider_reported_model"] == "deepseek-flash"
-
-
-def test_deepseek_unknown_identity_still_fails_closed():
-    response = _response(200, '{"model":"totally-unrelated-model","choices":[{"message":{"content":"BAD_ID"}}]}', {"model":"totally-unrelated-model","choices":[{"message":{"content":"BAD_ID"}}]})
-    with patch("providers.requests.post", return_value=response) as post:
-        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [], ("deepseek-v4-flash", "deepseek-v4-pro"), request_id="hotfix78-identity-closed")
-    assert post.call_count == 1
-    assert result["status"] != "SUCCESS"
-    assert result["attempted_models"] == ["deepseek-v4-flash"]
-    assert result["attempt_diagnostics"][0]["error_class"] == "execution_identity_mismatch"

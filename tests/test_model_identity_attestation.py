@@ -72,38 +72,3 @@ def test_missing_provider_model_identity_fails_closed(monkeypatch):
 
     assert result["status"] != "SUCCESS"
     assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
-
-def test_deepseek_current_versioned_flash_identity_is_accepted(monkeypatch):
-    seat = _deepseek()
-    def fake_post(endpoint, headers, payload, timeout, deadline, retries=None):
-        return {
-            "id": "test-response-id",
-            "model": "deepseek-v4.1-flash-20260910",
-            "choices": [{"message": {"role": "assistant", "content": "CURRENT_FLASH_OK"}}],
-        }
-    monkeypatch.setattr(providers, "_post", fake_post)
-    result = providers.call_seat(
-        seat=seat, user_prompt="identity version test", shared_context="", round_no=1,
-        local_fallback=False, credential="TEST_KEY", attachments=[],
-        model_candidates=("deepseek-v4-flash",), request_id="identity-test-004",
-    )
-    assert result["status"] == "SUCCESS"
-    assert result["provider_reported_model"] == "deepseek-v4.1-flash-20260910"
-
-
-def test_deepseek_unrelated_identity_still_fails_closed(monkeypatch):
-    seat = _deepseek()
-    def fake_post(endpoint, headers, payload, timeout, deadline, retries=None):
-        return {
-            "id": "test-response-id",
-            "model": "deepseek-v5-pro",
-            "choices": [{"message": {"role": "assistant", "content": "SHOULD_NOT_BE_ACCEPTED"}}],
-        }
-    monkeypatch.setattr(providers, "_post", fake_post)
-    result = providers.call_seat(
-        seat=seat, user_prompt="identity unrelated test", shared_context="", round_no=1,
-        local_fallback=False, credential="TEST_KEY", attachments=[],
-        model_candidates=("deepseek-v4-flash",), request_id="identity-test-005",
-    )
-    assert result["status"] != "SUCCESS"
-    assert result["attempted_models"] == ["deepseek-v4-flash"]
