@@ -1,6 +1,6 @@
-# HOTFIX80-FINAL — DeepSeek cascade + identity attestation correction
+# HOTFIX81-FINAL — DeepSeek cascade + identity attestation correction
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX80-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX81-FINAL`
 
 ## Surgical fixes
 - DeepSeek HTTP/API failures remain non-terminal and advance from candidate #1 to candidate #2.
@@ -8,3 +8,9 @@ Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX80-FINAL`
 - The execution identity guard remains fail-closed: `execution_identity_mismatch` still stops the cascade.
 - The documented current DeepSeek provider identity `deepseek-flash` is accepted as the provider identity for the configured `deepseek-v4-flash` request.
 - No changes to Secrets, Local Engine, paid fallback, automatic model selection, or other providers.
+
+HOTFIX81 — DeepSeek identity invariant hardening
+- Fixes main.py NameError by importing the DeepSeek identity matcher used by the UI.
+- Applies the same documented DeepSeek identity alias normalization to the council success invariant.
+- Keeps strict identity attestation for unknown/mismatched DeepSeek identities.
+- No changes to other providers, Secrets, Local Engine, paid fallback, automatic selection, or model catalog order.
