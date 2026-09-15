@@ -395,7 +395,7 @@ def test_deepseek_versioned_provider_identity_alias_completes_successfully():
 
 
 def test_deepseek_api_error_explicitly_advances_to_second_free_candidate():
-    """HOTFIX72: DeepSeek candidate #1 API_ERROR must advance to candidate #2."""
+    """HOTFIX73: DeepSeek candidate #1 API_ERROR must advance to candidate #2."""
     failures = [providers.ProviderError("DeepSeek temporary API failure", 500, "API_ERROR")]
     responses = [{"text": "DEEPSEEK_V4_PRO_OK", "provider_reported_model": "deepseek-v4-pro"}]
     with patch("providers.call_official", side_effect=failures + responses) as call:
@@ -411,3 +411,19 @@ def test_deepseek_api_error_explicitly_advances_to_second_free_candidate():
     assert result["provider_reported_model"] == "deepseek-v4-pro"
     assert result["attempt_summaries"][0]["classification"] == "API_ERROR"
     assert result["attempt_summaries"][0]["retryable"] is True
+
+
+def test_deepseek_http_api_error_advances_via_actual_post_boundary():
+    first = _response(500, '{"error":{"message":"temporary provider failure"}}')
+    second = _response(200, '{"id":"r73","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]}', {"id":"r73","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]})
+    with patch("providers.requests.post", side_effect=[first, second]) as post:
+        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [],
+                           ("deepseek-v4-flash", "deepseek-v4-pro"),
+                           request_id="hotfix73-deepseek-http-api-error")
+    assert post.call_count == 2
+    assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["provider_reported_model"] == "deepseek-v4-pro"
+    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["retryable"] is True
