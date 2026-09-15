@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX79-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX80-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -826,22 +826,14 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
         return True
     aliases = {
         "deepseek-v4-flash": {
-            # DeepSeek retired the legacy V4 Flash implementation on 2026-09-10.
-            # The legacy request ID is still accepted and is routed to V4.1 Flash.
-            # The provider may attest the current canonical ID or deployed version.
+            # Current official /models naming is deepseek-flash, while the
+            # Chat Completions contract still accepts deepseek-v4-flash.
+            # Treat the documented stable alias as the same provider identity.
             "deepseek-flash",
-            "deepseek-v4.1-flash",
-            "deepseek-v4-1-flash",
             "deepseek-v4-flash-0731",
             "deepseek-v4-flash-preview",
         },
         "deepseek-v4-pro": {
-            # From 2026-09-14 Beijing time, DeepSeek routes V4 Pro requests to
-            # V4.1 Flash until V4.1 Pro is released. Therefore a V4 Pro request
-            # may legitimately attest the Flash canonical/deployed identity.
-            "deepseek-flash",
-            "deepseek-v4.1-flash",
-            "deepseek-v4-1-flash",
             "deepseek-v4-pro-0813",
             "deepseek-v4-pro-preview",
         },
@@ -849,20 +841,7 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
             "deepseek-v4-flash-vision-exp",
         },
     }
-    if rep in aliases.get(req, set()):
-        return True
-    # DeepSeek may attest the currently deployed versioned Flash identifier
-    # rather than the stable request identifier. Keep attestation fail-closed
-    # by accepting only the documented Flash family for Flash requests.
-    if req in {"deepseek-v4-flash", "deepseek-v4-pro"}:
-        flash_patterns = (
-            r"^deepseek-flash(?:-[a-z0-9._-]+)?$",
-            r"^deepseek-v4[.]?1-flash(?:-[a-z0-9._-]+)?$",
-            r"^deepseek-v4-1-flash(?:-[a-z0-9._-]+)?$",
-            r"^deepseek-v4-flash(?:-[a-z0-9._-]+)?$",
-        )
-        return any(re.fullmatch(pattern, rep) for pattern in flash_patterns)
-    return False
+    return rep in aliases.get(req, set())
 
 
 def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: Optional[float] = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> str:
