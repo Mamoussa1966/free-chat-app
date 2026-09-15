@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX78-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX79-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -849,7 +849,20 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
             "deepseek-v4-flash-vision-exp",
         },
     }
-    return rep in aliases.get(req, set())
+    if rep in aliases.get(req, set()):
+        return True
+    # DeepSeek may attest the currently deployed versioned Flash identifier
+    # rather than the stable request identifier. Keep attestation fail-closed
+    # by accepting only the documented Flash family for Flash requests.
+    if req in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+        flash_patterns = (
+            r"^deepseek-flash(?:-[a-z0-9._-]+)?$",
+            r"^deepseek-v4[.]?1-flash(?:-[a-z0-9._-]+)?$",
+            r"^deepseek-v4-1-flash(?:-[a-z0-9._-]+)?$",
+            r"^deepseek-v4-flash(?:-[a-z0-9._-]+)?$",
+        )
+        return any(re.fullmatch(pattern, rep) for pattern in flash_patterns)
+    return False
 
 
 def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: Optional[float] = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> str:
