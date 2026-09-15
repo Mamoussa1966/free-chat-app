@@ -392,3 +392,22 @@ def test_deepseek_versioned_provider_identity_alias_completes_successfully():
     assert result["status"] == "SUCCESS"
     assert result["executed_model"] == "deepseek-v4-flash"
     assert result["provider_reported_model"] == "deepseek-v4-flash-0731"
+
+
+def test_deepseek_api_error_explicitly_advances_to_second_free_candidate():
+    """HOTFIX72: DeepSeek candidate #1 API_ERROR must advance to candidate #2."""
+    failures = [providers.ProviderError("DeepSeek temporary API failure", 500, "API_ERROR")]
+    responses = [{"text": "DEEPSEEK_V4_PRO_OK", "provider_reported_model": "deepseek-v4-pro"}]
+    with patch("providers.call_official", side_effect=failures + responses) as call:
+        result = call_seat(
+            DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [],
+            ("deepseek-v4-flash", "deepseek-v4-pro"),
+            request_id="hotfix72-deepseek-api-error",
+        )
+    assert call.call_count == 2
+    assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["provider_reported_model"] == "deepseek-v4-pro"
+    assert result["attempt_summaries"][0]["classification"] == "API_ERROR"
+    assert result["attempt_summaries"][0]["retryable"] is True
