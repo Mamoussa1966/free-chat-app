@@ -335,7 +335,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
                 provider_reported_model = str(result.get("provider_reported_model") or "").strip()
                 if seat_key == "deepseek" and not _deepseek_model_identity_matches(executed_model, provider_reported_model):
-                    raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
+                    raise RuntimeError(
+                        f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}"
+                    )
                 chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
         keys = set(chat.get("result_keys", []))
         keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
@@ -518,11 +520,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                 if not provider_reported_model:
                     st.error("⚠️ Provider identity missing: لا يمكن عرض نجاح رسمي بدون هوية النموذج من المزود.")
                     continue
-                if seat_key == "deepseek":
-                    identity_ok = _deepseek_model_identity_matches(executed_model, provider_reported_model)
-                else:
-                    identity_ok = provider_reported_model == executed_model
-                if not identity_ok:
+                if provider_reported_model != executed_model:
                     st.error("⚠️ Provider identity mismatch: هوية النموذج التي أعادها المزود لا تطابق النموذج المنفذ.")
                     continue
             request_id = str(message.get("request_id") or "").strip()

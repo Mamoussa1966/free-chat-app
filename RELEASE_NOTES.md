@@ -1,3 +1,15 @@
+# HOTFIX76-FINAL — DeepSeek V4.1 provider-routing identity correction
+
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX76-FINAL`
+
+## Surgical fixes
+- Preserves the DeepSeek Free cascade and its explicit model order.
+- Preserves API_ERROR → next-candidate behavior for DeepSeek.
+- Keeps `execution_identity_mismatch` fail-closed for genuinely unrelated provider identities.
+- Expands only the documented DeepSeek provider identity aliases needed after the September 14, 2026 routing change: the configured `deepseek-v4-flash` request may be served as `deepseek-flash` / V4.1-Flash, and `deepseek-v4-pro` requests may be routed to V4.1-Flash until V4.1-Pro is released.
+- The main history/result invariant uses the same attestation function as the provider layer, preventing a valid documented provider-side routing identity from crashing the application after a successful response.
+- No changes to Secrets, Local Engine, paid fallback, automatic model selection, or other providers.
+
 
 ## HOTFIX76 — DeepSeek provider identity invariant compatibility
 
@@ -15,16 +27,3 @@ Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX76-FINAL`
 - The execution identity guard remains fail-closed: `execution_identity_mismatch` still stops the cascade.
 - The documented current DeepSeek provider identity `deepseek-flash` is accepted as the provider identity for the configured `deepseek-v4-flash` request.
 - No changes to Secrets, Local Engine, paid fallback, automatic model selection, or other providers.
-
-
-# HOTFIX76-FINAL — DeepSeek identity guard consistency
-
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX76-FINAL`
-
-## Surgical fixes
-- Fixed the remaining strict DeepSeek identity comparison in `main.py` history rendering.
-- Both the execution path and the history/UI path now use the same `_deepseek_model_identity_matches()` attestation rule.
-- `deepseek-v4-flash` with provider-reported `deepseek-flash` is accepted as the documented current DeepSeek identity.
-- Unknown identities such as `some-random-model` remain fail-closed as `execution_identity_mismatch`.
-- DeepSeek `API_ERROR` remains non-terminal and advances to the next explicitly configured Free candidate.
-- No changes to Secrets, model lists, cascade order, Local Engine, paid fallback, automatic model selection, or other providers.

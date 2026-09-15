@@ -826,16 +826,25 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
         return True
     aliases = {
         "deepseek-v4-flash": {
-            # Current official /models naming is deepseek-flash, while the
-            # Chat Completions contract still accepts deepseek-v4-flash.
-            # Treat the documented stable alias as the same provider identity.
+            # DeepSeek retired V4-Flash and now routes the legacy request ID
+            # to V4.1-Flash. These are documented provider-side identities for
+            # the same configured request; accept them for attestation only.
             "deepseek-flash",
             "deepseek-v4-flash-0731",
             "deepseek-v4-flash-preview",
+            "deepseek-v4.1-flash",
+            "deepseek-v4-1-flash",
+            "deepseek-v41-flash",
         },
         "deepseek-v4-pro": {
             "deepseek-v4-pro-0813",
             "deepseek-v4-pro-preview",
+            # As of 2026-09-14, DeepSeek documents that requests using the
+            # legacy v4-pro ID are routed to V4.1-Flash until V4.1-Pro ships.
+            "deepseek-flash",
+            "deepseek-v4.1-flash",
+            "deepseek-v4-1-flash",
+            "deepseek-v41-flash",
         },
         "deepseek-v4-flash-vision-exp": {
             "deepseek-v4-flash-vision-exp",
