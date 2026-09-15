@@ -133,6 +133,25 @@ def test_deepseek_500_is_api_error_and_can_advance():
     assert result["status"] == "SUCCESS"
     assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
 
+def test_deepseek_explicit_api_error_advances_to_next_free_candidate():
+    """Regression: a normalized API_ERROR on candidate #1 must not stop the cascade."""
+    failures = [
+        providers.ProviderError("temporary DeepSeek API failure", 503, "API_ERROR"),
+    ]
+    responses = [
+        {"text": "DEEPSEEK_OK", "provider_reported_model": "deepseek-v4-pro"},
+    ]
+    with patch("providers.call_official", side_effect=failures + responses) as call:
+        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [],
+                           ("deepseek-v4-flash", "deepseek-v4-pro"))
+    assert call.call_count == 2
+    assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["retryable"] is True
+
+
 def test_deepseek_is_not_given_an_implicit_free_model_catalog():
     source = Path(providers.__file__).read_text(encoding="utf-8")
     assert "DEEPSEEK_FREE_MODELS" in source
