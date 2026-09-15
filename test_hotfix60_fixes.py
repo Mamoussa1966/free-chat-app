@@ -49,10 +49,11 @@ def test_deepseek_payload_is_explicit_non_streaming_and_identity_attested():
     assert result["provider_reported_model"] == "deepseek-v4-flash-0731"
 
 
-def test_gemini_default_timeout_is_latency_bounded():
-    assert providers.GEMINI_REQUEST_TIMEOUT_SECONDS == 2.0
-    assert providers.CASCADE_MODEL_TIMEOUT_SECONDS == 2.0
-    assert providers.REQUEST_TIMEOUT == 2
+def test_provider_response_time_is_unlimited_and_has_no_hidden_retry():
+    assert providers.GEMINI_REQUEST_TIMEOUT_SECONDS is None
+    assert providers.CASCADE_MODEL_TIMEOUT_SECONDS is None
+    assert providers.REQUEST_TIMEOUT is None
+    assert providers.PROVIDER_SEAT_BUDGET_SECONDS is None
     assert providers.GEMINI_RETRIES == 0
 
 

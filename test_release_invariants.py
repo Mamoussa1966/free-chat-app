@@ -12,3 +12,9 @@ def test_version_is_current_hotfix():
 def test_main_has_unique_result_key_invariant():
     s=Path('main.py').read_text(encoding='utf-8')
     assert 'result_key = f"{request_id}:{round_no}:{result.get(\'seat\',\'\')}"' in s
+
+
+def test_main_deepseek_provider_identity_invariant_accepts_documented_alias():
+    s = Path("main.py").read_text(encoding="utf-8")
+    assert "_deepseek_model_identity_matches(executed_model, provider_reported_model)" in s
+    assert "if seat_key == \"deepseek\" and provider_reported_model != executed_model:" not in s

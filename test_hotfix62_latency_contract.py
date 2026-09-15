@@ -3,7 +3,7 @@ from unittest.mock import patch
 import providers
 
 
-def test_every_builtin_cascade_attempt_uses_exact_two_second_budget():
+def test_builtin_cascade_attempts_have_no_artificial_timeout():
     seats = [s for s in providers.get_seats() if s.key != "deepseek"]
     seen = []
 
@@ -19,12 +19,12 @@ def test_every_builtin_cascade_attempt_uses_exact_two_second_budget():
             assert result["status"] == "SUCCESS", (seat.key, result)
 
     assert seen
-    assert all(value == 2.0 for value in seen)
+    assert all(value is None for value in seen)
 
 
-def test_hidden_http_retries_cannot_extend_attempt_budget():
+def test_hidden_http_retries_remain_disabled():
     assert providers.GEMINI_RETRIES == 0
-    assert providers.RETRIES == 1  # low-level compatibility only; adapters pass retries=0
-    assert providers.CASCADE_MODEL_TIMEOUT_SECONDS == 2.0
-    assert providers.REQUEST_TIMEOUT == 2
-    assert providers.PROVIDER_SEAT_BUDGET_SECONDS == 2
+    assert providers.RETRIES == 1  # compatibility constant; adapters pass retries=0
+    assert providers.CASCADE_MODEL_TIMEOUT_SECONDS is None
+    assert providers.REQUEST_TIMEOUT is None
+    assert providers.PROVIDER_SEAT_BUDGET_SECONDS is None

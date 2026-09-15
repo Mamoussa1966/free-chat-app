@@ -133,6 +133,25 @@ def test_deepseek_500_is_api_error_and_can_advance():
     assert result["status"] == "SUCCESS"
     assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
 
+def test_deepseek_explicit_api_error_advances_to_next_free_candidate():
+    """Regression: a normalized API_ERROR on candidate #1 must not stop the cascade."""
+    failures = [
+        providers.ProviderError("temporary DeepSeek API failure", 503, "API_ERROR"),
+    ]
+    responses = [
+        {"text": "DEEPSEEK_OK", "provider_reported_model": "deepseek-v4-pro"},
+    ]
+    with patch("providers.call_official", side_effect=failures + responses) as call:
+        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [],
+                           ("deepseek-v4-flash", "deepseek-v4-pro"))
+    assert call.call_count == 2
+    assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["retryable"] is True
+
+
 def test_deepseek_is_not_given_an_implicit_free_model_catalog():
     source = Path(providers.__file__).read_text(encoding="utf-8")
     assert "DEEPSEEK_FREE_MODELS" in source
@@ -373,3 +392,78 @@ def test_deepseek_versioned_provider_identity_alias_completes_successfully():
     assert result["status"] == "SUCCESS"
     assert result["executed_model"] == "deepseek-v4-flash"
     assert result["provider_reported_model"] == "deepseek-v4-flash-0731"
+
+
+def test_deepseek_api_error_explicitly_advances_to_second_free_candidate():
+    """Regression: DeepSeek candidate #1 API_ERROR must advance to candidate #2."""
+    failures = [providers.ProviderError("DeepSeek temporary API failure", 500, "API_ERROR")]
+    responses = [{"text": "DEEPSEEK_V4_PRO_OK", "provider_reported_model": "deepseek-v4-pro"}]
+    with patch("providers.call_official", side_effect=failures + responses) as call:
+        result = call_seat(
+            DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [],
+            ("deepseek-v4-flash", "deepseek-v4-pro"),
+            request_id="hotfix72-deepseek-api-error",
+        )
+    assert call.call_count == 2
+    assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["provider_reported_model"] == "deepseek-v4-pro"
+    assert result["attempt_summaries"][0]["classification"] == "API_ERROR"
+    assert result["attempt_summaries"][0]["retryable"] is True
+
+
+def test_deepseek_http_api_error_advances_via_actual_post_boundary():
+    first = _response(500, '{"error":{"message":"temporary provider failure"}}')
+    second = _response(200, '{"id":"r73","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]}', {"id":"r73","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]})
+    with patch("providers.requests.post", side_effect=[first, second]) as post:
+        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [],
+                           ("deepseek-v4-flash", "deepseek-v4-pro"),
+                           request_id="hotfix73-deepseek-http-api-error")
+    assert post.call_count == 2
+    assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["provider_reported_model"] == "deepseek-v4-pro"
+    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["retryable"] is True
+
+
+def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
+    """HOTFIX76: a 200 error envelope is an API_ERROR, not an identity mismatch."""
+    first = _response(200, '{"error":{"message":"temporary DeepSeek API failure"}}', {"error":{"message":"temporary DeepSeek API failure"}})
+    second = _response(200, '{"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]}', {"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]})
+    with patch("providers.requests.post", side_effect=[first, second]) as post:
+        result = call_seat(DEEPSEEK, "Hello", "", 1, False, "TEST_KEY", [],
+                           ("deepseek-v4-flash", "deepseek-v4-pro"),
+                           request_id="hotfix74-deepseek-200-error")
+    assert post.call_count == 2
+    assert result["status"] == "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["error_class"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["retryable"] is True
+
+
+
+def test_deepseek_unknown_identity_remains_fail_closed():
+    """HOTFIX76: documented aliases pass, unknown provider identities do not."""
+    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "deepseek-flash") is True
+    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "some-random-model") is False
+
+
+def test_deepseek_current_flash_identity_alias_is_accepted():
+    """HOTFIX76: official current /models identity deepseek-flash is accepted."""
+    response = _response(
+        200,
+        '{"id":"r74a","model":"deepseek-flash","choices":[{"message":{"content":"FLASH_OK"}}]}',
+        {"id":"r74a","model":"deepseek-flash","choices":[{"message":{"content":"FLASH_OK"}}]},
+    )
+    with patch("providers.requests.post", return_value=response) as post:
+        result = call_seat(DEEPSEEK, "identity", "", 1, False, "TEST_KEY", [],
+                           ("deepseek-v4-flash",), request_id="hotfix74-deepseek-alias")
+    assert post.call_count == 1
+    assert result["status"] == "SUCCESS"
+    assert result["executed_model"] == "deepseek-v4-flash"
+    assert result["provider_reported_model"] == "deepseek-flash"
