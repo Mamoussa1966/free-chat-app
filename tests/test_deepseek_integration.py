@@ -430,7 +430,7 @@ def test_deepseek_http_api_error_advances_via_actual_post_boundary():
 
 
 def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
-    """HOTFIX76: a 200 error envelope is an API_ERROR, not an identity mismatch."""
+    """HOTFIX77: a 200 error envelope is an API_ERROR, not an identity mismatch."""
     first = _response(200, '{"error":{"message":"temporary DeepSeek API failure"}}', {"error":{"message":"temporary DeepSeek API failure"}})
     second = _response(200, '{"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]}', {"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]})
     with patch("providers.requests.post", side_effect=[first, second]) as post:
@@ -447,7 +447,7 @@ def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
 
 
 def test_deepseek_current_flash_identity_alias_is_accepted():
-    """HOTFIX76: official current /models identity deepseek-flash is accepted."""
+    """HOTFIX77: official current /models identity deepseek-flash is accepted."""
     response = _response(
         200,
         '{"id":"r74a","model":"deepseek-flash","choices":[{"message":{"content":"FLASH_OK"}}]}',
@@ -462,14 +462,33 @@ def test_deepseek_current_flash_identity_alias_is_accepted():
     assert result["provider_reported_model"] == "deepseek-flash"
 
 
-def test_deepseek_v41_flash_identity_alias_is_accepted_for_legacy_flash_request():
-    """HOTFIX76: legacy v4-flash requests may report the current V4.1-Flash identity."""
-    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "deepseek-v4.1-flash")
-    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "DeepSeek-V4.1-Flash")
+def test_deepseek_current_pro_routing_to_flash_identity_is_accepted():
+    """HOTFIX77: official post-2026-09-14 v4-pro routing to deepseek-flash is valid."""
+    response = _response(
+        200,
+        '{"id":"r77","model":"deepseek-flash","choices":[{"message":{"content":"PRO_ROUTED_TO_FLASH_OK"}}]}',
+        {"id":"r77","model":"deepseek-flash","choices":[{"message":{"content":"PRO_ROUTED_TO_FLASH_OK"}}]},
+    )
+    with patch("providers.requests.post", return_value=response) as post:
+        result = call_seat(DEEPSEEK, "identity", "", 1, False, "TEST_KEY", [],
+                           ("deepseek-v4-pro",), request_id="hotfix77-pro-routing")
+    assert post.call_count == 1
+    assert result["status"] == "SUCCESS"
+    assert result["executed_model"] == "deepseek-v4-pro"
+    assert result["provider_reported_model"] == "deepseek-flash"
 
 
-def test_deepseek_v4_pro_identity_accepts_documented_v41_flash_routing():
-    """HOTFIX76: after the documented routing change, v4-pro may be served by V4.1-Flash."""
-    assert providers._deepseek_model_identity_matches("deepseek-v4-pro", "deepseek-flash")
-    assert providers._deepseek_model_identity_matches("deepseek-v4-pro", "deepseek-v4.1-flash")
-    assert not providers._deepseek_model_identity_matches("deepseek-v4-pro", "deepseek-v4.2-pro")
+def test_deepseek_provider_identity_mismatch_remains_fail_closed():
+    """HOTFIX77: unrelated provider identities remain terminal and fail closed."""
+    response = _response(
+        200,
+        '{"id":"r77m","model":"some-other-model","choices":[{"message":{"content":"BAD"}}]}',
+        {"id":"r77m","model":"some-other-model","choices":[{"message":{"content":"BAD"}}]},
+    )
+    with patch("providers.requests.post", return_value=response) as post:
+        result = call_seat(DEEPSEEK, "identity", "", 1, False, "TEST_KEY", [],
+                           ("deepseek-v4-flash", "deepseek-v4-pro"), request_id="hotfix77-mismatch")
+    assert post.call_count == 1
+    assert result["status"] != "SUCCESS"
+    assert result["attempted_models"] == ["deepseek-v4-flash"]
+    assert result["attempt_diagnostics"][0]["error_class"] == "execution_identity_mismatch"
