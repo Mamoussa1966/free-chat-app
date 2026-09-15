@@ -430,7 +430,7 @@ def test_deepseek_http_api_error_advances_via_actual_post_boundary():
 
 
 def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
-    """HOTFIX75: a 200 error envelope is an API_ERROR, not an identity mismatch."""
+    """HOTFIX76: a 200 error envelope is an API_ERROR, not an identity mismatch."""
     first = _response(200, '{"error":{"message":"temporary DeepSeek API failure"}}', {"error":{"message":"temporary DeepSeek API failure"}})
     second = _response(200, '{"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]}', {"id":"r74","model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_V4_PRO_OK"}}]})
     with patch("providers.requests.post", side_effect=[first, second]) as post:
@@ -446,8 +446,15 @@ def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
     assert result["attempt_diagnostics"][0]["retryable"] is True
 
 
+
+def test_deepseek_unknown_identity_remains_fail_closed():
+    """HOTFIX76: documented aliases pass, unknown provider identities do not."""
+    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "deepseek-flash") is True
+    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "some-random-model") is False
+
+
 def test_deepseek_current_flash_identity_alias_is_accepted():
-    """HOTFIX75: official current /models identity deepseek-flash is accepted."""
+    """HOTFIX76: official current /models identity deepseek-flash is accepted."""
     response = _response(
         200,
         '{"id":"r74a","model":"deepseek-flash","choices":[{"message":{"content":"FLASH_OK"}}]}',
