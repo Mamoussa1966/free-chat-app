@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX77-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX78-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -826,18 +826,24 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
         return True
     aliases = {
         "deepseek-v4-flash": {
-            # Current official /models naming is deepseek-flash, while the
-            # Chat Completions contract still accepts deepseek-v4-flash.
-            # Treat the documented stable alias as the same provider identity.
+            # DeepSeek retired the legacy V4 Flash implementation on 2026-09-10.
+            # The legacy request ID is still accepted and is routed to V4.1 Flash.
+            # The provider may attest the current canonical ID or deployed version.
             "deepseek-flash",
+            "deepseek-v4.1-flash",
+            "deepseek-v4-1-flash",
             "deepseek-v4-flash-0731",
             "deepseek-v4-flash-preview",
         },
         "deepseek-v4-pro": {
+            # From 2026-09-14 Beijing time, DeepSeek routes V4 Pro requests to
+            # V4.1 Flash until V4.1 Pro is released. Therefore a V4 Pro request
+            # may legitimately attest the Flash canonical/deployed identity.
+            "deepseek-flash",
+            "deepseek-v4.1-flash",
+            "deepseek-v4-1-flash",
             "deepseek-v4-pro-0813",
             "deepseek-v4-pro-preview",
-            # Since 2026-09-14, DeepSeek officially routes v4-pro requests to V4.1 Flash.
-            "deepseek-flash",
         },
         "deepseek-v4-flash-vision-exp": {
             "deepseek-v4-flash-vision-exp",
