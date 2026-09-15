@@ -1,6 +1,12 @@
 # AI Council — Free Cascade
+## Hotfix 82 Final
+- Centralized trusted runtime Seat Identity for every API seat, including dynamic seats through room 20.
+- Separates authoritative runtime identity from untrusted shared conversation context.
+- Each request carries room seat, provider identity, provider key, API mode, agent type, and executed model metadata.
+- Preserves Free Cascade #1→#10, no Local Engine, no paid fallback, and no implicit model selection.
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX81-FINAL.
+
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX82-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
