@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX72-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX73-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1049,12 +1049,21 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     def _should_continue_cascade(exc: ProviderError, classification: str, index: int) -> bool:
         if index >= len(candidates) - 1:
             return False
+
+        # Preserve fail-closed execution-identity attestation. A successful HTTP
+        # response that does not attest the requested DeepSeek model is NOT an
+        # ordinary API failure and must never be silently advanced.
+        if exc.error_class == "execution_identity_mismatch":
+            return False
         if exc.error_class in terminal or classification == "AUTHENTICATION_ERROR":
             return False
-        # Explicit provider/API failures are non-terminal, including DeepSeek.
-        # Do not let a legacy internal label accidentally stop the cascade when
-        # its canonical public classification is API_ERROR.
-        if classification == "API_ERROR":
+
+        # DeepSeek HTTP/API failures are retryable at the cascade level. The
+        # transport layer supplies the concrete HTTP status/error class, while
+        # the public taxonomy intentionally collapses those failures to
+        # API_ERROR. This explicit boundary prevents an internal classification
+        # label from accidentally becoming terminal.
+        if seat.key == "deepseek" and classification == "API_ERROR":
             return True
         return True
 
