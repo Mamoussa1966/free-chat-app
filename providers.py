@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX71-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX72-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1038,7 +1038,26 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
 
     last_error: Optional[ProviderError] = None
     attempt_diagnostics: list[dict] = []
+    # Only these conditions are terminal. A provider/API failure must always
+    # advance to the next explicitly configured Free candidate. DeepSeek is
+    # intentionally included here to make the API_ERROR -> next-model contract
+    # explicit at the cascade boundary. Execution identity mismatches remain
+    # terminal because they indicate that the provider did not execute the
+    # requested model identity.
     terminal = {"not_configured", "configuration", "deadline_exceeded", "execution_identity_mismatch"}
+
+    def _should_continue_cascade(exc: ProviderError, classification: str, index: int) -> bool:
+        if index >= len(candidates) - 1:
+            return False
+        if exc.error_class in terminal or classification == "AUTHENTICATION_ERROR":
+            return False
+        # Explicit provider/API failures are non-terminal, including DeepSeek.
+        # Do not let a legacy internal label accidentally stop the cascade when
+        # its canonical public classification is API_ERROR.
+        if classification == "API_ERROR":
+            return True
+        return True
+
     for index, model in enumerate(candidates):
         if seat_deadline is not None and (_remaining(seat_deadline) or 0) <= 0:
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
@@ -1093,12 +1112,12 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification": classification,
                 "classification_label": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
-                "retryable": exc.error_class not in terminal and classification != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
+                "retryable": _should_continue_cascade(exc, classification, index),
                 **({"latency": round(time.perf_counter() - attempt_started, 3), "timeout_seconds": effective_timeout} if seat.key == "gemini" else {}),
                 # UI-only timestamp; raw provider error remains runtime-only.
                 "_display_created_at": time.time(),
             })
-            if exc.error_class in terminal or classification == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
+            if not _should_continue_cascade(exc, classification, index):
                 break
         except Exception as exc:
             # Provider adapters must fail closed into the stable taxonomy rather

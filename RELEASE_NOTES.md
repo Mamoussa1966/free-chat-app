@@ -1,6 +1,16 @@
+# HOTFIX72-FINAL — DeepSeek API_ERROR cascade continuation
+
+- Built directly from HOTFIX72.
+- Surgical change: an explicit/canonical `API_ERROR` is non-terminal and advances to the next explicitly configured Free model.
+- DeepSeek cascade is explicitly covered: `deepseek-v4-flash` → `deepseek-v4-pro` when candidate #1 returns `API_ERROR`.
+- `execution_identity_mismatch` remains terminal; no weakening of provider-model identity attestation.
+- No Local Engine, no paid fallback, no automatic model selection.
+- No Secrets or model catalogs changed.
+- All other providers and their configured model order are preserved.
+
 # Current release — Timeout-only finalization
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX71-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX72-FINAL`
 
 ## Scope
 
@@ -27,7 +37,7 @@ There is now no application-imposed 2-second cutoff. Actual response time remain
 5. No provider model catalog, seat numbering, credentials, cascade order, or architecture changed.
 
 
-# HOTFIX71 — DeepSeek cascade progression regression hardening
+# HOTFIX72 — DeepSeek cascade progression regression hardening
 
 - Built directly from the immediately preceding final release; no unrelated provider or UI behavior changed.
 - Preserves unlimited provider/cascade latency: no 2-second or 45-second artificial timeout restored.
