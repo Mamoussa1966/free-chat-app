@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX73-FINAL.
+V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX74-FINAL.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 

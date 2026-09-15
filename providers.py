@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX73-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX74-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -826,6 +826,10 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
         return True
     aliases = {
         "deepseek-v4-flash": {
+            # Current official /models naming is deepseek-flash, while the
+            # Chat Completions contract still accepts deepseek-v4-flash.
+            # Treat the documented stable alias as the same provider identity.
+            "deepseek-flash",
             "deepseek-v4-flash-0731",
             "deepseek-v4-flash-preview",
         },
@@ -933,6 +937,15 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
             "thinking": {"type": DEEPSEEK_THINKING_MODE},
         }
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, payload, timeout, deadline, 0)
+        # DeepSeek normally reports HTTP failures as non-2xx responses, which
+        # _post() already classifies as API_ERROR and call_seat advances. Some
+        # OpenAI-compatible gateways can instead return an error object inside
+        # an HTTP-200 envelope. Normalize that case as a real API failure too;
+        # do NOT let it fall through to model-identity attestation.
+        if isinstance(data, dict) and isinstance(data.get("error"), dict):
+            err = data.get("error") or {}
+            message = str(err.get("message") or "DeepSeek API error").strip()
+            raise ProviderError(message, error_class="API_ERROR")
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
         if not _deepseek_model_identity_matches(model, provider_reported_model):
             raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
