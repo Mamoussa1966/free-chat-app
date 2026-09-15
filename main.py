@@ -13,7 +13,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, _deepseek_model_identity_matches, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -334,7 +334,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
                 provider_reported_model = str(result.get("provider_reported_model") or "").strip()
-                if seat_key == "deepseek" and provider_reported_model != executed_model:
+                if seat_key == "deepseek" and not _deepseek_model_identity_matches(executed_model, provider_reported_model):
                     raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
                 chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
         keys = set(chat.get("result_keys", []))
