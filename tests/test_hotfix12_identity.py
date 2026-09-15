@@ -21,3 +21,9 @@ def test_duplicate_request_round_seat_is_persisted_once():
     assert len(out)==1
     assert len(chat['messages'])==1
     assert len(chat['result_keys'])==1
+
+
+def test_deepseek_main_history_invariant_uses_provider_identity_aliases():
+    s=Path('main.py').read_text(encoding='utf-8')
+    assert '_deepseek_model_identity_matches' in s
+    assert 'seat_key == "deepseek" and not _deepseek_model_identity_matches' in s
