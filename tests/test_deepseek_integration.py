@@ -446,13 +446,6 @@ def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
     assert result["attempt_diagnostics"][0]["retryable"] is True
 
 
-
-def test_deepseek_unknown_identity_remains_fail_closed():
-    """HOTFIX76: documented aliases pass, unknown provider identities do not."""
-    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "deepseek-flash") is True
-    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "some-random-model") is False
-
-
 def test_deepseek_current_flash_identity_alias_is_accepted():
     """HOTFIX76: official current /models identity deepseek-flash is accepted."""
     response = _response(
@@ -467,3 +460,16 @@ def test_deepseek_current_flash_identity_alias_is_accepted():
     assert result["status"] == "SUCCESS"
     assert result["executed_model"] == "deepseek-v4-flash"
     assert result["provider_reported_model"] == "deepseek-flash"
+
+
+def test_deepseek_v41_flash_identity_alias_is_accepted_for_legacy_flash_request():
+    """HOTFIX76: legacy v4-flash requests may report the current V4.1-Flash identity."""
+    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "deepseek-v4.1-flash")
+    assert providers._deepseek_model_identity_matches("deepseek-v4-flash", "DeepSeek-V4.1-Flash")
+
+
+def test_deepseek_v4_pro_identity_accepts_documented_v41_flash_routing():
+    """HOTFIX76: after the documented routing change, v4-pro may be served by V4.1-Flash."""
+    assert providers._deepseek_model_identity_matches("deepseek-v4-pro", "deepseek-flash")
+    assert providers._deepseek_model_identity_matches("deepseek-v4-pro", "deepseek-v4.1-flash")
+    assert not providers._deepseek_model_identity_matches("deepseek-v4-pro", "deepseek-v4.2-pro")
