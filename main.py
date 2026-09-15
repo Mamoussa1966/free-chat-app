@@ -518,7 +518,11 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                 if not provider_reported_model:
                     st.error("⚠️ Provider identity missing: لا يمكن عرض نجاح رسمي بدون هوية النموذج من المزود.")
                     continue
-                if provider_reported_model != executed_model:
+                if seat_key == "deepseek":
+                    identity_ok = _deepseek_model_identity_matches(executed_model, provider_reported_model)
+                else:
+                    identity_ok = provider_reported_model == executed_model
+                if not identity_ok:
                     st.error("⚠️ Provider identity mismatch: هوية النموذج التي أعادها المزود لا تطابق النموذج المنفذ.")
                     continue
             request_id = str(message.get("request_id") or "").strip()
