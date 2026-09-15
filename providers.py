@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX70-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX71-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -43,7 +43,7 @@ CASCADE_MODEL_TIMEOUT_SECONDS = None
 # official request regardless of latency. This removes the previous 2-second
 # transport and seat-budget restriction without changing model selection.
 PROVIDER_SEAT_BUDGET_SECONDS = None
-MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 512, 128, 4096)
+MAX_OUTPUT_TOKENS = _bounded_int_env("MAX_OUTPUT_TOKENS", 1200, 128, 4096)
 
 # DeepSeek V4 defaults to thinking mode when omitted. The council is a fast
 # conversational room, so the dedicated DeepSeek adapter explicitly disables

@@ -1,6 +1,6 @@
 # Current release — Timeout-only finalization
 
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX70-FINAL`
+Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX71-FINAL`
 
 ## Scope
 
@@ -25,3 +25,12 @@ There is now no application-imposed 2-second cutoff. Actual response time remain
 3. Suppressed failed-attempt timeout expanders for pure latency cutoffs.
 4. Added regression tests proving `TIMEOUT` does not leak into public result rendering.
 5. No provider model catalog, seat numbering, credentials, cascade order, or architecture changed.
+
+
+# HOTFIX71 — DeepSeek cascade progression regression hardening
+
+- Built directly from the immediately preceding final release; no unrelated provider or UI behavior changed.
+- Preserves unlimited provider/cascade latency: no 2-second or 45-second artificial timeout restored.
+- Restores `MAX_OUTPUT_TOKENS` default to 1200, matching the previously verified 1200-token behavior.
+- Adds a direct regression proving `ProviderError(error_class="API_ERROR")` on DeepSeek candidate #1 advances to candidate #2.
+- Preserves terminal identity-mismatch behavior; no automatic model selection, Local Engine, or paid fallback.
