@@ -38,4 +38,3 @@ class AttachmentTests(unittest.TestCase):
         with self.assertRaises(ValueError): normalize_uploaded_files([FakeUpload("x.png", b"not-a-png", "image/png")])
 
 if __name__ == "__main__": unittest.main()
-

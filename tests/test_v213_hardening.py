@@ -9,4 +9,3 @@ class V213CompatibilityTests(unittest.TestCase):
         self.assertEqual(_retry_delay(response, 0), 5.0)
 
 if __name__ == "__main__": unittest.main()
-

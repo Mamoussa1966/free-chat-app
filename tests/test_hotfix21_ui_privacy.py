@@ -36,4 +36,3 @@ def test_persisted_results_strip_raw_provider_diagnostics():
     assert public["attempt_summaries"][0]["classification"] == "QUOTA_EXCEEDED"
     assert "DO_NOT_PERSIST" not in str(public)
     assert "example.invalid" not in str(public)
-

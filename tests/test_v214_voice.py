@@ -14,4 +14,3 @@ class VoiceTests(unittest.TestCase):
         self.assertIn("transcriber_model_not_configured", result["error"])
 
 if __name__ == "__main__": unittest.main()
-

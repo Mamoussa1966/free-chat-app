@@ -22,4 +22,3 @@ class HardeningTests(unittest.TestCase):
             self.assertTrue(Path(path).is_file(), path)
 
 if __name__ == "__main__": unittest.main()
-

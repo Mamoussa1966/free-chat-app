@@ -8,4 +8,3 @@ class EntryPointTests(unittest.TestCase):
         self.assertTrue(callable(run_app))
 
 if __name__ == "__main__": unittest.main()
-

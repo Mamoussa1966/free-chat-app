@@ -48,4 +48,3 @@ def test_attempted_models_equal_actual_api_order():
 def test_executed_model_is_last_actual_attempt():
     result, executed = run(["m1", "m2", "m3"], {"m1", "m2"})
     assert result["executed_model"] == executed[-1]
-

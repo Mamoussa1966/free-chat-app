@@ -18,4 +18,3 @@ class VoiceResilienceTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[2]["contents"][0]["parts"][1]["inlineData"]["mimeType"], "audio/webm")
 
 if __name__ == "__main__": unittest.main()
-

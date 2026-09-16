@@ -161,23 +161,11 @@ def test_claude_failure_result_exposes_only_compact_attempt_summaries_to_live_ui
         result = call_seat(CLAUDE, "Hello", "", 1, False, "fake-key", [], ("claude-opus-5", "claude-sonnet-5"))
     assert post.call_count == 2
     assert result["attempted_models"] == ["claude-opus-5", "claude-sonnet-5"]
-    assert result["attempt_summaries"] == [
-        {
-            "attempt": 1,
-            "model": "claude-opus-5",
-            "status_code": 404,
-            "classification": "MODEL_UNAVAILABLE",
-            "retryable": True,
-            "created_at_epoch": result["attempt_summaries"][0]["created_at_epoch"],
-        },
-        {
-            "attempt": 2,
-            "model": "claude-sonnet-5",
-            "status_code": 401,
-            "classification": "AUTHENTICATION_ERROR",
-            "retryable": False,
-            "created_at_epoch": result["attempt_summaries"][1]["created_at_epoch"],
-        },
+    assert len(result["attempt_summaries"]) == 2
+    assert [{k: row[k] for k in ("attempt","model","status_code","classification","retryable")} for row in result["attempt_summaries"]] == [
+        {"attempt": 1, "model": "claude-opus-5", "status_code": 404, "classification": "MODEL_UNAVAILABLE", "retryable": True},
+        {"attempt": 2, "model": "claude-sonnet-5", "status_code": 401, "classification": "AUTHENTICATION_ERROR", "retryable": False},
     ]
+    assert all("request_id" in row and "round" in row and "provider" in row and "final_result" in row for row in result["attempt_summaries"])
     assert all("error" not in item for item in result["attempt_summaries"])
     assert "DO_NOT_RENDER" not in repr(result["attempt_summaries"])

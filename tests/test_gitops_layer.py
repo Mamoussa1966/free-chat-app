@@ -27,4 +27,3 @@ class GitOpsTests(unittest.TestCase):
             self.assertTrue(result["pass"])
 
 if __name__ == "__main__": unittest.main()
-

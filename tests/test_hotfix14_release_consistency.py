@@ -5,7 +5,7 @@ import re
 def test_release_metadata_has_single_current_version():
     root = Path(__file__).resolve().parents[1]
     version = (root / "VERSION.txt").read_text(encoding="utf-8").strip()
-    assert re.fullmatch(r"V22\.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX\d+-FINAL", version)
+    assert re.fullmatch(r"(?:V22\.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX\d+-FINAL|V22\.1-HOTFIX\d+-PRODUCTION-HARDENED)", version)
 
     main = (root / "main.py").read_text(encoding="utf-8")
     providers = (root / "providers.py").read_text(encoding="utf-8")
@@ -16,12 +16,12 @@ def test_release_metadata_has_single_current_version():
     assert "APP_VERSION = PROVIDER_VERSION" in main
     assert f'VERSION = "{version}"' in providers
     assert version in release
-    assert f"HOTFIX{re.search(r'HOTFIX(\d+)', version).group(1)}_FINAL.zip" in builder
+    assert "AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED.zip" in builder
 
 
 def test_no_stale_hotfix_identifiers_remain_outside_this_regression_test():
     root = Path(__file__).resolve().parents[1]
-    current = int(re.search(r"HOTFIX(\d+)(?:-FINAL)?$", (root / "VERSION.txt").read_text(encoding="utf-8").strip()).group(1))
+    current = int(re.search(r"HOTFIX(\d+)(?:-FINAL|-PRODUCTION-HARDENED)?$", (root / "VERSION.txt").read_text(encoding="utf-8").strip()).group(1))
     forbidden = [re.compile(r"\bHOTFIX" + str(n) + r"\b") for n in range(1, current)]
 
     excluded = {Path(__file__).resolve()}

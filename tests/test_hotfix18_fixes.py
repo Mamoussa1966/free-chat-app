@@ -13,4 +13,3 @@ def test_legacy_authentication_label_is_terminal_by_public_classification():
 def test_resource_exhausted_with_explicit_retry_is_rate_limited():
     body = '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Too many requests. Please retry in 24 seconds."}}'
     assert providers._canonical_error_classification(providers._classify(429, body)) == "RATE_LIMITED"
-
