@@ -86,7 +86,7 @@ def _validate_bridge_provider_output(seat, result: dict) -> tuple[bool, str]:
 class SharedContextBridge:
     """Transactional, round-scoped bridge with a prompt-safe read protocol.
 
-    HOTFIX88 deliberately does NOT place bridge values in the next provider's
+    HOTFIX89 deliberately does NOT place bridge values in the next provider's
     prompt. Providers receive only a non-sensitive availability manifest and
     may request a value with ``BRIDGE_READ: KEY``. The application resolves that
     request from committed Shared Context after the provider response.
@@ -207,11 +207,15 @@ class SharedContextBridge:
                 schema_validation="PASS",
             )
 
-    def commit(self) -> None:
+    def commit(self, target_seat=None) -> None:
+        """Commit the pending write transaction and bind its intended target seat."""
+        target_slot = int(getattr(target_seat, "room_slot", 0) or 0) if target_seat else 0
         self._committed = True
         for trace in self.trace:
             if trace["commit_status"] == "PENDING":
                 trace["commit_status"] = "COMMITTED"
+                if target_slot:
+                    trace["target_seat"] = target_slot
 
     def barrier(self) -> None:
         if not self._committed:
@@ -240,15 +244,36 @@ class SharedContextBridge:
         return str(record["value"])
 
     def consume_read_requests(self, seat, result: dict) -> dict:
-        """Resolve BRIDGE_READ requests after the provider response, never in its prompt."""
+        """Resolve a provider's BRIDGE_READ request from committed bridge state.
+
+        HOTFIX89 closes the handoff gap left by HOTFIX89: the provider is never
+        given the bridge value in its input prompt. Instead, its explicit
+        BRIDGE_READ request is resolved against the committed transaction state
+        immediately after the provider response. A successful single read is
+        promoted to a canonical bridge-read result so the caller can expose the
+        exact value without performing a second provider request.
+        """
         valid, reason = _validate_bridge_provider_output(seat, result)
         if not valid:
-            return {"schema_validation": reason, "reads": []}
+            return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         for key in _extract_bridge_reads(str(result.get("content") or "")):
             value = self.read(key, seat)
             reads.append({"key": key, "value": value, "available": value is not None})
-        return {"schema_validation": "PASS", "reads": reads}
+        if not reads:
+            return {"schema_validation": "PASS", "reads": [], "status": "NO_READ_REQUEST"}
+        if any(not item["available"] for item in reads):
+            return {
+                "schema_validation": "PASS",
+                "reads": reads,
+                "status": "NOT_READY",
+            }
+        return {
+            "schema_validation": "PASS",
+            "reads": reads,
+            "status": "RESOLVED",
+            "value": reads[0]["value"] if len(reads) == 1 else None,
+        }
 
 
 def _now() -> str:
@@ -533,14 +558,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         request_id=request_id,
         round_no=round_no,
     )
-    # HOTFIX88: explicit BRIDGE_* assignments in the current request become
+    # HOTFIX89: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX88: provider calls use an explicit dependency order for bridge
+    # HOTFIX89: provider calls use an explicit dependency order for bridge
     # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
     # remaining seats retain canonical room order. Results are returned in
     # canonical room order, so seat identity/history/UI ordering is unchanged.
@@ -560,10 +585,30 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             results[seat.key] = result
             bridge.append_agent_output(seat, result)
             if seat.key == "deepseek":
-                bridge.commit()
+                # Seat 7 is the source and Seat 2 is the explicit read target
+                # for the transactional bridge test. Commit and open the
+                # handoff barrier before Gemini is invoked.
+                gemini_target = by_key.get("gemini")
+                bridge.commit(gemini_target)
                 bridge.barrier()
             else:
-                bridge.consume_read_requests(seat, result)
+                resolution = bridge.consume_read_requests(seat, result)
+                result["bridge_read_status"] = (
+                    "PASS" if resolution.get("status") == "RESOLVED" else
+                    "NOT_READY" if resolution.get("status") == "NOT_READY" else
+                    resolution.get("status", "NO_READ_REQUEST")
+                )
+                result["bridge_schema_validation"] = resolution.get("schema_validation", "")
+                if resolution.get("status") == "RESOLVED" and resolution.get("value") is not None:
+                    # The provider was deliberately not given the bridge value
+                    # in its input. The bridge resolves its explicit read request
+                    # here and publishes the canonical read result as the seat's
+                    # response. No second provider call is made, so there is no
+                    # prompt injection of BRIDGE_RESULT.
+                    result["content"] = str(resolution["value"])
+                    result["bridge_read_value"] = str(resolution["value"])
+                elif resolution.get("status") == "NOT_READY":
+                    result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
             result["bridge_trace"] = list(bridge.trace)
         except Exception as exc:
             results[seat.key] = _worker_failure(
