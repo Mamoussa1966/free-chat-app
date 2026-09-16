@@ -16,8 +16,8 @@ def _result(seat, content, request_id="rid89", round_no=1):
 
 
 def test_hotfix89_version_contract():
-    assert providers.VERSION == "V22.1-HOTFIX89-PRODUCTION-HARDENED"
-    assert main.APP_VERSION == "V22.1-HOTFIX89-PRODUCTION-HARDENED"
+    assert providers.VERSION == "V22.1-HOTFIX90-PRODUCTION-HARDENED"
+    assert main.APP_VERSION == "V22.1-HOTFIX90-PRODUCTION-HARDENED"
 
 
 def test_hotfix89_read_is_available_only_after_commit_and_barrier():
@@ -25,7 +25,7 @@ def test_hotfix89_read_is_available_only_after_commit_and_barrier():
     ds = next(s for s in seats if s.key == "deepseek")
     gem = next(s for s in seats if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid89-ready", round_no=1)
-    generated = "HOTFIX89-BRIDGE-READ-7X9Q"
+    generated = "HOTFIX90-BRIDGE-READ-7X9Q"
     bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {generated}"))
     assert bridge.read("BRIDGE_RESULT", gem) is None
     bridge.commit(gem)

@@ -17,8 +17,8 @@ def _result(seat, content, request_id="rid88", round_no=1):
 
 def test_hotfix88_version_contract():
     import providers
-    assert providers.VERSION == "V22.1-HOTFIX89-PRODUCTION-HARDENED"
-    assert main.APP_VERSION == "V22.1-HOTFIX89-PRODUCTION-HARDENED"
+    assert providers.VERSION == "V22.1-HOTFIX90-PRODUCTION-HARDENED"
+    assert main.APP_VERSION == "V22.1-HOTFIX90-PRODUCTION-HARDENED"
 
 
 def test_hotfix88_transaction_trace_and_prompt_redaction():
