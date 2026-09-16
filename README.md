@@ -1,40 +1,18 @@
-# AI Council — V22.1-HOTFIX87-PRODUCTION-HARDENED
+# AI Council — Free Cascade
 
-`V22.1-HOTFIX87-PRODUCTION-HARDENED` is a hardened production release built from the only available project artifact (the prior prior_bridge_baseline codebase).
+V22.1-HOTFIX87-PRODUCTION-HARDENED
 
-## Contract preserved
-- Seat identity and provider identity remain authoritative and immutable.
-- Explicit `*_FREE_MODELS` only; Free Cascade remains #1 → #10 per provider.
-- Official API only. No Local Engine. No Paid fallback. No automatic model selection.
-- Streamlit Secrets retain priority over environment variables when non-empty.
-- Shared Context remains untrusted reference data and cannot redefine identity, credentials, or model selection.
+Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
-## HOTFIX87 reliability layer
-Every Free Cascade candidate emits a structured public-safe attempt record containing:
-- Provider
-- Attempt number
-- Model
-- HTTP status (exact when available; `2xx` on successful responses)
-- Error classification
-- Retryable
-- Execution latency
-- Request ID
-- Round
-- Final result
+HOTFIX87 adds a real round-scoped Shared Context Bridge. Each successful provider response is appended as untrusted reference data before the next provider call. Trusted seat/provider/executed-model identity remains authoritative and cannot be overridden by bridge content.
 
-Raw provider payloads, credentials, and secret values are never persisted into UI/history telemetry.
+DeepSeek is first in bridge execution order to allow a direct DeepSeek 7 → Gemini 2 bridge test within one round. The displayed result order remains the canonical room-seat order.
 
-## Provider isolation
-Each provider owns its own Free Cascade. Authentication, quota, model-unavailable, and other provider failures are classified at the provider boundary and cannot silently redefine another provider's identity or cascade. A failing provider is isolated from other provider seats.
 
-## Structured Shared Context Bridge
-Provider output is processed at the Bridge boundary:
+HOTFIX87 bridge correction: explicit `BRIDGE_* = value` declarations in the current request are promoted into the round-scoped bridge as untrusted test data before the first provider call. Provider outputs can also emit an explicit `BRIDGE_WRITE: BRIDGE_* = value` line, which is appended to the bridge with source-seat attribution. Trusted seat/provider/model identity remains separate and authoritative. Do not use BRIDGE_* declarations for API keys or real secrets.
 
-`Provider Output → Schema Validation → Bridge Record → Shared Context → Next Provider → Validation`
+HOTFIX87 production hardening: provider outputs are schema-validated before bridge promotion; each attempt exposes safe telemetry (attempt/model/HTTP status/classification/retryable/latency/request ID/round/final result); provider failures are isolated so later seats continue; raw payloads and credentials remain excluded from UI/history.
 
-Only explicit `BRIDGE_WRITE: BRIDGE_* = value` records are promoted to structured Bridge records. Bridge records are attributed to source seat/provider/executed model and remain untrusted data.
 
-## Architectural target
-`Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 → Bridge Read`
-
-The bridge execution order is deterministic for this source/consumer path, while UI/history output remains in canonical seat order.
+## HOTFIX87 — Structured Bridge Write
+The SharedContextBridge now normalizes explicit provider bridge writes into canonical attributed records. The intended proof path is Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 → Bridge Read. This change does not modify provider adapters or the seat/identity/Free Cascade contract.

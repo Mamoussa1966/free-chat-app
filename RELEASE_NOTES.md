@@ -1,28 +1,32 @@
 V22.1-HOTFIX87-PRODUCTION-HARDENED
 
-# HOTFIX87 — Production Hardened Provider Reliability + Bridge
+# HOTFIX87 — Structured Bridge Write Final
 
-## Phase 1 — Release identity
-- Unified VERSION.txt, providers.py, README.md, RELEASE_NOTES.md, build_release.py and release tests on `V22.1-HOTFIX87-PRODUCTION-HARDENED`.
-- Release artifact name is derived from the current version; stale prior_bridge_baseline/prior_release_baseline production metadata was removed.
+## Scope
+- Built directly from HOTFIX87.
+- Preserves seat identity, provider identity, executed-model identity, Free API Cascade, official-API-only behavior, and no-paid/no-local fallback contract.
+- Changes only the SharedContextBridge write protocol.
 
-## Phase 2 — Provider Reliability
-- Preserved the explicit Free Cascade #1 → #10 per provider.
-- Added structured, public-safe attempt telemetry: provider, attempt, model, HTTP status, classification, retryable, latency, request ID, round and final result.
-- Credentials and raw provider payloads remain outside UI/history telemetry.
+## Bridge protocol
+- Provider output may contain exactly: `BRIDGE_WRITE: BRIDGE_RESULT = value`.
+- The bridge parses the explicit record at the bridge boundary and stores a canonical `BRIDGE WRITE RECORD`.
+- The record is attributed to source seat, source provider, and executed model.
+- Later providers receive the record through Shared Context; provider adapters are not modified.
+- User-provided `BRIDGE_* = value` declarations remain separate from provider-authored bridge writes.
 
-## Phase 3 — Claude/Grok diagnostics
-- Existing provider adapters remain isolated.
-- Failures are classified at the boundary so authentication, quota, model-unavailable, timeout and API failures are distinguishable without exposing raw payloads.
+## Architectural proof target
+Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 → Bridge Read.
 
-## Phase 4 — Shared Context Bridge
-- Preserved the structured `BRIDGE_WRITE` protocol.
-- Bridge records are validated and attributed to source seat/provider/executed model.
-- Bridge data remains untrusted and cannot override identity or credentials.
+## Safety
+Bridge values remain untrusted reference data. They cannot redefine seat/provider/model identity or credentials.
 
-## Phase 5 — Provider isolation
-- A failure in one provider does not cancel the other configured provider seats.
-- Each provider keeps an independent explicit Free Cascade.
+## HOTFIX87 Production Hardening Patch — Bridge Diagnostics & Isolation
 
-## Architectural proof path
-`Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 → Bridge Read`
+- Provider attempt telemetry is now retained in a safe UI/history envelope with: attempt, model, HTTP status, classification, retryable, execution latency, request ID, round, and final result.
+- Claude and Grok failures surface their concrete HTTP status/classification when available instead of only `Official API failed`.
+- Provider output is schema-validated before it is promoted into Shared Context.
+- Invalid provider envelopes are rejected from the bridge and the originating provider is isolated; subsequent providers continue independently.
+- No API keys, raw request payloads, or raw provider error payloads are persisted to UI/history.
+- Free Cascade remains explicit `#1 → #10`; no Local Engine, no Paid fallback, and no implicit model selection.
+- Added regression tests for telemetry completeness, bridge schema rejection, and provider-failure isolation.
+- Release contains the complete HOTFIX87 project tree; no existing project files were removed.

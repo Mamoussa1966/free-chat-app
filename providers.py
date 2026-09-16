@@ -1021,6 +1021,30 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         safe_classification = "MODEL_UNAVAILABLE"
     elif status == "FAILED" and not safe_classification:
         safe_classification = "UNKNOWN"
+    summaries = [
+        {
+            "attempt": d.get("attempt"),
+            "model": str(d.get("model") or "").strip(),
+            "status_code": d.get("status_code"),
+            "classification": _canonical_error_classification(str(d.get("classification") or "UNKNOWN")),
+            "retryable": bool(d.get("retryable", False)),
+            "latency": round(float(d.get("latency", 0.0) or 0.0), 3),
+            "request_id": str(d.get("request_id") or request_id or ""),
+            "round": int(d.get("round", round_no) or round_no),
+            "final_result": str(d.get("final_result") or "FAILED").upper(),
+            "timeout_seconds": d.get("timeout_seconds"),
+            **({"created_at_epoch": float(d.get("_display_created_at"))} if d.get("_display_created_at") is not None else {}),
+        }
+        for d in (attempt_diagnostics or [])
+    ]
+    if status == "SUCCESS":
+        summaries.append({
+            "attempt": len(attempted), "model": normalized_model, "status_code": 200,
+            "classification": "SUCCESS", "retryable": False, "latency": round(time.perf_counter() - started, 3),
+            "request_id": str(request_id or ""), "round": int(round_no), "final_result": "SUCCESS",
+            "timeout_seconds": None,
+        })
+
     return {
         "seat": seat.key,
         "name": seat.name,
@@ -1038,23 +1062,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         "attempt_diagnostics": [dict(x) for x in (attempt_diagnostics or [])],
         # Public-safe summaries are available to the live diagnostic renderer.
         # Raw attempt diagnostics remain transient and are never required by UI/history.
-        "attempt_summaries": [
-            {
-                "attempt": d.get("attempt"),
-                "model": str(d.get("model") or "").strip(),
-                "status_code": d.get("status_code"),
-                "classification": _canonical_error_classification(str(d.get("classification") or "UNKNOWN")),
-                "retryable": bool(d.get("retryable", False)),
-                "request_id": str(d.get("request_id") or ""),
-                "round": int(d.get("round") or 0),
-                "provider": str(d.get("provider") or seat.key),
-                "final_result": str(d.get("final_result") or ("SUCCESS" if str(d.get("classification") or "").upper() == "SUCCESS" else "FAILED")),
-                **({"latency": float(d.get("latency"))} if d.get("latency") is not None else {}),
-                **({"timeout_seconds": float(d.get("timeout_seconds"))} if d.get("timeout_seconds") is not None else {}),
-                **({"created_at_epoch": float(d.get("_display_created_at"))} if d.get("_display_created_at") is not None else {}),
-            }
-            for d in (attempt_diagnostics or [])
-        ],
+        "attempt_summaries": summaries,
         "official_authenticated": authenticated,
         "request_id": str(request_id or ""),
         "round": int(round_no),
@@ -1148,22 +1156,8 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 if seat.key == "deepseek":
                     raise ProviderError("DeepSeek provider response identity is unavailable", error_class="execution_identity_mismatch")
                 provider_reported_model = executed_model
-            # HOTFIX87: every cascade candidate gets a structured, public-safe
-            # telemetry record. Successful HTTP responses are represented as
-            # 2xx rather than guessing a provider-specific exact status.
-            attempt_diagnostics.append({
-                "attempt": index + 1,
-                "model": executed_model,
-                "status_code": "2xx",
-                "classification": "SUCCESS",
-                "retryable": False,
-                "latency": attempt_latency,
-                "request_id": str(request_id or ""),
-                "round": int(round_no),
-                "provider": seat.key,
-                "final_result": "SUCCESS",
-                "_display_created_at": time.time(),
-            })
+            for trace in attempt_diagnostics:
+                trace["final_result"] = "FAILED"
             result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics, provider_reported_model=provider_reported_model)
             result["successful_attempt_latency"] = attempt_latency
             result["effective_timeout"] = effective_timeout
@@ -1174,14 +1168,14 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             # from ever labeling a response with a model that the provider did
             # not actually report.
             provider_reported = str(result.get("provider_reported_model") or "").strip()
-            if seat.key == "deepseek":
-                if not _deepseek_model_identity_matches(executed_model, provider_reported):
-                    raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
-            elif provider_reported and provider_reported.lower() != executed_model.lower():
-                raise ProviderError(
-                    f"provider reported model {provider_reported!r}, requested {executed_model!r}",
-                    error_class="execution_identity_mismatch",
-                )
+            if provider_reported:
+                identity_ok = (_deepseek_model_identity_matches(executed_model, provider_reported)
+                               if seat.key == "deepseek" else provider_reported.lower() == executed_model.lower())
+                if not identity_ok:
+                    raise ProviderError(
+                        f"provider reported model {provider_reported!r}, requested {executed_model!r}",
+                        error_class="execution_identity_mismatch",
+                    )
             if seat.key == "deepseek" and not _deepseek_model_identity_matches(
                     executed_model, result.get("provider_reported_model")
                 ):
@@ -1200,11 +1194,10 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification": classification,
                 "classification_label": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
-                "retryable": _should_continue_cascade(exc, classification, index),
                 "request_id": str(request_id or ""),
                 "round": int(round_no),
-                "provider": seat.key,
                 "final_result": "FAILED",
+                "retryable": _should_continue_cascade(exc, classification, index),
                 "latency": round(time.perf_counter() - attempt_started, 3),
                 "timeout_seconds": effective_timeout,
                 # UI-only timestamp; raw provider error remains runtime-only.
@@ -1232,8 +1225,12 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification": normalized,
                 "classification_label": _friendly_error_class(internal),
                 "error": _diagnostic(wrapped, credential),
+                "request_id": str(request_id or ""),
+                "round": int(round_no),
+                "final_result": "FAILED",
                 "retryable": normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
-                **({"latency": round(time.perf_counter() - attempt_started, 3), "timeout_seconds": effective_timeout} if seat.key == "gemini" else {}),
+                "latency": round(time.perf_counter() - attempt_started, 3),
+                "timeout_seconds": effective_timeout,
                 "_display_created_at": time.time(),
             })
             if normalized == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:

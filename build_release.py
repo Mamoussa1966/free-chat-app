@@ -15,8 +15,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parent
 # Release-name compatibility markers: the current FINAL zip naming convention
 # Release artifact compatibility markers:
-# AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED.zip
-# AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED.zip
+# AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED_FINAL.zip
+# AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED_FINAL.zip
 REQUIRED = [
     "app.py", "main.py", "providers.py", "attachment_utils.py", "gitops_layer.py",
     "requirements.txt", "VERSION.txt", "README.md", "RELEASE_NOTES.md", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json",
@@ -40,7 +40,7 @@ ALLOWED_BASELINE_CHANGES = {
     "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
     "tests/test_hotfix26_release_roundtrip.py",
     "tests/test_grok_integration.py", "tests/test_deepseek_integration.py", "tests/test_multiagent_architecture.py",
-    "tests/test_hotfix60_fixes.py", "tests/test_hotfix61_integration.py", "tests/test_hotfix14_cascade_invariants.py",
+    "tests/test_hotfix60_fixes.py", "tests/test_hotfix61_integration.py",
 }
 
 
@@ -236,7 +236,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()

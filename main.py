@@ -106,7 +106,7 @@ class SharedContextBridge:
             f"Executed model: {model}\n"
             f"Output:\n{content}"
         )
-        # prior_bridge_baseline: structured provider-to-provider write protocol. The
+        # HOTFIX87: structured provider-to-provider write protocol. The
         # protocol is parsed once at the bridge boundary, normalized into a
         # dedicated record, and then exposed to later providers as data.
         # It never changes identity, credentials, model selection, or policy.
@@ -274,12 +274,46 @@ def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, 
         "attempt_summaries": [{"attempt": 1, "model": models[0] if models else "", "status_code": None, "classification": "API_ERROR", "retryable": False}], "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
 
 
+def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> tuple[bool, str]:
+    """Validate the provider result envelope before it can enter Shared Context.
+
+    This is deliberately deterministic and transport-agnostic: identity, status,
+    request correlation, round, and content shape are checked before a provider
+    output is promoted to bridge data. No raw payload or credential is accepted.
+    """
+    if not isinstance(result, dict):
+        return False, "result_not_object"
+    if str(result.get("seat") or "") != str(seat.key):
+        return False, "seat_identity_mismatch"
+    if str(result.get("name") or "").strip() != str(seat.name).strip():
+        return False, "provider_identity_mismatch"
+    if str(result.get("request_id") or "") != str(request_id or ""):
+        return False, "request_id_mismatch"
+    try:
+        result_round = int(result.get("round"))
+    except (TypeError, ValueError):
+        return False, "round_missing_or_invalid"
+    if result_round != int(round_no):
+        return False, "round_mismatch"
+    status = str(result.get("status") or "").upper()
+    if status not in {"SUCCESS", "FAILED", "NO_FREE_MODEL_CONFIGURED", PUBLIC_NO_RESPONSE, "AUTHENTICATION_OK_NO_FREE_MODEL"}:
+        return False, "status_invalid"
+    if status == "SUCCESS":
+        content = result.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return False, "success_content_missing"
+        model = str(result.get("executed_model") or result.get("model") or "").strip()
+        if not model:
+            return False, "executed_model_missing"
+    return True, "OK"
+
+
 def _history_attempt_summaries(details: list[dict]) -> list[dict]:
-    """Persist only compact, non-sensitive classifications in visible History."""
+    """Persist compact, non-sensitive attempt telemetry in visible History/UI."""
     allowed = {
         "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
         "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
-        "TIMEOUT", "UNKNOWN",
+        "TIMEOUT", "UNKNOWN", "SUCCESS",
     }
     summaries: list[dict] = []
     for detail in details or []:
@@ -298,6 +332,10 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
             "status_code": detail.get("status_code"),
             "classification": classification,
             "retryable": bool(detail.get("retryable", False)),
+            "latency": round(float(detail.get("latency", 0.0) or 0.0), 3),
+            "request_id": str(detail.get("request_id") or ""),
+            "round": int(detail.get("round", 0) or 0),
+            "final_result": str(detail.get("final_result") or "FAILED").upper(),
         }
         # The timestamp is runtime metadata used only for the 60-second UI TTL.
         # Do not synthesize it here: real provider attempts stamp it at creation time.
@@ -341,7 +379,7 @@ def _attempt_display_remaining(detail: dict, now: float | None = None) -> float:
 
 
 def _render_temporary_attempt_diagnostic(detail: dict) -> None:
-    """Render a compact attempt error for 60 seconds, without exposing raw provider payloads."""
+    """Render safe, traceable attempt telemetry without raw payloads or secrets."""
     model = str(detail.get("model") or "").strip()
     classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
     if classification == "TIMEOUT":
@@ -351,8 +389,14 @@ def _render_temporary_attempt_diagnostic(detail: dict) -> None:
     remaining = _attempt_display_remaining(detail)
     if remaining <= 0:
         return
+    latency = detail.get("latency")
+    latency_text = f" · {float(latency):.3f}s" if latency is not None else ""
+    request_text = str(detail.get("request_id") or "")[:36]
+    round_text = f" · Round {detail.get('round', '?')}"
+    final_text = str(detail.get("final_result") or "FAILED").upper()
+    retryable_text = "retryable=true" if bool(detail.get("retryable", False)) else "retryable=false"
     safe_text = html.escape(
-        f"Attempt #{detail.get('attempt', '?')} · {model} · ❌ FAILED{code_text} · {classification}"
+        f"Attempt #{detail.get('attempt', '?')} · {model} · ❌ FAILED{code_text} · {classification}{latency_text} · {retryable_text}{round_text} · {final_text} · request {request_text}"
     )
     # Streamlit can render several attempt diagnostics in the same page.
     # Every timer therefore gets a unique DOM id; a shared id would cause
@@ -377,26 +421,23 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
     )
-    # prior_bridge_baseline: explicit BRIDGE_* assignments in the current request become
+    # HOTFIX87: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX87: bridge execution order is deterministic and independent from
-    # UI/history seat order. DeepSeek (seat 7) is placed before Gemini (seat 2)
-    # so the architecture test can exercise a real provider-authored write ->
-    # shared-context -> later-provider read path. All other seats retain their
-    # canonical room order after the bridge source/consumer pair. The returned
-    # result list remains canonical seat order; identities are never sourced from
-    # bridge data.
-    by_key = {s.key: s for s in seats}
+    # HOTFIX87: provider calls use an explicit dependency order for bridge
+    # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
+    # remaining seats retain canonical room order. Results are returned in
+    # canonical room order, so seat identity/history/UI ordering is unchanged.
+    by_key = {seat.key: seat for seat in seats}
     bridge_order = []
     for key in ("deepseek", "gemini"):
         if key in by_key:
-            bridge_order.append(by_key[key])
-    bridge_order.extend(s for s in seats if s.key not in {"deepseek", "gemini"})
+            bridge_order.append(by_key.pop(key))
+    bridge_order.extend(seat for seat in seats if seat.key in by_key)
     for seat in bridge_order:
         try:
             result = call_seat(
@@ -404,8 +445,26 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
                 deadline, request_id,
             )
+            valid, validation_reason = _validate_provider_output(result, seat, request_id, round_no)
+            if not valid:
+                # Provider output is never allowed into the bridge when its
+                # envelope is malformed. The originating provider is isolated
+                # and the remaining seats continue independently.
+                result = dict(result or {})
+                result["seat"] = seat.key
+                result["name"] = seat.name
+                result["label"] = seat.label
+                result["status"] = "FAILED"
+                result["classification"] = "API_ERROR"
+                result["error"] = f"class=provider_error; schema_validation_failed:{validation_reason}"
+                result["content"] = ""
+                result["bridge_validation"] = {"valid": False, "reason": validation_reason}
+            else:
+                result = dict(result)
+                result["bridge_validation"] = {"valid": True, "reason": "OK"}
             results[seat.key] = result
-            bridge.append_agent_output(seat, result)
+            if valid:
+                bridge.append_agent_output(seat, result)
         except Exception as exc:
             results[seat.key] = _worker_failure(
                 seat, exc, model_candidates, request_id, round_no
@@ -724,6 +783,9 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         attempt_latency = result.get("successful_attempt_latency")
         attempt_text = f" · attempt {attempt_latency}s" if attempt_latency is not None else ""
         st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result['latency']}s{attempt_text}")
+        validation = result.get("bridge_validation") or {}
+        if validation:
+            st.caption(f"Bridge schema validation: **{'PASS' if validation.get('valid') else 'REJECT'}**")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
@@ -738,6 +800,9 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         summaries = list(result.get("attempt_summaries", []) or [])
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write("Official API request failed; raw provider payload is not shown in the UI.")
+            validation = result.get("bridge_validation") or {}
+            if validation:
+                st.caption(f"Bridge schema validation: **{'PASS' if validation.get('valid') else 'REJECT'}** · {validation.get('reason','')}")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
             if summaries:
                 last = summaries[-1]
