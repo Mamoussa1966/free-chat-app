@@ -1,26 +1,17 @@
-# HOTFIX82 — Central Seat Identity / Shared Context Hardening
+# HOTFIX83 — Shared Context Bridge Hardening
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX82-FINAL
+`V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX83-FINAL`
 
-- Centralizes trusted Seat Identity for all API seats 1–5, 7, and dynamic seats 8–20.
-- Separates trusted runtime identity from untrusted shared conversation context.
-- Prevents shared content from overriding room seat, provider identity, API mode, or executed model.
-- Preserves the existing cascade, Secrets precedence, no Local Engine, no paid fallback, and unlimited provider response-time contract.
-- Adds explicit identity metadata to runtime results for diagnostics and verification.
+## Surgical change
+- Built directly from the Library previous release-MULTIAGENT-FINAL ZIP.
+- Adds a round-scoped, append-only `SharedContextBridge` in `main.py`.
+- Successful provider output is appended to the bridge before the next provider call in the same round.
+- DeepSeek is executed first in the bridge order so a DeepSeek 7 -> Gemini 2 bridge test can be observed in one round; final UI/history order remains canonical room-slot order.
+- Bridge entries are explicitly marked as `UNTRUSTED DATA` and cannot override authoritative seat/provider/model identity.
+- Preserves Free API Cascade #1->#10, Secrets precedence, no Local Engine, no paid fallback, no automatic model selection, and the existing provider contracts.
+- Adds regression tests proving provider-to-provider bridge propagation and identity separation.
 
-# HOTFIX82-FINAL — DeepSeek cascade + identity attestation correction
-
-Version: `V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX82-FINAL`
-
-## Surgical fixes
-- DeepSeek HTTP/API failures remain non-terminal and advance from candidate #1 to candidate #2.
-- DeepSeek HTTP-200 envelopes containing an `error` object are explicitly classified as `API_ERROR` before identity attestation, so they also advance through the Free cascade.
-- The execution identity guard remains fail-closed: `execution_identity_mismatch` still stops the cascade.
-- The documented current DeepSeek provider identity `deepseek-flash` is accepted as the provider identity for the configured `deepseek-v4-flash` request.
-- No changes to Secrets, Local Engine, paid fallback, automatic model selection, or other providers.
-
-HOTFIX82 — DeepSeek identity invariant hardening
-- Fixes main.py NameError by importing the DeepSeek identity matcher used by the UI.
-- Applies the same documented DeepSeek identity alias normalization to the council success invariant.
-- Keeps strict identity attestation for unknown/mismatched DeepSeek identities.
-- No changes to other providers, Secrets, Local Engine, paid fallback, automatic selection, or model catalog order.
+## Explicit non-scope
+- No credential values are packaged.
+- No provider model catalog is changed.
+- No GitHub push or repository mutation is performed.

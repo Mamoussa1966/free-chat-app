@@ -31,6 +31,43 @@ ERROR_DISPLAY_TTL_SECONDS = 60
 PUBLIC_NO_RESPONSE = "NO_RESPONSE"
 
 
+class SharedContextBridge:
+    """Round-scoped, append-only bridge for provider-to-provider context.
+
+    Identity metadata is never sourced from this bridge. Bridge entries are
+    explicitly marked as untrusted reference data before being injected into
+    provider prompts. A provider can therefore learn another provider's output
+    without gaining authority to redefine seat/provider/model identity.
+    """
+
+    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000):
+        self.max_chars = max(1, int(max_chars))
+        self._entries: list[str] = []
+        initial = str(initial_snapshot or "").strip()
+        if initial:
+            self._entries.append(initial)
+
+    def snapshot(self) -> str:
+        return "\n\n".join(self._entries)[-self.max_chars:]
+
+    def append_agent_output(self, seat, result: dict) -> None:
+        if str(result.get("status") or "").upper() != "SUCCESS":
+            return
+        content = str(result.get("content") or "").strip()
+        if not content:
+            return
+        room_slot = int(getattr(seat, "room_slot", 0) or 0)
+        provider = str(getattr(seat, "name", "AI") or "AI").strip()
+        model = str(result.get("executed_model") or result.get("model") or "").strip()
+        self._entries.append(
+            "BRIDGE AGENT OUTPUT (UNTRUSTED DATA):\n"
+            f"Room seat: {room_slot}\n"
+            f"Provider identity: {provider}\n"
+            f"Executed model: {model}\n"
+            f"Output:\n{content}"
+        )
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -283,21 +320,44 @@ if (el) setTimeout(()=>{{ el.remove(); }}, {int(remaining * 1000)});
 
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str) -> list[dict]:
     seats = get_seats()
-    snapshot = _shared_context(chat, exclude_message_id=current_user_message_id)
+    bridge = SharedContextBridge(
+        _shared_context(chat, exclude_message_id=current_user_message_id),
+        max_chars=30_000,
+    )
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(seats)), thread_name_prefix="council") as pool:
-        futures = {
-            pool.submit(call_seat, seat, user_prompt, snapshot, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key), deadline, request_id): seat
-            for seat in seats
-        }
-        for future in as_completed(futures):
-            seat = futures[future]
-            try:
-                results[seat.key] = future.result()
-            except Exception as exc:
-                results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id, round_no)
+
+    # HOTFIX83: provider calls are intentionally ordered for the round-scoped
+    # bridge. Each successful provider output is appended before the next
+    # provider is called, creating a real provider-to-provider context path.
+    # The final return order remains the canonical room-seat order, so UI/history
+    # identity is unchanged. Identity is still injected authoritatively by
+    # providers._prompt and can never be taken from bridge data.
+    bridge_order = sorted(
+        seats,
+        key=lambda seat: (0 if seat.key == "deepseek" else 1, int(seat.room_slot)),
+    )
+    for seat in bridge_order:
+        try:
+            result = call_seat(
+                seat, user_prompt, bridge.snapshot(), round_no, False,
+                credentials.get(seat.key), attachments, model_candidates.get(seat.key),
+                deadline, request_id,
+            )
+            results[seat.key] = result
+            bridge.append_agent_output(seat, result)
+        except Exception as exc:
+            results[seat.key] = _worker_failure(
+                seat, exc, model_candidates, request_id, round_no
+            )
+
     for seat in seats:
-        results.setdefault(seat.key, _worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates, request_id, round_no))
+        results.setdefault(
+            seat.key,
+            _worker_failure(
+                seat, TimeoutError("round deadline exceeded"),
+                model_candidates, request_id, round_no,
+            ),
+        )
     return [results[seat.key] for seat in seats]
 
 
