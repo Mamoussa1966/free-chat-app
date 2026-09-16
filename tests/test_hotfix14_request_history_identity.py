@@ -39,3 +39,4 @@ def test_invalid_history_identity_is_rejected():
     chat = main._new_chat()
     with pytest.raises(RuntimeError, match="Invalid history identity"):
         main._assert_unique_history_identity(chat, "", 1, "gemini")
+

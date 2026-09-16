@@ -23,3 +23,4 @@ def test_real_authentication_error_stops_cascade():
     result = _call([providers.ProviderError("HTTP 401: invalid api key", 401, "http_401_authentication_failed"), "should-not-run"])
     assert result["attempted_models"] == ["model-a"]
     assert result["attempt_diagnostics"][0]["classification"] == "AUTHENTICATION_ERROR"
+

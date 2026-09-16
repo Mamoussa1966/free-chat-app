@@ -25,11 +25,16 @@ def test_history_attempt_summary_excludes_raw_provider_error():
         "retryable": True,
     }])
     assert summaries == [{
+        "provider": "",
         "attempt": 1,
         "model": "gemini-3.8-flash",
         "status_code": 429,
         "classification": "QUOTA_EXCEEDED",
         "retryable": True,
+        "execution_time": 0.0,
+        "request_id": "",
+        "round": 0,
+        "final_result": "",
     }]
     assert raw not in str(summaries)
 
@@ -125,3 +130,4 @@ def test_gemini_quota_payload_is_quota_exceeded():
 def test_gemini_retry_payload_is_rate_limited_when_no_quota_signal():
     body = '{"error":{"code":429,"message":"Too many requests. Please retry in 24 seconds.","status":"RESOURCE_EXHAUSTED"}}'
     assert providers._canonical_error_classification(providers._classify(429, body)) == "RATE_LIMITED"
+

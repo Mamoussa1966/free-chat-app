@@ -30,3 +30,4 @@ def test_404_model_classification_wins_over_quota_wording():
 def test_429_distinguishes_rate_limit_from_explicit_quota():
     assert providers._classify(429, "too many requests") == "http_429_rate_limit_or_quota"
     assert providers._classify(429, "quota exceeded") == "billing_or_quota"
+
