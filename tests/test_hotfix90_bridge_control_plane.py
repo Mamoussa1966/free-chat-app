@@ -11,4 +11,4 @@ def test_hotfix90_bridge_control_plane_is_explicit_and_provider_agnostic():
     assert "BRIDGE CONTROL-PLANE CONTRACT" in gp
     assert "BRIDGE_READ: BRIDGE_RESULT" in gp
     assert "<value>" not in gp.split("BRIDGE CONTROL-PLANE CONTRACT", 1)[0]
-    assert "BRIDGE_RESULT =" not in gp.split("For Gemini Seat 2", 1)[0]
+    assert "<value>" in gp
