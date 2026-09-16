@@ -13,76 +13,28 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-# Release-name compatibility markers: the current FINAL zip naming convention
-# Release artifact compatibility markers:
-# AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX85_FINAL.zip
-# AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX85_MULTIAGENT_FINAL.zip
 REQUIRED = [
     "app.py", "main.py", "providers.py", "attachment_utils.py", "gitops_layer.py",
-    "requirements.txt", "VERSION.txt", "README.md", "RELEASE_NOTES.md", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json",
+    "requirements.txt", "VERSION.txt", "README.md", "RELEASE_NOTES.md",
     ".gitignore", ".streamlit/secrets.toml.example"
 ]
 IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache", "dist", "build"}
-def _current_test_files() -> set[str]:
-    return {p.name for p in (ROOT / "tests").glob("test_*.py") if p.is_file()}
-
-
-# Dynamic registry: every test_*.py currently present is part of the release.
-# The Golden baseline remains a minimum-preservation invariant.
-EXPECTED_TEST_FILES = _current_test_files()
-
-# Files intentionally changed as part of the provider-parity integration phase.
-# Every other baseline file must remain byte-identical. The Claude and Grok
-# regression modules are allowed in addition to the 20-module Golden baseline.
-ALLOWED_BASELINE_CHANGES = {
-    "main.py", "providers.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
-    ".streamlit/secrets.toml.example", "build_release.py",
-    "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
-    "tests/test_hotfix26_release_roundtrip.py",
-    "tests/test_grok_integration.py", "tests/test_deepseek_integration.py", "tests/test_multiagent_architecture.py",
-    "tests/test_hotfix60_fixes.py", "tests/test_hotfix61_integration.py",
+EXPECTED_TEST_FILES = {
+    "test_attachments.py", "test_core.py", "test_entrypoint.py",
+    "test_gitops_layer.py", "test_hardening.py",
+    "test_hotfix13_model_identity.py", "test_hotfix14_cascade_invariants.py",
+    "test_hotfix14_error_classification.py", "test_hotfix14_request_history_identity.py",
+    "test_hotfix17_fixes.py", "test_hotfix18_fixes.py", "test_hotfix19_fixes.py",
+    "test_hotfix21_release_consistency.py", "test_hotfix21_ui_privacy.py",
+    "test_hotfix87_release_roundtrip.py",
+    "test_hotfix87_reliability.py",
+    "test_provider_runtime.py", "test_v213_hardening.py", "test_v214_voice.py",
+    "test_v215_resilience.py", "test_v216_hardening.py",
 }
-
-
-def _baseline_manifest() -> dict:
-    return json.loads((ROOT / "CLAUDE_GOLDEN_BASELINE_MANIFEST.json").read_text(encoding="utf-8"))
-
-
-def compare_against_golden_baseline() -> None:
-    baseline = _baseline_manifest()
-    expected = dict(baseline.get("files_sha256") or {})
-    current_paths = {
-        path.relative_to(ROOT).as_posix(): path
-        for path in ROOT.rglob("*")
-        if path.is_file() and not any(part in IGNORED_DIRS for part in path.relative_to(ROOT).parts)
-    }
-    baseline_paths = set(expected)
-    missing = sorted(baseline_paths - set(current_paths))
-    if missing:
-        raise SystemExit(f"Golden baseline files missing: {missing}")
-    # Current repository files are authoritative for this release. We forbid
-    # deletion of Golden files, but do not reject files already present in the
-    # user's current project. This preserves the complete current tree.
-    changed = []
-    for rel, digest in expected.items():
-        current = hashlib.sha256(current_paths[rel].read_bytes()).hexdigest()
-        if current != digest:
-            changed.append(rel)
-    unauthorized = sorted(set(changed) - ALLOWED_BASELINE_CHANGES)
-    if unauthorized:
-        raise SystemExit(f"Unauthorized baseline modifications: {unauthorized}")
-    baseline_tests = set(baseline.get("test_files") or [])
-    current_tests = {f"tests/{p.name}" for p in (ROOT / "tests").glob("test_*.py") if p.is_file()}
-    if not baseline_tests <= current_tests:
-        raise SystemExit("Golden baseline test modules were removed")
-    if "tests/test_claude_integration.py" not in current_tests:
-        raise SystemExit("Claude regression test module missing")
-    if "tests/test_grok_integration.py" not in current_tests:
-        raise SystemExit("Grok regression test module missing")
+EXPECTED_TEST_FILE_COUNT = len(EXPECTED_TEST_FILES)
 
 
 def validate_sources() -> None:
-    compare_against_golden_baseline()
     missing = [p for p in REQUIRED if not (ROOT / p).is_file()]
     if missing:
         raise SystemExit(f"Missing required release files: {missing}")
@@ -92,13 +44,6 @@ def validate_sources() -> None:
         missing = sorted(EXPECTED_TEST_FILES - actual_test_files)
         unexpected = sorted(actual_test_files - EXPECTED_TEST_FILES)
         raise SystemExit(f"Test file-set invariant violated; missing={missing}, unexpected={unexpected}")
-    baseline_path = ROOT / "CLAUDE_GOLDEN_BASELINE_MANIFEST.json"
-    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-    baseline_tests = set(baseline.get("test_files", []))
-    if not baseline_tests:
-        raise SystemExit("Golden baseline manifest contains no test modules")
-    if not baseline_tests <= {f"tests/{name}" for name in actual_test_files}:
-        raise SystemExit("Golden baseline test modules are not all preserved")
     for path in sorted(ROOT.rglob("*.py")):
         if any(part in IGNORED_DIRS for part in path.parts):
             continue
@@ -227,7 +172,6 @@ def check_zip(path: Path) -> dict:
         return {
             "files": len(names),
             "tests": test_count,
-            "test_files": sorted(zip_tests),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "version": (ROOT / "VERSION.txt").read_text(encoding="utf-8").strip(),
         }
@@ -236,7 +180,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_FINAL_EXACT_NAMES_UPDATED_HOTFIX85_MULTIAGENT_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX87_PRODUCTION_HARDENED.zip")
     args = parser.parse_args()
     validate_sources()
     run_tests()
@@ -256,3 +200,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

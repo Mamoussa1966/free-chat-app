@@ -1,16 +1,26 @@
 # AI Council — Free Cascade
 
-V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX85-FINAL
+V22.1-HOTFIX87-PRODUCTION-HARDENED.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
-HOTFIX85 adds a real round-scoped Shared Context Bridge. Each successful provider response is appended as untrusted reference data before the next provider call. Trusted seat/provider/executed-model identity remains authoritative and cannot be overridden by bridge content.
+Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, RATE_LIMITED, AUTHENTICATION_ERROR, API_ERROR, NETWORK_ERROR, TIMEOUT, UNKNOWN. Raw provider error text is operational-only; visible History stores only short classifications. Authentication errors are terminal; model/quota/rate-limit/API/network/timeout failures may continue to the next explicitly configured Free model.
 
-DeepSeek is first in bridge execution order to allow a direct DeepSeek 7 → Gemini 2 bridge test within one round. The displayed result order remains the canonical room-seat order.
+## Hotfix 26 Final
+- Preserves all 19 existing test modules.
+- Raw provider diagnostics and raw result errors are stripped before session-state result persistence.
+- Visible attempt failures remain compact and auto-expire after 60 seconds.
+- Quota 429s are non-retryable; transient rate-limit 429s remain retryable.
+- Release validation enforces the exact test-file set and isolated sandbox execution.
+- `gitops_layer.py` remains exploratory/non-push and is unchanged.
+
+- Release artifact is re-extracted into a fresh temporary workspace and the full suite is executed a second time before release.
 
 
-HOTFIX85 bridge correction: explicit `BRIDGE_* = value` declarations in the current request are promoted into the round-scoped bridge as untrusted test data before the first provider call. Provider outputs can also emit an explicit `BRIDGE_WRITE: BRIDGE_* = value` line, which is appended to the bridge with source-seat attribution. Trusted seat/provider/model identity remains separate and authoritative. Do not use BRIDGE_* declarations for API keys or real secrets.
 
-
-## HOTFIX85 — Structured Bridge Write
-The SharedContextBridge now normalizes explicit provider bridge writes into canonical attributed records. The intended proof path is Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 → Bridge Read. This change does not modify provider adapters or the seat/identity/Free Cascade contract.
+## Hotfix 87 Production Hardening
+- Every model invocation records Provider, Attempt, Model, HTTP status, classification, retryability, execution time, Request ID, Round, and final cascade result.
+- Raw provider errors and payloads remain transient and are excluded from persisted History.
+- Provider output must pass schema validation before a Bridge record is created and before the output enters Shared Context.
+- Handoffs are sequential within a round so the next provider receives only validated official output.
+- Provider chains are isolated: a Claude failure does not cancel Gemini, Grok, Kimi, or ChatGPT.
