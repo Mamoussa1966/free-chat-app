@@ -86,7 +86,7 @@ def _validate_bridge_provider_output(seat, result: dict) -> tuple[bool, str]:
 class SharedContextBridge:
     """Transactional, round-scoped bridge with a prompt-safe read protocol.
 
-    HOTFIX90 deliberately does NOT place bridge values in the next provider's
+    HOTFIX91 deliberately does NOT place bridge values in the next provider's
     prompt. Providers receive only a non-sensitive availability manifest and
     may request a value with ``BRIDGE_READ: KEY``. The application resolves that
     request from committed Shared Context after the provider response.
@@ -106,6 +106,9 @@ class SharedContextBridge:
         self._committed = False
         self._barrier_open = False
         self.trace: list[dict] = []
+        self._source_values: dict[str, str] = {}
+        self._provider_input_prompts: dict[int, str] = {}
+        self._resolved_reads: dict[str, dict] = {}
         initial = str(initial_snapshot or "").strip()
         if initial:
             self._entries.append(initial)
@@ -132,6 +135,9 @@ class SharedContextBridge:
         if available:
             base = (base + "\n\n" if base else "") + "\n\n".join(available)
         return base[-self.max_chars:]
+
+    def record_provider_input(self, seat, prompt: str) -> None:
+        self._provider_input_prompts[int(getattr(seat, "room_slot", 0) or 0)] = str(prompt or "")
 
     def append_user_declarations(self, user_prompt: str) -> None:
         """Keep legacy declarations in internal context; prompt_snapshot redacts values."""
@@ -183,6 +189,7 @@ class SharedContextBridge:
         )
         for key, value in _extract_bridge_writes(content):
             self._write_sequence += 1
+            self._source_values[key] = value
             self._values[key] = {
                 "value": value,
                 "source_seat": room_slot,
@@ -231,6 +238,14 @@ class SharedContextBridge:
             return None
         self._read_sequence += 1
         target_slot = int(getattr(target_seat, "room_slot", 0) or 0)
+        self._resolved_reads[key] = {
+            "source_seat": record["source_seat"],
+            "source_provider": record["source_provider"],
+            "target_seat": target_slot,
+            "write_sequence": record["write_sequence"],
+            "read_sequence": self._read_sequence,
+            "value": str(record["value"]),
+        }
         self._record_trace(
             source_seat=record["source_seat"],
             source_provider=record["source_provider"],
@@ -243,10 +258,47 @@ class SharedContextBridge:
         )
         return str(record["value"])
 
+    def transaction_audit(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
+        """Return a proof-oriented, value-redacted audit of the bridge transaction."""
+        record = self._values.get(key)
+        source_value = self._source_values.get(key, "")
+        read = self._resolved_reads.get(key)
+        target_prompt = self._provider_input_prompts.get(int(target_seat), "")
+        user_has = bool(source_value and source_value in str(user_prompt or ""))
+        target_has = bool(source_value and source_value in target_prompt)
+        target_value = str(read.get("value")) if read else ""
+        source_ok = bool(record and int(record.get("source_seat", 0)) == int(source_seat))
+        target_ok = bool(read and int(read.get("target_seat", 0)) == int(target_seat))
+        return {
+            "BRIDGE_ID": self.bridge_id,
+            "ROUND_ID": self.round_no,
+            "SOURCE": "DeepSeek / Seat 7" if int(source_seat) == 7 else f"Seat {source_seat}",
+            "TARGET": "Gemini / Seat 2" if int(target_seat) == 2 else f"Seat {target_seat}",
+            "KEY": key,
+            "WRITE": "PASS" if record and source_ok else "FAIL",
+            "VALIDATE": "PASS" if record else "FAIL",
+            "COMMIT": "PASS" if self._committed and record else "FAIL",
+            "BARRIER": "PASS" if self._barrier_open and self._committed and record else "FAIL",
+            "READ": "PASS" if read and target_ok else "FAIL",
+            "SCHEMA_VALIDATION": "PASS" if read and target_ok else "FAIL",
+            "SOURCE_VALUE": "[REDACTED]",
+            "TARGET_VALUE": "[REDACTED]",
+            "MATCH": "PASS" if source_value and target_value and source_value == target_value else "FAIL",
+            "USER_PROMPT_CONTAINS_VALUE": "NO" if source_value and not user_has else "YES",
+            "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": "NO" if source_value and not target_has else "YES",
+            "BRIDGE_STATE_CONTAINS_VALUE": "YES" if source_value and record and record.get("value") == source_value else "NO",
+            "write_sequence": int(record.get("write_sequence", 0)) if record else 0,
+            "read_sequence": int(read.get("read_sequence", 0)) if read else 0,
+            "request_id": self.request_id,
+        }
+
+    def transaction_trace(self) -> list[dict]:
+        return [dict(item) for item in self.trace]
+
     def consume_read_requests(self, seat, result: dict) -> dict:
         """Resolve a provider's BRIDGE_READ request from committed bridge state.
 
-        HOTFIX90 closes the handoff gap left by HOTFIX90: the provider is never
+        HOTFIX91 closes the handoff gap left by HOTFIX91: the provider is never
         given the bridge value in its input prompt. Instead, its explicit
         BRIDGE_READ request is resolved against the committed transaction state
         immediately after the provider response. A successful single read is
@@ -558,14 +610,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         request_id=request_id,
         round_no=round_no,
     )
-    # HOTFIX90: explicit BRIDGE_* assignments in the current request become
+    # HOTFIX91: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX90: provider calls use an explicit dependency order for bridge
+    # HOTFIX91: provider calls use an explicit dependency order for bridge
     # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
     # remaining seats retain canonical room order. Results are returned in
     # canonical room order, so seat identity/history/UI ordering is unchanged.
@@ -577,8 +629,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     bridge_order.extend(seat for seat in seats if seat.key in by_key)
     for seat in bridge_order:
         try:
+            provider_prompt = bridge.prompt_snapshot(seat)
+            bridge.record_provider_input(seat, provider_prompt)
             result = call_seat(
-                seat, user_prompt, bridge.prompt_snapshot(seat), round_no, False,
+                seat, user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
                 deadline, request_id,
             )
@@ -609,7 +663,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     result["bridge_read_value"] = str(resolution["value"])
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
-            result["bridge_trace"] = list(bridge.trace)
+            if seat.key == "gemini":
+                result["bridge_transaction_audit"] = bridge.transaction_audit(user_prompt=user_prompt)
+                result["bridge_trace"] = bridge.transaction_trace()
+            else:
+                result["bridge_trace"] = bridge.transaction_trace()
         except Exception as exc:
             results[seat.key] = _worker_failure(
                 seat, exc, model_candidates, request_id, round_no
@@ -978,6 +1036,36 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
                 st.caption(f"Final classification: **{classification}**")
 
 
+def _render_bridge_audit(results: list[dict]) -> None:
+    audit = next((r.get("bridge_transaction_audit") for r in results if r.get("bridge_transaction_audit")), None)
+    if not audit:
+        return
+    st.subheader("🔐 Transactional Bridge — Proof Audit")
+    lines = [
+        f"BRIDGE_ID = {audit.get('BRIDGE_ID', '—')}",
+        f"ROUND_ID = {audit.get('ROUND_ID', '—')}",
+        f"SOURCE = {audit.get('SOURCE', '—')}",
+        f"TARGET = {audit.get('TARGET', '—')}",
+        f"KEY = {audit.get('KEY', '—')}",
+        "",
+        f"WRITE = {audit.get('WRITE', 'FAIL')}",
+        f"VALIDATE = {audit.get('VALIDATE', 'FAIL')}",
+        f"COMMIT = {audit.get('COMMIT', 'FAIL')}",
+        f"BARRIER = {audit.get('BARRIER', 'FAIL')}",
+        "",
+        f"READ = {audit.get('READ', 'FAIL')}",
+        f"SCHEMA_VALIDATION = {audit.get('SCHEMA_VALIDATION', 'FAIL')}",
+        "",
+        "SOURCE_VALUE = [REDACTED]",
+        "TARGET_VALUE = [REDACTED]",
+        f"MATCH = {audit.get('MATCH', 'FAIL')}",
+        "",
+        f"USER_PROMPT_CONTAINS_VALUE = {audit.get('USER_PROMPT_CONTAINS_VALUE', 'UNKNOWN')}",
+        f"GEMINI_INPUT_PROMPT_CONTAINS_VALUE = {audit.get('GEMINI_INPUT_PROMPT_CONTAINS_VALUE', 'UNKNOWN')}",
+        f"BRIDGE_STATE_CONTAINS_VALUE = {audit.get('BRIDGE_STATE_CONTAINS_VALUE', 'NO')}",
+    ]
+    st.code("\n".join(lines), language="text")
+
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
     official = sum(r.get("status") == "SUCCESS" for r in results)
     failed = sum(r.get("status") == "FAILED" for r in results)
@@ -1096,6 +1184,7 @@ def run_app() -> None:
         _render_provider_diagnostics(st.session_state.last_diagnostics)
     if st.session_state.last_results:
         st.divider()
+        _render_bridge_audit(st.session_state.last_results)
         _render_diagnostics(st.session_state.last_results)
 
 

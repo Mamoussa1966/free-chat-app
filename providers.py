@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-HOTFIX90-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX91-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1237,7 +1237,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
-            # HOTFIX90: when the official provider returns a model identity,
+            # HOTFIX91: when the official provider returns a model identity,
             # require it to match the requested candidate. This prevents the UI
             # from ever labeling a response with a model that the provider did
             # not actually report.
