@@ -390,10 +390,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # The final return order remains the canonical room-seat order, so UI/history
     # identity is unchanged. Identity is still injected authoritatively by
     # providers._prompt and can never be taken from bridge data.
-    bridge_order = sorted(
-        seats,
-        key=lambda seat: (0 if seat.key == "deepseek" else 1, int(seat.room_slot)),
-    )
+    # HOTFIX86: shared-context order is the canonical room-seat order.
+    # This makes the execution trace deterministic and prevents a special
+    # provider from being implicitly privileged as the first bridge writer.
+    bridge_order = list(seats)
     for seat in bridge_order:
         try:
             result = call_seat(
@@ -452,6 +452,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
                 provider_reported_model = str(result.get("provider_reported_model") or "").strip()
+                if provider_reported_model and provider_reported_model.lower() != executed_model.lower() and seat_key != "deepseek":
+                    raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
                 if seat_key == "deepseek" and not _deepseek_model_identity_matches(executed_model, provider_reported_model):
                     raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
                 chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "room_slot": int(next((s.room_slot for s in get_seats() if s.key == seat_key), 0)), "provider_identity": next((s.name for s in get_seats() if s.key == seat_key), result.get("name", "")), "provider_key": seat_key, "agent_type": "API_AGENT", "api_mode": "Official API", "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
@@ -552,6 +554,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         sources = model_config_sources()
         source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in seats)
         st.caption(f"مصدر إعداد النماذج: {source_text}")
+        st.caption("كل Request = جولة/مقعد واحد؛ محاولات Free #1→#10 تُسجّل كـ attempts داخل نفس Request.")
         st.caption("Streamlit Secrets لها الأولوية؛ Environment Variables تُستخدم فقط عند غياب Secret غير الفارغ.")
         st.caption("وجود المفتاح لا يثبت Free Tier أو quota.")
         st.caption("المفاتيح لا تظهر في الواجهة ولا تدخل History.")

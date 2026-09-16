@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX85-FINAL"
+VERSION = "V22.1-FINAL-EXACT-NAMES-UPDATED-HOTFIX86-FINAL"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -891,6 +891,8 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                     content.append({"type": "input_text", "text": f"Attached binary file not in a supported text/image extraction path: {att['name']}"})
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline, 0)
         text = _openai_text(data)
+        provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
+        return {"text": text, "provider_reported_model": provider_reported_model}
 
     elif seat.kind == "gemini":
         parts: list[dict] = [{"text": prompt}]
@@ -919,6 +921,8 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 content.append({"type": "text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
         data = _post(seat.endpoint, {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, {"model": model, "max_tokens": MAX_OUTPUT_TOKENS, "messages": [{"role": "user", "content": content}]}, timeout, deadline, 0)
         text = _anthropic_text(data)
+        provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
+        return {"text": text, "provider_reported_model": provider_reported_model}
 
     elif seat.kind == "xai_responses":
         content = [{"type": "input_text", "text": prompt}]
@@ -932,6 +936,8 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 content.append({"type": "input_text", "text": f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]' }"})
         data = _post(seat.endpoint, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": MAX_OUTPUT_TOKENS}, timeout, deadline, 0)
         text = _openai_text(data)
+        provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
+        return {"text": text, "provider_reported_model": provider_reported_model}
 
     elif seat.kind == "deepseek_chat":
         # DeepSeek official OpenAI-compatible Chat Completions API.
@@ -1143,6 +1149,16 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
+            # HOTFIX86: when the official provider returns a model identity,
+            # require it to match the requested candidate. This prevents the UI
+            # from ever labeling a response with a model that the provider did
+            # not actually report.
+            provider_reported = str(result.get("provider_reported_model") or "").strip()
+            if provider_reported and provider_reported.lower() != executed_model.lower():
+                raise ProviderError(
+                    f"provider reported model {provider_reported!r}, requested {executed_model!r}",
+                    error_class="execution_identity_mismatch",
+                )
             if seat.key == "deepseek" and not _deepseek_model_identity_matches(
                     executed_model, result.get("provider_reported_model")
                 ):
