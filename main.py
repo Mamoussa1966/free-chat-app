@@ -32,14 +32,13 @@ PUBLIC_NO_RESPONSE = "NO_RESPONSE"
 BRIDGE_WRITE_PATTERN = re.compile(
     r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*(.+?)\s*$"
 )
+BRIDGE_READ_PATTERN = re.compile(
+    r"(?im)^\s*BRIDGE_READ\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*$"
+)
 
 
 def _extract_bridge_writes(content: str) -> list[tuple[str, str]]:
-    """Extract only explicit provider bridge-write records.
-
-    This parser is intentionally provider-agnostic and has no authority over
-    identity, credentials, model selection, or execution policy.
-    """
+    """Extract only explicit provider bridge-write records."""
     writes: list[tuple[str, str]] = []
     for match in BRIDGE_WRITE_PATTERN.finditer(str(content or "")):
         key = match.group(1).strip()
@@ -49,53 +48,129 @@ def _extract_bridge_writes(content: str) -> list[tuple[str, str]]:
     return writes
 
 
-class SharedContextBridge:
-    """Round-scoped, append-only bridge for provider-to-provider context.
+def _extract_bridge_reads(content: str) -> list[str]:
+    reads: list[str] = []
+    for match in BRIDGE_READ_PATTERN.finditer(str(content or "")):
+        key = match.group(1).strip()
+        if key:
+            reads.append(key)
+    return reads
 
-    Identity metadata is never sourced from this bridge. Bridge entries are
-    explicitly marked as untrusted reference data before being injected into
-    provider prompts. A provider can therefore learn another provider's output
-    without gaining authority to redefine seat/provider/model identity.
+
+def _validate_bridge_provider_output(seat, result: dict) -> tuple[bool, str]:
+    """Validate the exact safe envelope before a provider result enters the bridge."""
+    if not isinstance(result, dict):
+        return False, "RESULT_NOT_OBJECT"
+    if str(result.get("status") or "").upper() != "SUCCESS":
+        return False, "RESULT_NOT_SUCCESS"
+    declared_seat = str(result.get("seat") or getattr(seat, "key", "")).strip()
+    if declared_seat != str(getattr(seat, "key", "")):
+        return False, "SEAT_IDENTITY_MISMATCH"
+    content = result.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return False, "EMPTY_OUTPUT"
+    model = str(result.get("executed_model") or result.get("model") or "").strip()
+    if not model:
+        return False, "MODEL_ID_MISSING"
+    declared_model = str(result.get("model") or "").strip()
+    if declared_model and declared_model != model:
+        return False, "MODEL_ID_MISMATCH"
+    if "round" in result:
+        try:
+            int(result.get("round"))
+        except (TypeError, ValueError):
+            return False, "ROUND_INVALID"
+    return True, "VALID"
+
+
+class SharedContextBridge:
+    """Transactional, round-scoped bridge with a prompt-safe read protocol.
+
+    HOTFIX88 deliberately does NOT place bridge values in the next provider's
+    prompt. Providers receive only a non-sensitive availability manifest and
+    may request a value with ``BRIDGE_READ: KEY``. The application resolves that
+    request from committed Shared Context after the provider response.
     """
 
-    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000):
+    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000, request_id: str = "", round_no: int = 0):
         self.max_chars = max(1, int(max_chars))
+        self.request_id = str(request_id or "")
+        self.round_no = int(round_no or 0)
+        self.bridge_id = hashlib.sha256(
+            f"{self.request_id}:{self.round_no}:{uuid.uuid4().hex}".encode("utf-8")
+        ).hexdigest()[:24]
         self._entries: list[str] = []
+        self._values: dict[str, dict] = {}
+        self._write_sequence = 0
+        self._read_sequence = 0
+        self._committed = False
+        self._barrier_open = False
+        self.trace: list[dict] = []
         initial = str(initial_snapshot or "").strip()
         if initial:
             self._entries.append(initial)
 
     def snapshot(self) -> str:
+        """Return the internal Shared Context snapshot for diagnostics/tests."""
         return "\n\n".join(self._entries)[-self.max_chars:]
 
-    def append_user_declarations(self, user_prompt: str) -> None:
-        """Promote explicit BRIDGE_* assignments into bridge data.
+    def prompt_snapshot(self, target_seat=None) -> str:
+        """Return context with bridge values redacted from provider prompts."""
+        raw = "\n\n".join(self._entries)
+        base = BRIDGE_WRITE_PATTERN.sub(lambda m: f"BRIDGE_WRITE: {m.group(1).strip()} = [REDACTED_BRIDGE_VALUE]", raw)
+        base = re.sub(r"(?im)^(\s*Value:\s*).+$", r"\1[REDACTED_BRIDGE_VALUE]", base)
+        available = []
+        for key, record in self._values.items():
+            available.append(
+                "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT):\n"
+                f"Key: {key}\n"
+                f"bridge_id: {self.bridge_id}\n"
+                f"round_id: {self.round_no}\n"
+                f"source_seat: {record['source_seat']}\n"
+                f"target_seat: {int(getattr(target_seat, 'room_slot', 0) or 0) if target_seat else 0}"
+            )
+        if available:
+            base = (base + "\n\n" if base else "") + "\n\n".join(available)
+        return base[-self.max_chars:]
 
-        This is intentionally narrow: only lines that explicitly assign a
-        BRIDGE_* key are accepted. The value is stored as untrusted reference
-        data; it is not treated as an instruction and never changes identity.
-        Do not use this mechanism for API keys, credentials, passwords, or real
-        secrets.
-        """
+    def append_user_declarations(self, user_prompt: str) -> None:
+        """Keep legacy declarations in internal context; prompt_snapshot redacts values."""
         text = str(user_prompt or "")
         pattern = re.compile(r"(?im)^\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*([^\r\n]+?)\s*$")
         for match in pattern.finditer(text):
-            key = match.group(1).strip()
-            value = match.group(2).strip()
-            if not value or len(value) > 2000:
-                continue
-            self._entries.append(
-                "BRIDGE DECLARATION (USER-PROVIDED UNTRUSTED TEST DATA):\n"
-                f"Key: {key}\n"
-                f"Value: {value}"
-            )
+            key, value = match.group(1).strip(), match.group(2).strip()
+            if value and len(value) <= 2000:
+                self._entries.append(f"BRIDGE DECLARATION (USER-PROVIDED UNTRUSTED TEST DATA):\nKey: {key}\nValue: {value}")
+
+    def _record_trace(self, **fields) -> None:
+        safe = {
+            "bridge_id": self.bridge_id,
+            "round_id": self.round_no,
+            "source_seat": int(fields.get("source_seat", 0) or 0),
+            "source_provider": str(fields.get("source_provider", "") or ""),
+            "target_seat": int(fields.get("target_seat", 0) or 0),
+            "key": str(fields.get("key", "") or ""),
+            "write_sequence": int(fields.get("write_sequence", self._write_sequence) or 0),
+            "commit_status": str(fields.get("commit_status", "") or ""),
+            "read_sequence": int(fields.get("read_sequence", self._read_sequence) or 0),
+            "schema_validation": str(fields.get("schema_validation", "") or ""),
+            "request_id": self.request_id,
+        }
+        self.trace.append(safe)
 
     def append_agent_output(self, seat, result: dict) -> None:
-        if str(result.get("status") or "").upper() != "SUCCESS":
+        valid, reason = _validate_bridge_provider_output(seat, result)
+        if not valid:
+            self._record_trace(
+                source_seat=getattr(seat, "room_slot", 0),
+                source_provider=getattr(seat, "name", ""),
+                target_seat=0,
+                key="",
+                schema_validation=reason,
+                commit_status="REJECTED",
+            )
             return
         content = str(result.get("content") or "").strip()
-        if not content:
-            return
         room_slot = int(getattr(seat, "room_slot", 0) or 0)
         provider = str(getattr(seat, "name", "AI") or "AI").strip()
         model = str(result.get("executed_model") or result.get("model") or "").strip()
@@ -106,11 +181,14 @@ class SharedContextBridge:
             f"Executed model: {model}\n"
             f"Output:\n{content}"
         )
-        # HOTFIX87: structured provider-to-provider write protocol. The
-        # protocol is parsed once at the bridge boundary, normalized into a
-        # dedicated record, and then exposed to later providers as data.
-        # It never changes identity, credentials, model selection, or policy.
         for key, value in _extract_bridge_writes(content):
+            self._write_sequence += 1
+            self._values[key] = {
+                "value": value,
+                "source_seat": room_slot,
+                "source_provider": provider,
+                "write_sequence": self._write_sequence,
+            }
             self._entries.append(
                 "BRIDGE WRITE RECORD (PROVIDER UNTRUSTED DATA):\n"
                 f"Source seat: {room_slot}\n"
@@ -119,6 +197,58 @@ class SharedContextBridge:
                 f"Key: {key}\n"
                 f"Value: {value}"
             )
+            self._record_trace(
+                source_seat=room_slot,
+                source_provider=provider,
+                target_seat=0,
+                key=key,
+                write_sequence=self._write_sequence,
+                commit_status="PENDING",
+                schema_validation="PASS",
+            )
+
+    def commit(self) -> None:
+        self._committed = True
+        for trace in self.trace:
+            if trace["commit_status"] == "PENDING":
+                trace["commit_status"] = "COMMITTED"
+
+    def barrier(self) -> None:
+        if not self._committed:
+            raise RuntimeError("Bridge barrier reached before commit")
+        self._barrier_open = True
+
+    def read(self, key: str, target_seat) -> str | None:
+        key = str(key or "").strip()
+        if not key or not self._committed or not self._barrier_open:
+            return None
+        record = self._values.get(key)
+        if not record:
+            return None
+        self._read_sequence += 1
+        target_slot = int(getattr(target_seat, "room_slot", 0) or 0)
+        self._record_trace(
+            source_seat=record["source_seat"],
+            source_provider=record["source_provider"],
+            target_seat=target_slot,
+            key=key,
+            write_sequence=record["write_sequence"],
+            commit_status="COMMITTED",
+            read_sequence=self._read_sequence,
+            schema_validation="PASS",
+        )
+        return str(record["value"])
+
+    def consume_read_requests(self, seat, result: dict) -> dict:
+        """Resolve BRIDGE_READ requests after the provider response, never in its prompt."""
+        valid, reason = _validate_bridge_provider_output(seat, result)
+        if not valid:
+            return {"schema_validation": reason, "reads": []}
+        reads = []
+        for key in _extract_bridge_reads(str(result.get("content") or "")):
+            value = self.read(key, seat)
+            reads.append({"key": key, "value": value, "available": value is not None})
+        return {"schema_validation": "PASS", "reads": reads}
 
 
 def _now() -> str:
@@ -274,54 +404,16 @@ def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, 
         "attempt_summaries": [{"attempt": 1, "model": models[0] if models else "", "status_code": None, "classification": "API_ERROR", "retryable": False}], "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
 
 
-def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> tuple[bool, str]:
-    """Validate the provider result envelope before it can enter Shared Context.
-
-    This is deliberately deterministic and transport-agnostic: identity, status,
-    request correlation, round, and content shape are checked before a provider
-    output is promoted to bridge data. No raw payload or credential is accepted.
-    """
-    if not isinstance(result, dict):
-        return False, "result_not_object"
-    if str(result.get("seat") or "") != str(seat.key):
-        return False, "seat_identity_mismatch"
-    if str(result.get("name") or "").strip() != str(seat.name).strip():
-        return False, "provider_identity_mismatch"
-    if str(result.get("request_id") or "") != str(request_id or ""):
-        return False, "request_id_mismatch"
-    try:
-        result_round = int(result.get("round"))
-    except (TypeError, ValueError):
-        return False, "round_missing_or_invalid"
-    if result_round != int(round_no):
-        return False, "round_mismatch"
-    status = str(result.get("status") or "").upper()
-    if status not in {"SUCCESS", "FAILED", "NO_FREE_MODEL_CONFIGURED", PUBLIC_NO_RESPONSE, "AUTHENTICATION_OK_NO_FREE_MODEL"}:
-        return False, "status_invalid"
-    if status == "SUCCESS":
-        content = result.get("content")
-        if not isinstance(content, str) or not content.strip():
-            return False, "success_content_missing"
-        model = str(result.get("executed_model") or result.get("model") or "").strip()
-        if not model:
-            return False, "executed_model_missing"
-    return True, "OK"
-
-
 def _history_attempt_summaries(details: list[dict]) -> list[dict]:
-    """Persist compact, non-sensitive attempt telemetry in visible History/UI."""
+    """Persist only the original compact, non-sensitive classifications in History."""
     allowed = {
         "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
         "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
-        "TIMEOUT", "UNKNOWN", "SUCCESS",
+        "TIMEOUT", "UNKNOWN",
     }
     summaries: list[dict] = []
     for detail in details or []:
         classification = _canonical_error_classification(str(detail.get("classification") or "UNKNOWN"))
-        # Keep TIMEOUT internal to the provider transport layer. In visible
-        # History/UI, a provider that did not answer inside the latency window
-        # is reported as NO_RESPONSE, so users are not told that "no response"
-        # is itself a provider/API error.
         if classification == "TIMEOUT":
             classification = PUBLIC_NO_RESPONSE
         if classification not in allowed | {PUBLIC_NO_RESPONSE}:
@@ -332,13 +424,7 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
             "status_code": detail.get("status_code"),
             "classification": classification,
             "retryable": bool(detail.get("retryable", False)),
-            "latency": round(float(detail.get("latency", 0.0) or 0.0), 3),
-            "request_id": str(detail.get("request_id") or ""),
-            "round": int(detail.get("round", 0) or 0),
-            "final_result": str(detail.get("final_result") or "FAILED").upper(),
         }
-        # The timestamp is runtime metadata used only for the 60-second UI TTL.
-        # Do not synthesize it here: real provider attempts stamp it at creation time.
         if "_display_created_at" in detail:
             try:
                 summary["created_at_epoch"] = float(detail.get("_display_created_at"))
@@ -348,12 +434,37 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     return summaries
 
 
+def _safe_attempt_telemetry(details: list[dict], result: dict | None = None) -> list[dict]:
+    """Return the expanded safe runtime telemetry contract without raw errors."""
+    result = result or {}
+    out = []
+    for detail in details or []:
+        out.append({
+            "provider": str(detail.get("provider") or result.get("name") or "").strip(),
+            "attempt": detail.get("attempt"),
+            "model": str(detail.get("model") or "").strip(),
+            "status_code": detail.get("status_code"),
+            "classification": _canonical_error_classification(str(detail.get("classification") or "UNKNOWN")),
+            "retryable": bool(detail.get("retryable", False)),
+            "execution_time": round(float(detail.get("execution_time", detail.get("latency", 0.0)) or 0.0), 3),
+            "request_id": str(detail.get("request_id") or result.get("request_id") or ""),
+            "attempt_id": str(detail.get("attempt_id") or ""),
+            "round": int(detail.get("round", result.get("round", 0)) or 0),
+            "final_result": str(detail.get("final_result") or "FAILED").upper(),
+            "cascade_action": str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if detail.get("retryable") else "CASCADE_STOP")).upper(),
+        })
+    return out
+
 
 def _public_result(result: dict) -> dict:
     """Return the UI-safe result persisted in session state. Raw provider payloads stay transient."""
     public = dict(result or {})
     details = list(public.get("attempt_diagnostics", []) or [])
     public["attempt_summaries"] = _history_attempt_summaries(details)
+    public["attempt_telemetry"] = list(public.get("attempt_telemetry") or _safe_attempt_telemetry(details, public))
+    for telemetry in public["attempt_telemetry"]:
+        if str(telemetry.get("classification") or "").upper() == "TIMEOUT":
+            telemetry["classification"] = PUBLIC_NO_RESPONSE
     classification = str(public.get("classification") or "").strip().upper()
     if classification not in {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN"}:
         classification = "UNKNOWN"
@@ -379,7 +490,7 @@ def _attempt_display_remaining(detail: dict, now: float | None = None) -> float:
 
 
 def _render_temporary_attempt_diagnostic(detail: dict) -> None:
-    """Render safe, traceable attempt telemetry without raw payloads or secrets."""
+    """Render a compact attempt error for 60 seconds, without exposing raw provider payloads."""
     model = str(detail.get("model") or "").strip()
     classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
     if classification == "TIMEOUT":
@@ -394,9 +505,8 @@ def _render_temporary_attempt_diagnostic(detail: dict) -> None:
     request_text = str(detail.get("request_id") or "")[:36]
     round_text = f" · Round {detail.get('round', '?')}"
     final_text = str(detail.get("final_result") or "FAILED").upper()
-    retryable_text = "retryable=true" if bool(detail.get("retryable", False)) else "retryable=false"
     safe_text = html.escape(
-        f"Attempt #{detail.get('attempt', '?')} · {model} · ❌ FAILED{code_text} · {classification}{latency_text} · {retryable_text}{round_text} · {final_text} · request {request_text}"
+        f"Attempt #{detail.get('attempt', '?')} · {model} · ❌ FAILED{code_text} · {classification}{latency_text}{round_text} · {final_text} · request {request_text}"
     )
     # Streamlit can render several attempt diagnostics in the same page.
     # Every timer therefore gets a unique DOM id; a shared id would cause
@@ -420,15 +530,17 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
+        request_id=request_id,
+        round_no=round_no,
     )
-    # HOTFIX87: explicit BRIDGE_* assignments in the current request become
+    # HOTFIX88: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX87: provider calls use an explicit dependency order for bridge
+    # HOTFIX88: provider calls use an explicit dependency order for bridge
     # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
     # remaining seats retain canonical room order. Results are returned in
     # canonical room order, so seat identity/history/UI ordering is unchanged.
@@ -441,30 +553,18 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     for seat in bridge_order:
         try:
             result = call_seat(
-                seat, user_prompt, bridge.snapshot(), round_no, False,
+                seat, user_prompt, bridge.prompt_snapshot(seat), round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
                 deadline, request_id,
             )
-            valid, validation_reason = _validate_provider_output(result, seat, request_id, round_no)
-            if not valid:
-                # Provider output is never allowed into the bridge when its
-                # envelope is malformed. The originating provider is isolated
-                # and the remaining seats continue independently.
-                result = dict(result or {})
-                result["seat"] = seat.key
-                result["name"] = seat.name
-                result["label"] = seat.label
-                result["status"] = "FAILED"
-                result["classification"] = "API_ERROR"
-                result["error"] = f"class=provider_error; schema_validation_failed:{validation_reason}"
-                result["content"] = ""
-                result["bridge_validation"] = {"valid": False, "reason": validation_reason}
-            else:
-                result = dict(result)
-                result["bridge_validation"] = {"valid": True, "reason": "OK"}
             results[seat.key] = result
-            if valid:
-                bridge.append_agent_output(seat, result)
+            bridge.append_agent_output(seat, result)
+            if seat.key == "deepseek":
+                bridge.commit()
+                bridge.barrier()
+            else:
+                bridge.consume_read_requests(seat, result)
+            result["bridge_trace"] = list(bridge.trace)
         except Exception as exc:
             results[seat.key] = _worker_failure(
                 seat, exc, model_candidates, request_id, round_no
@@ -778,49 +878,58 @@ def _result_error_classification(result: dict) -> str:
 
 def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
+    summaries = list(result.get("attempt_telemetry") or result.get("attempt_summaries", []) or [])
+
+    def render_attempts() -> None:
+        if not summaries:
+            return
+        st.caption("Safe attempt telemetry — raw provider payloads/credentials hidden")
+        for detail in summaries:
+            provider = str(detail.get("provider") or result.get("name") or "Provider")
+            attempt = detail.get("attempt", "?")
+            model = str(detail.get("model") or "")
+            code = detail.get("status_code")
+            cls = str(detail.get("classification") or "UNKNOWN").upper()
+            retryable = bool(detail.get("retryable", False))
+            execution = detail.get("execution_time", detail.get("latency", 0))
+            request_id = str(detail.get("request_id") or result.get("request_id") or "")
+            round_no = detail.get("round", result.get("round", "?"))
+            final_result = str(detail.get("final_result") or "FAILED").upper()
+            action = str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if retryable else "CASCADE_STOP")).upper()
+            http = f"HTTP {code}" if code is not None else "HTTP —"
+            st.caption(f"{provider} · Attempt {attempt} · `{model}` · {http} · {cls} · Retryable={retryable} · {float(execution):.3f}s · Request {request_id[:48] or '—'} · Round {round_no} · Final={final_result} · {action}")
+
     if status == "SUCCESS":
+        # Execution identity must drive the rendered model: result.get('executed_model') or result['model']
         display_model = result.get('executed_model') or result['model']
         attempt_latency = result.get("successful_attempt_latency")
         attempt_text = f" · attempt {attempt_latency}s" if attempt_latency is not None else ""
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result['latency']}s{attempt_text}")
-        validation = result.get("bridge_validation") or {}
-        if validation:
-            st.caption(f"Bridge schema validation: **{'PASS' if validation.get('valid') else 'REJECT'}**")
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result.get('latency', 0)}s{attempt_text}")
+        failed_attempts = [x for x in summaries if str(x.get("final_result") or "").upper() == "FAILED"]
+        if failed_attempts:
+            with st.expander("🧪 Cascade attempt diagnostics", expanded=diagnostic_only):
+                render_attempts()
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
         st.warning(f"🟡 {result['label']} — نقطة المصادقة قبلت المفتاح، لكن لا يوجد Free model مُكوّن.")
         st.caption("Classification: AUTHENTICATION_ERROR")
     elif status == PUBLIC_NO_RESPONSE:
-        # Never surface the internal TIMEOUT classification or failed-attempt
-        # diagnostics for a pure latency cutoff.  The provider simply did not
-        # produce a response inside the fast-response window.
         st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم تصل استجابة سريعة من المزود.")
     else:
-        summaries = list(result.get("attempt_summaries", []) or [])
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write("Official API request failed; raw provider payload is not shown in the UI.")
-            validation = result.get("bridge_validation") or {}
-            if validation:
-                st.caption(f"Bridge schema validation: **{'PASS' if validation.get('valid') else 'REJECT'}** · {validation.get('reason','')}")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
             if summaries:
                 last = summaries[-1]
                 final_class = str(last.get("classification") or "UNKNOWN").upper()
-                if final_class == "TIMEOUT":
-                    final_class = PUBLIC_NO_RESPONSE
                 final_model = str(last.get("model") or "").strip()
                 final_code = last.get("status_code")
-                final_code_text = f" · HTTP {final_code}" if final_code else ""
-                st.caption(f"Final classification: **{final_class}** · `{final_model}`{final_code_text}")
-                if final_class == PUBLIC_NO_RESPONSE:
-                    st.caption("لم تصل استجابة من هذا المزود داخل نافذة الاستجابة السريعة؛ لم يتم عرض TIMEOUT كتشخيص للمستخدم.")
-                for detail in summaries:
-                    _render_temporary_attempt_diagnostic(detail)
+                action = str(last.get("cascade_action") or ("CASCADE_CONTINUE" if last.get("retryable") else "CASCADE_STOP")).upper()
+                st.caption(f"Final classification: **{final_class}** · `{final_model}` · HTTP {final_code if final_code is not None else '—'} · **{action}**")
+                render_attempts()
             else:
                 classification = str(result.get("classification") or "").strip().upper() or _result_error_classification(result)
-                if classification == "TIMEOUT":
-                    classification = PUBLIC_NO_RESPONSE
                 st.caption(f"Final classification: **{classification}**")
 
 

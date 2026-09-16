@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-HOTFIX87-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX88-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1037,13 +1037,38 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         }
         for d in (attempt_diagnostics or [])
     ]
+    telemetry = [
+        {
+            "provider": seat.name,
+            "attempt": d.get("attempt"),
+            "model": str(d.get("model") or "").strip(),
+            "status_code": d.get("status_code"),
+            "classification": _canonical_error_classification(str(d.get("classification") or "UNKNOWN")),
+            "retryable": bool(d.get("retryable", False)),
+            "execution_time": round(float(d.get("execution_time", d.get("latency", 0.0)) or 0.0), 3),
+            "request_id": str(d.get("request_id") or request_id or ""),
+            "attempt_id": str(d.get("attempt_id") or ""),
+            "round": int(d.get("round", round_no) or round_no),
+            "final_result": str(d.get("final_result") or "FAILED").upper(),
+            "cascade_action": str(d.get("cascade_action") or ("CASCADE_CONTINUE" if d.get("retryable") else "CASCADE_STOP")).upper(),
+        }
+        for d in (attempt_diagnostics or [])
+    ]
     if status == "SUCCESS":
-        summaries.append({
+        success_summary = {
             "attempt": len(attempted), "model": normalized_model, "status_code": 200,
             "classification": "SUCCESS", "retryable": False, "latency": round(time.perf_counter() - started, 3),
             "request_id": str(request_id or ""), "round": int(round_no), "final_result": "SUCCESS",
             "timeout_seconds": None,
+        }
+        summaries.append(success_summary)
+        telemetry.append({
+            "provider": seat.name, "attempt": len(attempted), "model": normalized_model, "status_code": 200,
+            "classification": "SUCCESS", "retryable": False, "execution_time": round(time.perf_counter() - started, 3),
+            "request_id": str(request_id or ""), "attempt_id": f"{request_id}:r{int(round_no)}:a{len(attempted)}" if request_id else f"r{int(round_no)}:a{len(attempted)}",
+            "round": int(round_no), "final_result": "SUCCESS", "cascade_action": "SUCCESS",
         })
+
 
     return {
         "seat": seat.key,
@@ -1063,6 +1088,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         # Public-safe summaries are available to the live diagnostic renderer.
         # Raw attempt diagnostics remain transient and are never required by UI/history.
         "attempt_summaries": summaries,
+        "attempt_telemetry": telemetry,
         "official_authenticated": authenticated,
         "request_id": str(request_id or ""),
         "round": int(round_no),
@@ -1079,6 +1105,39 @@ def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) 
         return "class=provider_error; Unknown provider failure."
     status = f"HTTP {exc.status_code}; " if exc.status_code else ""
     return f"{status}class={exc.error_class}; {_sanitize(str(exc), (credential or "",))}"
+
+
+def _validate_provider_output_schema(seat: Seat, result: dict, expected_model: str) -> None:
+    """Deterministic handoff gate for every successful provider invocation.
+
+    The bridge must never receive a partially formed result. This validates the
+    normalized provider envelope, not raw provider payloads.
+    """
+    if not isinstance(result, dict):
+        raise ProviderError("provider output envelope is not an object", error_class="invalid_response")
+    required = ("seat", "status", "model", "executed_model", "content", "request_id", "round")
+    missing = [key for key in required if key not in result]
+    if missing:
+        raise ProviderError("provider output schema missing required fields", error_class="invalid_response")
+    if str(result.get("seat") or "") != seat.key:
+        raise ProviderError("provider output seat identity mismatch", error_class="execution_identity_mismatch")
+    if str(result.get("status") or "") != "SUCCESS":
+        raise ProviderError("provider output status is not SUCCESS", error_class="invalid_response")
+    content = result.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ProviderError("provider output content is empty or invalid", error_class="invalid_response")
+    if len(content) > MAX_RESPONSE_CHARS:
+        raise ProviderError("provider output exceeds safety limit", error_class="response_too_large")
+    if str(result.get("model") or "").strip() != str(expected_model or "").strip():
+        raise ProviderError("provider output model mismatch", error_class="execution_identity_mismatch")
+    if str(result.get("executed_model") or "").strip() != str(expected_model or "").strip():
+        raise ProviderError("provider output executed model mismatch", error_class="execution_identity_mismatch")
+    try:
+        int(result.get("round"))
+    except (TypeError, ValueError):
+        raise ProviderError("provider output round is invalid", error_class="invalid_response")
+    if not isinstance(result.get("attempted_models"), list):
+        raise ProviderError("provider output attempted_models is invalid", error_class="invalid_response")
 
 
 def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "") -> dict:
@@ -1163,7 +1222,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
-            # HOTFIX87: when the official provider returns a model identity,
+            # HOTFIX88: when the official provider returns a model identity,
             # require it to match the requested candidate. This prevents the UI
             # from ever labeling a response with a model that the provider did
             # not actually report.
@@ -1182,6 +1241,9 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 raise ProviderError("DeepSeek provider model identity mismatch", error_class="execution_identity_mismatch")
             if result.get("attempted_models") and result["attempted_models"][-1] != executed_model:
                 raise ProviderError("cascade execution identity mismatch", error_class="execution_identity_mismatch")
+            # Provider Output -> Schema Validation is the mandatory handoff gate.
+            _validate_provider_output_schema(seat, result, executed_model)
+            result["output_schema_valid"] = True
             return result
         except ProviderError as exc:
             last_error = exc
@@ -1195,10 +1257,13 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification_label": _friendly_error_class(exc.error_class),
                 "error": _diagnostic(exc, credential),
                 "request_id": str(request_id or ""),
+                "attempt_id": f"{request_id}:r{int(round_no)}:a{index + 1}" if request_id else f"r{int(round_no)}:a{index + 1}",
                 "round": int(round_no),
                 "final_result": "FAILED",
+                "cascade_action": "CASCADE_CONTINUE" if _should_continue_cascade(exc, classification, index) else "CASCADE_STOP",
                 "retryable": _should_continue_cascade(exc, classification, index),
                 "latency": round(time.perf_counter() - attempt_started, 3),
+                "execution_time": round(time.perf_counter() - attempt_started, 3),
                 "timeout_seconds": effective_timeout,
                 # UI-only timestamp; raw provider error remains runtime-only.
                 "_display_created_at": time.time(),
@@ -1226,10 +1291,13 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "classification_label": _friendly_error_class(internal),
                 "error": _diagnostic(wrapped, credential),
                 "request_id": str(request_id or ""),
+                "attempt_id": f"{request_id}:r{int(round_no)}:a{index + 1}" if request_id else f"r{int(round_no)}:a{index + 1}",
                 "round": int(round_no),
                 "final_result": "FAILED",
+                "cascade_action": "CASCADE_CONTINUE" if (normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1) else "CASCADE_STOP",
                 "retryable": normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
                 "latency": round(time.perf_counter() - attempt_started, 3),
+                "execution_time": round(time.perf_counter() - attempt_started, 3),
                 "timeout_seconds": effective_timeout,
                 "_display_created_at": time.time(),
             })
