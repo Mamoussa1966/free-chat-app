@@ -14,7 +14,7 @@ def test_hotfix83_bridge_passes_prior_agent_output_to_later_agent(monkeypatch):
                        deadline=None, request_id=""):
         seen[seat.key] = shared_context
         model = (model_candidates or ("test-model",))[0]
-        content = "BRIDGE_WRITE: HOTFIX84" if seat.key == "deepseek" else f"RESPONSE:{seat.key}"
+        content = "BRIDGE_WRITE: HOTFIX85" if seat.key == "deepseek" else f"RESPONSE:{seat.key}"
         return {
             "seat": seat.key, "name": seat.name, "label": seat.label,
             "status": "SUCCESS", "mode": "official", "model": model,
@@ -33,7 +33,7 @@ def test_hotfix83_bridge_passes_prior_agent_output_to_later_agent(monkeypatch):
 
     results = main._run_round("bridge", chat, 1, credentials, [], candidates, "u1", None, "r1")
 
-    assert "BRIDGE_WRITE: HOTFIX84" in seen["gemini"]
+    assert "BRIDGE_WRITE: HOTFIX85" in seen["gemini"]
     assert "Room seat: 7" in seen["gemini"]
     assert "Provider identity: DeepSeek" in seen["gemini"]
     assert [r["seat"] for r in results] == [s.key for s in seats]

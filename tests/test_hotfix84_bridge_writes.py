@@ -1,7 +1,7 @@
 import main
 
 
-def test_hotfix84_user_bridge_declaration_is_available_to_later_provider():
+def test_hotfix85_user_bridge_declaration_is_available_to_later_provider():
     bridge = main.SharedContextBridge()
     bridge.append_user_declarations("BRIDGE_TOKEN = COUNCIL-BRIDGE-TEST-7319")
     snap = bridge.snapshot()
@@ -9,7 +9,7 @@ def test_hotfix84_user_bridge_declaration_is_available_to_later_provider():
     assert "Value: COUNCIL-BRIDGE-TEST-7319" in snap
 
 
-def test_hotfix84_provider_bridge_write_is_attributed():
+def test_hotfix85_provider_bridge_write_is_attributed():
     bridge = main.SharedContextBridge()
     seat = next(s for s in main.get_seats() if s.key == "deepseek")
     bridge.append_agent_output(seat, {
