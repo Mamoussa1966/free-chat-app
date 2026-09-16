@@ -43,15 +43,13 @@ def test_failure_diagnostics_classify_each_failed_candidate_and_stop_on_success(
     assert r['status'] == 'SUCCESS'
     assert r['executed_model'] == 'm3'
     assert r['attempted_models'] == seen
-    failed = [d for d in r['attempt_diagnostics'] if d.get('final_result') == 'FAILED']
-    assert [d['model'] for d in failed] == ['m1', 'm2']
-    assert [d['error_class'] for d in failed] == [
+    assert [d['model'] for d in r['attempt_diagnostics']] == ['m1', 'm2']
+    assert [d['error_class'] for d in r['attempt_diagnostics']] == [
         'model_not_found_or_invalid',
         'http_429_rate_limit_or_quota',
     ]
-    assert failed[0]['status_code'] == 404
-    assert failed[1]['status_code'] == 429
-    assert r['attempt_diagnostics'][-1]['final_result'] == 'SUCCESS'
+    assert r['attempt_diagnostics'][0]['status_code'] == 404
+    assert r['attempt_diagnostics'][1]['status_code'] == 429
 
 
 def test_terminal_auth_failure_is_recorded_without_advancing_to_next_model():

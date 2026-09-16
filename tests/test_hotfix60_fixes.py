@@ -58,4 +58,4 @@ def test_provider_response_time_is_unlimited_and_has_no_hidden_retry():
 
 
 def test_hotfix60_version_is_consistent():
-    assert "HOTFIX87-PRODUCTION-HARDENED" in providers.VERSION
+    assert providers.VERSION == "V22.1-HOTFIX87-PRODUCTION-HARDENED"
