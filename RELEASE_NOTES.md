@@ -1,17 +1,43 @@
-# HOTFIX89 — Transactional Bridge Read Handoff
+# HOTFIX90 — Bridge Control-Plane Handoff Hardening
 
-Version: `V22.1-HOTFIX89-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX90-PRODUCTION-HARDENED`
+
+## Purpose
+HOTFIX90 proved the application-side read resolver, but the live provider turn showed that DeepSeek could reject the protocol as if the model itself were expected to own a transactional memory bus. HOTFIX90 separates the application-owned bridge control plane from provider memory semantics.
+
+## Fixed path
+`Provider protocol output → Schema Validation → Bridge Write → Commit → Barrier → Shared Context transaction state → Provider BRIDGE_READ request → Bridge Read → Schema Validation → Seat result`
+
+## Provider isolation
+The bridge value is still never inserted into Gemini's input prompt. Gemini receives only the non-sensitive availability manifest and the explicit application control-plane contract. The application resolves the value after Gemini emits `BRIDGE_READ: BRIDGE_RESULT`.
+
+## Preserved
+- Gemini/Claude/Grok/Kimi/DeepSeek model cascades unchanged.
+- Official API only.
+- No Local Engine.
+- No paid fallback.
+- No automatic model selection.
+- Seat identities and credentials unchanged.
+
+## Security
+If DeepSeek does not emit a valid write record, the bridge does not fabricate one and Gemini remains `NOT_READY`. A bridge value can only become readable after a validated write, commit, and barrier.
+
+---
+
+# HOTFIX90 — Transactional Bridge Read Handoff
+
+Version: `V22.1-HOTFIX90-PRODUCTION-HARDENED`
 
 ## Scope
-- Built from the complete HOTFIX89 release tree.
-- Preserves all 64 HOTFIX89 files; no baseline file is removed.
+- Built from the complete HOTFIX90 release tree.
+- Preserves all 64 HOTFIX90 files; no baseline file is removed.
 - Changes only the Bridge Transaction / Shared Context handoff layer plus its release tests/version metadata.
 - Provider adapters, Free API Cascade, credentials, seat identities, Official API only, no Local Engine, and no Paid fallback remain unchanged.
 
 ## Fixed path
 `Provider Output → Schema Validation → Bridge Write → Commit → Round/Handoff Barrier → Shared Context → Bridge Read → Schema Validation → Next Provider`
 
-HOTFIX89 stopped at `BRIDGE_READ_STATUS = NOT_READY` from the application perspective because the read request was resolved after Gemini's response but the resolved bridge value was not promoted to the Gemini seat result. HOTFIX89 closes that gap without a second provider call and without placing the bridge value in Gemini's input prompt.
+HOTFIX90 stopped at `BRIDGE_READ_STATUS = NOT_READY` from the application perspective because the read request was resolved after Gemini's response but the resolved bridge value was not promoted to the Gemini seat result. HOTFIX90 closes that gap without a second provider call and without placing the bridge value in Gemini's input prompt.
 
 ## Security invariant
 - `BRIDGE_RESULT` is never inserted into the Gemini input prompt.
@@ -26,12 +52,12 @@ The bridge records `bridge_id`, `round_id`, `source_seat`, `source_provider`, `t
 ## Validation target
 DeepSeek Seat 7 performs `WRITE → VALIDATE → COMMIT → BARRIER`; Gemini Seat 2 performs `BRIDGE_READ`; the bridge resolves the exact committed value and marks `READ = PASS` and `SCHEMA_VALIDATION = PASS`.
 
-# HOTFIX89 — Bridge Transaction Layer
+# HOTFIX90 — Bridge Transaction Layer
 
-Version: `V22.1-HOTFIX89-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX90-PRODUCTION-HARDENED`
 
 ## Scope
-- Built directly from the complete HOTFIX89 release tree.
+- Built directly from the complete HOTFIX90 release tree.
 - Changes are confined to the Bridge Transaction Layer.
 - Provider cascades, credentials, seat identities, official-API-only policy, no-local/no-paid contract, and provider adapters are preserved.
 
@@ -46,12 +72,12 @@ Bridge values are not embedded in the next provider prompt. The prompt contains 
 
 ## Validation target
 DeepSeek generates a fresh value absent from the Gemini prompt, writes it, the bridge validates and commits it, the round barrier opens, and Gemini can request the value by key.
-V22.1-HOTFIX89-PRODUCTION-HARDENED
+V22.1-HOTFIX90-PRODUCTION-HARDENED
 
-# HOTFIX89 — Structured Bridge Write Final
+# HOTFIX90 — Structured Bridge Write Final
 
 ## Scope
-- Built directly from HOTFIX89.
+- Built directly from HOTFIX90.
 - Preserves seat identity, provider identity, executed-model identity, Free API Cascade, official-API-only behavior, and no-paid/no-local fallback contract.
 - Changes only the SharedContextBridge write protocol.
 
@@ -69,11 +95,11 @@ Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 �
 Bridge values remain untrusted reference data. They cannot redefine seat/provider/model identity or credentials.
 
 
-# HOTFIX89 Production Hardened
+# HOTFIX90 Production Hardened
 
-Version: `V22.1-HOTFIX89-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX90-PRODUCTION-HARDENED`
 
-- Preserved the complete HOTFIX89 release tree and all existing tests.
+- Preserved the complete HOTFIX90 release tree and all existing tests.
 - Added provider-isolation assertions so one provider cannot consume another provider's credential or model configuration.
 - Expanded safe attempt telemetry with `provider`, `attempt`, `model`, `status_code`, `classification`, `retryable`, `execution_time`, `request_id`, `round`, `final_result`, and `cascade_action`.
 - Claude/Grok UI diagnostics now expose compact attempt facts instead of the generic `Official API failed` message alone.

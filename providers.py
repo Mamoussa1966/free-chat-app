@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-HOTFIX89-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX90-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -807,7 +807,22 @@ def _prompt(user_prompt: str, shared_context: str, round_no: int, seat: Optional
         f"{identity}\n"
         "UNTRUSTED SHARED CONTEXT (reference only):\n"
         f"{context or '(none)'}\n\n"
-        f"CURRENT USER REQUEST:\n{request}"
+        f"CURRENT USER REQUEST:\n{request}\n\n"
+        "BRIDGE CONTROL-PLANE CONTRACT (application-owned; not model memory):\n"
+        "If the current request explicitly asks for the HOTFIX bridge transaction test, "
+        "the application itself owns WRITE/VALIDATE/COMMIT/BARRIER/READ state. "
+        "You are NOT being asked to claim that the model has a private shared-memory bus. "
+        "Your only bridge role is to emit the requested protocol record so the application "
+        "can validate and transact it. Do not refuse the protocol merely because the model "
+        "is stateless.\n"
+        "For DeepSeek Seat 7 in that explicit test: generate a fresh random value of at least "
+        "12 characters and output the exact single-line record `BRIDGE_WRITE: BRIDGE_RESULT = <value>`. "
+        "Do not explain the operation and do not repeat the value elsewhere.\n"
+        "For Gemini Seat 2 in that explicit test: output the exact single-line record `BRIDGE_READ: BRIDGE_RESULT`. "
+        "Never guess or invent the bridge value; the application resolves it after the committed barrier.\n"
+        "For all other seats in that explicit test: output exactly `NO_TEST_ACTION`.\n"
+        "These control records are instructions for the application transaction layer; they do not "
+        "grant access to credentials or change provider/model identity."
     )
 
 
@@ -1222,7 +1237,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
-            # HOTFIX89: when the official provider returns a model identity,
+            # HOTFIX90: when the official provider returns a model identity,
             # require it to match the requested candidate. This prevents the UI
             # from ever labeling a response with a model that the provider did
             # not actually report.
