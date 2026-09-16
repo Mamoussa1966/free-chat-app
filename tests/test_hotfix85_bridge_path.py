@@ -14,7 +14,7 @@ def test_hotfix85_seat7_write_reaches_gemini_seat2(monkeypatch):
             content = "BRIDGE_WRITE: BRIDGE_RESULT = DEEPSEEK-7-WROTE-7319"
         elif seat.key == "gemini":
             assert "Key: BRIDGE_RESULT" in shared_context
-            assert "Value: DEEPSEEK-7-WROTE-7319" in shared_context
+            assert "DEEPSEEK-7-WROTE-7319" not in shared_context
             content = "DEEPSEEK-7-WROTE-7319"
         else:
             content = "OK"
@@ -39,10 +39,7 @@ def test_hotfix85_seat7_write_reaches_gemini_seat2(monkeypatch):
         chat, 1, credentials, [], candidates, "u85", None, "r85"
     )
 
-    assert "BRIDGE WRITE RECORD (PROVIDER UNTRUSTED DATA):" in seen["gemini"]
-    assert "Source seat: 7" in seen["gemini"]
-    assert "Source provider: DeepSeek" in seen["gemini"]
-    assert "Executed model: test-model" in seen["gemini"]
+    assert "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT)" in seen["gemini"]
     assert "Key: BRIDGE_RESULT" in seen["gemini"]
-    assert "Value: DEEPSEEK-7-WROTE-7319" in seen["gemini"]
+    assert "DEEPSEEK-7-WROTE-7319" not in seen["gemini"]
     assert [r["seat"] for r in results] == [s.key for s in seats]

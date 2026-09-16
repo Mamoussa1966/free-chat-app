@@ -24,15 +24,13 @@ def test_history_attempt_summary_excludes_raw_provider_error():
         "error": raw,
         "retryable": True,
     }])
-    assert summaries[0]["attempt"] == 1
-    assert summaries[0]["model"] == "gemini-3.8-flash"
-    assert summaries[0]["status_code"] == 429
-    assert summaries[0]["classification"] == "QUOTA_EXCEEDED"
-    assert summaries[0]["retryable"] is True
-    assert "latency" in summaries[0]
-    assert "request_id" in summaries[0]
-    assert "round" in summaries[0]
-    assert "final_result" in summaries[0]
+    assert summaries == [{
+        "attempt": 1,
+        "model": "gemini-3.8-flash",
+        "status_code": 429,
+        "classification": "QUOTA_EXCEEDED",
+        "retryable": True,
+    }]
     assert raw not in str(summaries)
 
 
