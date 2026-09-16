@@ -50,6 +50,28 @@ class SharedContextBridge:
     def snapshot(self) -> str:
         return "\n\n".join(self._entries)[-self.max_chars:]
 
+    def append_user_declarations(self, user_prompt: str) -> None:
+        """Promote explicit BRIDGE_* assignments into bridge data.
+
+        This is intentionally narrow: only lines that explicitly assign a
+        BRIDGE_* key are accepted. The value is stored as untrusted reference
+        data; it is not treated as an instruction and never changes identity.
+        Do not use this mechanism for API keys, credentials, passwords, or real
+        secrets.
+        """
+        text = str(user_prompt or "")
+        pattern = re.compile(r"(?im)^\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*([^\r\n]+?)\s*$")
+        for match in pattern.finditer(text):
+            key = match.group(1).strip()
+            value = match.group(2).strip()
+            if not value or len(value) > 2000:
+                continue
+            self._entries.append(
+                "BRIDGE DECLARATION (USER-PROVIDED UNTRUSTED TEST DATA):\n"
+                f"Key: {key}\n"
+                f"Value: {value}"
+            )
+
     def append_agent_output(self, seat, result: dict) -> None:
         if str(result.get("status") or "").upper() != "SUCCESS":
             return
@@ -66,6 +88,21 @@ class SharedContextBridge:
             f"Executed model: {model}\n"
             f"Output:\n{content}"
         )
+        # Optional provider-to-provider write protocol. Providers may emit a
+        # single explicit line such as: BRIDGE_WRITE: BRIDGE_RESULT = value
+        # The bridge records it as data; it never interprets it as identity.
+        write_pattern = re.compile(r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*(.+?)\s*$")
+        for match in write_pattern.finditer(content):
+            key = match.group(1).strip()
+            value = match.group(2).strip()
+            if value and len(value) <= 2000:
+                self._entries.append(
+                    "BRIDGE WRITE (PROVIDER UNTRUSTED DATA):\n"
+                    f"Source seat: {room_slot}\n"
+                    f"Source provider: {provider}\n"
+                    f"Key: {key}\n"
+                    f"Value: {value}"
+                )
 
 
 def _now() -> str:
@@ -324,9 +361,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
     )
+    # HOTFIX84: explicit BRIDGE_* assignments in the current request become
+    # round-scoped bridge data before any provider is called. This makes a
+    # deliberate "save to Shared Context, then retrieve later" test real
+    # rather than relying on a model to echo the value in its answer.
+    bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX83: provider calls are intentionally ordered for the round-scoped
+    # HOTFIX84: provider calls are intentionally ordered for the round-scoped
     # bridge. Each successful provider output is appended before the next
     # provider is called, creating a real provider-to-provider context path.
     # The final return order remains the canonical room-seat order, so UI/history
