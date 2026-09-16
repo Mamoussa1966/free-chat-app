@@ -29,6 +29,24 @@ ERROR_DISPLAY_TTL_SECONDS = 60
 # UI-only classification: a latency cutoff is an internal transport event,
 # not a user-facing diagnosis of why a provider did not answer.
 PUBLIC_NO_RESPONSE = "NO_RESPONSE"
+BRIDGE_WRITE_PATTERN = re.compile(
+    r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*(.+?)\s*$"
+)
+
+
+def _extract_bridge_writes(content: str) -> list[tuple[str, str]]:
+    """Extract only explicit provider bridge-write records.
+
+    This parser is intentionally provider-agnostic and has no authority over
+    identity, credentials, model selection, or execution policy.
+    """
+    writes: list[tuple[str, str]] = []
+    for match in BRIDGE_WRITE_PATTERN.finditer(str(content or "")):
+        key = match.group(1).strip()
+        value = match.group(2).strip()
+        if value and len(value) <= 2000:
+            writes.append((key, value))
+    return writes
 
 
 class SharedContextBridge:
@@ -88,21 +106,19 @@ class SharedContextBridge:
             f"Executed model: {model}\n"
             f"Output:\n{content}"
         )
-        # Optional provider-to-provider write protocol. Providers may emit a
-        # single explicit line such as: BRIDGE_WRITE: BRIDGE_RESULT = value
-        # The bridge records it as data; it never interprets it as identity.
-        write_pattern = re.compile(r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*(.+?)\s*$")
-        for match in write_pattern.finditer(content):
-            key = match.group(1).strip()
-            value = match.group(2).strip()
-            if value and len(value) <= 2000:
-                self._entries.append(
-                    "BRIDGE WRITE (PROVIDER UNTRUSTED DATA):\n"
-                    f"Source seat: {room_slot}\n"
-                    f"Source provider: {provider}\n"
-                    f"Key: {key}\n"
-                    f"Value: {value}"
-                )
+        # HOTFIX85: structured provider-to-provider write protocol. The
+        # protocol is parsed once at the bridge boundary, normalized into a
+        # dedicated record, and then exposed to later providers as data.
+        # It never changes identity, credentials, model selection, or policy.
+        for key, value in _extract_bridge_writes(content):
+            self._entries.append(
+                "BRIDGE WRITE RECORD (PROVIDER UNTRUSTED DATA):\n"
+                f"Source seat: {room_slot}\n"
+                f"Source provider: {provider}\n"
+                f"Executed model: {model}\n"
+                f"Key: {key}\n"
+                f"Value: {value}"
+            )
 
 
 def _now() -> str:
@@ -361,14 +377,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
     )
-    # HOTFIX84: explicit BRIDGE_* assignments in the current request become
+    # HOTFIX85: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX84: provider calls are intentionally ordered for the round-scoped
+    # HOTFIX85: provider calls are intentionally ordered for the round-scoped
     # bridge. Each successful provider output is appended before the next
     # provider is called, creating a real provider-to-provider context path.
     # The final return order remains the canonical room-seat order, so UI/history
