@@ -263,5 +263,3 @@ class ApprovalSystem:
             return False
         proposal.state = ProposalState.APPROVED
         return True
-
-

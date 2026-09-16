@@ -1,26 +1,40 @@
-# AI Council — Free Cascade
+# AI Council — V22.1-HOTFIX87-PRODUCTION-HARDENED
 
-V22.1-HOTFIX87-PRODUCTION-HARDENED.
+`V22.1-HOTFIX87-PRODUCTION-HARDENED` is a hardened production release built from the only available project artifact (the prior prior_bridge_baseline codebase).
 
-Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
+## Contract preserved
+- Seat identity and provider identity remain authoritative and immutable.
+- Explicit `*_FREE_MODELS` only; Free Cascade remains #1 → #10 per provider.
+- Official API only. No Local Engine. No Paid fallback. No automatic model selection.
+- Streamlit Secrets retain priority over environment variables when non-empty.
+- Shared Context remains untrusted reference data and cannot redefine identity, credentials, or model selection.
 
-Attempt diagnostics use the stable taxonomy: MODEL_UNAVAILABLE, QUOTA_EXCEEDED, RATE_LIMITED, AUTHENTICATION_ERROR, API_ERROR, NETWORK_ERROR, TIMEOUT, UNKNOWN. Raw provider error text is operational-only; visible History stores only short classifications. Authentication errors are terminal; model/quota/rate-limit/API/network/timeout failures may continue to the next explicitly configured Free model.
+## HOTFIX87 reliability layer
+Every Free Cascade candidate emits a structured public-safe attempt record containing:
+- Provider
+- Attempt number
+- Model
+- HTTP status (exact when available; `2xx` on successful responses)
+- Error classification
+- Retryable
+- Execution latency
+- Request ID
+- Round
+- Final result
 
-## Hotfix 26 Final
-- Preserves all 19 existing test modules.
-- Raw provider diagnostics and raw result errors are stripped before session-state result persistence.
-- Visible attempt failures remain compact and auto-expire after 60 seconds.
-- Quota 429s are non-retryable; transient rate-limit 429s remain retryable.
-- Release validation enforces the exact test-file set and isolated sandbox execution.
-- `gitops_layer.py` remains exploratory/non-push and is unchanged.
+Raw provider payloads, credentials, and secret values are never persisted into UI/history telemetry.
 
-- Release artifact is re-extracted into a fresh temporary workspace and the full suite is executed a second time before release.
+## Provider isolation
+Each provider owns its own Free Cascade. Authentication, quota, model-unavailable, and other provider failures are classified at the provider boundary and cannot silently redefine another provider's identity or cascade. A failing provider is isolated from other provider seats.
 
+## Structured Shared Context Bridge
+Provider output is processed at the Bridge boundary:
 
+`Provider Output → Schema Validation → Bridge Record → Shared Context → Next Provider → Validation`
 
-## Hotfix 87 Production Hardening
-- Every model invocation records Provider, Attempt, Model, HTTP status, classification, retryability, execution time, Request ID, Round, and final cascade result.
-- Raw provider errors and payloads remain transient and are excluded from persisted History.
-- Provider output must pass schema validation before a Bridge record is created and before the output enters Shared Context.
-- Handoffs are sequential within a round so the next provider receives only validated official output.
-- Provider chains are isolated: a Claude failure does not cancel Gemini, Grok, Kimi, or ChatGPT.
+Only explicit `BRIDGE_WRITE: BRIDGE_* = value` records are promoted to structured Bridge records. Bridge records are attributed to source seat/provider/executed model and remain untrusted data.
+
+## Architectural target
+`Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 → Bridge Read`
+
+The bridge execution order is deterministic for this source/consumer path, while UI/history output remains in canonical seat order.

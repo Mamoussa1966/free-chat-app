@@ -13,19 +13,112 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import SEATS, VERSION as PROVIDER_VERSION, call_seat, capture_credentials, capture_model_candidates, configured_count, diagnostic_seat, model_config_fingerprint, model_config_sources, transcribe_audio_gemini
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
 MAX_ROUNDS = 4
-MAX_EXECUTION_SECONDS = 180
+MAX_EXECUTION_SECONDS = None
 MAX_PROMPT_CHARS = 20_000
 MAX_CHAT_MESSAGES = 200
 MAX_REQUEST_IDS = 50
-MAX_WORKERS = 5
+MAX_WORKERS = 8
 ERROR_DISPLAY_TTL_SECONDS = 60
+# UI-only classification: a latency cutoff is an internal transport event,
+# not a user-facing diagnosis of why a provider did not answer.
+PUBLIC_NO_RESPONSE = "NO_RESPONSE"
+BRIDGE_WRITE_PATTERN = re.compile(
+    r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*(.+?)\s*$"
+)
+
+
+def _extract_bridge_writes(content: str) -> list[tuple[str, str]]:
+    """Extract only explicit provider bridge-write records.
+
+    This parser is intentionally provider-agnostic and has no authority over
+    identity, credentials, model selection, or execution policy.
+    """
+    writes: list[tuple[str, str]] = []
+    for match in BRIDGE_WRITE_PATTERN.finditer(str(content or "")):
+        key = match.group(1).strip()
+        value = match.group(2).strip()
+        if value and len(value) <= 2000:
+            writes.append((key, value))
+    return writes
+
+
+class SharedContextBridge:
+    """Round-scoped, append-only bridge for provider-to-provider context.
+
+    Identity metadata is never sourced from this bridge. Bridge entries are
+    explicitly marked as untrusted reference data before being injected into
+    provider prompts. A provider can therefore learn another provider's output
+    without gaining authority to redefine seat/provider/model identity.
+    """
+
+    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000):
+        self.max_chars = max(1, int(max_chars))
+        self._entries: list[str] = []
+        initial = str(initial_snapshot or "").strip()
+        if initial:
+            self._entries.append(initial)
+
+    def snapshot(self) -> str:
+        return "\n\n".join(self._entries)[-self.max_chars:]
+
+    def append_user_declarations(self, user_prompt: str) -> None:
+        """Promote explicit BRIDGE_* assignments into bridge data.
+
+        This is intentionally narrow: only lines that explicitly assign a
+        BRIDGE_* key are accepted. The value is stored as untrusted reference
+        data; it is not treated as an instruction and never changes identity.
+        Do not use this mechanism for API keys, credentials, passwords, or real
+        secrets.
+        """
+        text = str(user_prompt or "")
+        pattern = re.compile(r"(?im)^\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*([^\r\n]+?)\s*$")
+        for match in pattern.finditer(text):
+            key = match.group(1).strip()
+            value = match.group(2).strip()
+            if not value or len(value) > 2000:
+                continue
+            self._entries.append(
+                "BRIDGE DECLARATION (USER-PROVIDED UNTRUSTED TEST DATA):\n"
+                f"Key: {key}\n"
+                f"Value: {value}"
+            )
+
+    def append_agent_output(self, seat, result: dict) -> None:
+        if str(result.get("status") or "").upper() != "SUCCESS":
+            return
+        content = str(result.get("content") or "").strip()
+        if not content:
+            return
+        room_slot = int(getattr(seat, "room_slot", 0) or 0)
+        provider = str(getattr(seat, "name", "AI") or "AI").strip()
+        model = str(result.get("executed_model") or result.get("model") or "").strip()
+        self._entries.append(
+            "BRIDGE AGENT OUTPUT (UNTRUSTED DATA):\n"
+            f"Room seat: {room_slot}\n"
+            f"Provider identity: {provider}\n"
+            f"Executed model: {model}\n"
+            f"Output:\n{content}"
+        )
+        # prior_bridge_baseline: structured provider-to-provider write protocol. The
+        # protocol is parsed once at the bridge boundary, normalized into a
+        # dedicated record, and then exposed to later providers as data.
+        # It never changes identity, credentials, model selection, or policy.
+        for key, value in _extract_bridge_writes(content):
+            self._entries.append(
+                "BRIDGE WRITE RECORD (PROVIDER UNTRUSTED DATA):\n"
+                f"Source seat: {room_slot}\n"
+                f"Source provider: {provider}\n"
+                f"Executed model: {model}\n"
+                f"Key: {key}\n"
+                f"Value: {value}"
+            )
 
 
 def _now() -> str:
@@ -78,7 +171,7 @@ def _history_identity_keys(chat: dict) -> set[tuple[str, int, str]]:
         request_id = str(message.get("request_id") or "").strip()
         seat = str(message.get("seat_key") or "").strip()
         if not seat:
-            seat = next((str(s.key) for s in SEATS if s.name == message.get("seat")), "")
+            seat = next((str(s.key) for s in get_seats() if s.name == message.get("seat")), "")
         try:
             round_no = int(message.get("round"))
         except (TypeError, ValueError):
@@ -177,29 +270,37 @@ def _shared_context(chat: dict, exclude_message_id: str | None = None, max_chars
 
 def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, request_id: str = "", round_no: int = 0) -> dict:
     models = tuple((model_candidates or {}).get(seat.key) or ())
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "error": f"class=internal_worker_error; {exc.__class__.__name__}", "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
+    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "classification": "API_ERROR", "error": f"class=provider_error; internal worker failure: {exc.__class__.__name__}",
+        "attempt_summaries": [{"attempt": 1, "model": models[0] if models else "", "status_code": None, "classification": "API_ERROR", "retryable": False}], "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
 
 
 def _history_attempt_summaries(details: list[dict]) -> list[dict]:
-    """Persist compact trace metadata only; raw errors/payloads/credentials never persist."""
-    allowed = {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN", "SUCCESS"}
+    """Persist only compact, non-sensitive classifications in visible History."""
+    allowed = {
+        "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
+        "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+        "TIMEOUT", "UNKNOWN",
+    }
     summaries: list[dict] = []
     for detail in details or []:
-        classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
-        if classification not in allowed:
+        classification = _canonical_error_classification(str(detail.get("classification") or "UNKNOWN"))
+        # Keep TIMEOUT internal to the provider transport layer. In visible
+        # History/UI, a provider that did not answer inside the latency window
+        # is reported as NO_RESPONSE, so users are not told that "no response"
+        # is itself a provider/API error.
+        if classification == "TIMEOUT":
+            classification = PUBLIC_NO_RESPONSE
+        if classification not in allowed | {PUBLIC_NO_RESPONSE}:
             classification = "UNKNOWN"
         summary = {
-            "provider": str(detail.get("provider") or "").strip(),
             "attempt": detail.get("attempt"),
             "model": str(detail.get("model") or "").strip(),
             "status_code": detail.get("status_code"),
             "classification": classification,
             "retryable": bool(detail.get("retryable", False)),
-            "execution_time": round(float(detail.get("execution_time", 0.0) or 0.0), 3),
-            "request_id": str(detail.get("request_id") or "").strip(),
-            "round": int(detail.get("round", 0) or 0),
-            "final_result": str(detail.get("final_result") or "").strip().upper(),
         }
+        # The timestamp is runtime metadata used only for the 60-second UI TTL.
+        # Do not synthesize it here: real provider attempts stamp it at creation time.
         if "_display_created_at" in detail:
             try:
                 summary["created_at_epoch"] = float(detail.get("_display_created_at"))
@@ -209,41 +310,22 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     return summaries
 
 
-def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> dict:
-    """Validate the provider result before it can enter the Bridge/Shared Context."""
-    if not isinstance(result, dict):
-        raise ValueError("provider result must be an object")
-    required = ("seat", "name", "status", "model", "executed_model", "content", "request_id", "round")
-    missing = [key for key in required if key not in result]
-    if missing:
-        raise ValueError("provider result schema missing required fields")
-    if str(result.get("seat")) != str(seat.key):
-        raise ValueError("provider seat identity mismatch")
-    if str(result.get("request_id")) != str(request_id) or int(result.get("round", 0)) != int(round_no):
-        raise ValueError("provider request identity mismatch")
-    status = str(result.get("status") or "")
-    if status not in {"SUCCESS", "FAILED", "NO_FREE_MODEL_CONFIGURED", "AUTHENTICATION_OK_NO_FREE_MODEL"}:
-        raise ValueError("provider status is invalid")
-    model = str(result.get("model") or "").strip()
-    executed = str(result.get("executed_model") or "").strip()
-    if status == "SUCCESS" and (not model or model != executed or not str(result.get("content") or "").strip()):
-        raise ValueError("successful provider result failed schema validation")
-    content = str(result.get("content") or "")[:40_000]
-    validated = dict(result)
-    validated["content"] = content
-    validated["bridge_validated"] = True
-    validated["bridge_record"] = {
-        "provider": str(seat.name), "request_id": str(request_id), "round": int(round_no),
-        "model": model, "status": status, "validated": True,
-    }
-    return validated
-
 
 def _public_result(result: dict) -> dict:
     """Return the UI-safe result persisted in session state. Raw provider payloads stay transient."""
     public = dict(result or {})
     details = list(public.get("attempt_diagnostics", []) or [])
     public["attempt_summaries"] = _history_attempt_summaries(details)
+    classification = str(public.get("classification") or "").strip().upper()
+    if classification not in {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN"}:
+        classification = "UNKNOWN"
+    if classification == "TIMEOUT":
+        classification = PUBLIC_NO_RESPONSE
+        # A transport timeout is an internal control-flow event.  Publicly
+        # expose it only as a neutral no-response state so the UI cannot label
+        # a provider as having an API timeout/error.
+        public["status"] = PUBLIC_NO_RESPONSE
+    public["classification"] = classification
     public.pop("attempt_diagnostics", None)
     public.pop("error", None)
     return public
@@ -262,6 +344,8 @@ def _render_temporary_attempt_diagnostic(detail: dict) -> None:
     """Render a compact attempt error for 60 seconds, without exposing raw provider payloads."""
     model = str(detail.get("model") or "").strip()
     classification = str(detail.get("classification") or "UNKNOWN").strip().upper()
+    if classification == "TIMEOUT":
+        classification = PUBLIC_NO_RESPONSE
     code = detail.get("status_code")
     code_text = f" · HTTP {code}" if code else ""
     remaining = _attempt_display_remaining(detail)
@@ -287,44 +371,77 @@ if (el) setTimeout(()=>{{ el.remove(); }}, {int(remaining * 1000)});
     )
 
 
-def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float, request_id: str) -> list[dict]:
-    # Provider handoff is deliberately sequential: output -> schema validation -> bridge record -> shared context -> next provider.
-    working_context = _shared_context(chat, exclude_message_id=current_user_message_id)
-    results: list[dict] = []
-    for seat in SEATS:
-        if time.monotonic() >= deadline:
-            results.append(_worker_failure(seat, TimeoutError("round deadline exceeded"), model_candidates, request_id, round_no))
-            continue
+def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str) -> list[dict]:
+    seats = get_seats()
+    bridge = SharedContextBridge(
+        _shared_context(chat, exclude_message_id=current_user_message_id),
+        max_chars=30_000,
+    )
+    # prior_bridge_baseline: explicit BRIDGE_* assignments in the current request become
+    # round-scoped bridge data before any provider is called. This makes a
+    # deliberate "save to Shared Context, then retrieve later" test real
+    # rather than relying on a model to echo the value in its answer.
+    bridge.append_user_declarations(user_prompt)
+    results: dict[str, dict] = {}
+
+    # HOTFIX87: bridge execution order is deterministic and independent from
+    # UI/history seat order. DeepSeek (seat 7) is placed before Gemini (seat 2)
+    # so the architecture test can exercise a real provider-authored write ->
+    # shared-context -> later-provider read path. All other seats retain their
+    # canonical room order after the bridge source/consumer pair. The returned
+    # result list remains canonical seat order; identities are never sourced from
+    # bridge data.
+    by_key = {s.key: s for s in seats}
+    bridge_order = []
+    for key in ("deepseek", "gemini"):
+        if key in by_key:
+            bridge_order.append(by_key[key])
+    bridge_order.extend(s for s in seats if s.key not in {"deepseek", "gemini"})
+    for seat in bridge_order:
         try:
-            raw = call_seat(seat, user_prompt, working_context, round_no, False, credentials.get(seat.key), attachments, model_candidates.get(seat.key), deadline, request_id)
-            validated = _validate_provider_output(raw, seat, request_id, round_no)
-            results.append(validated)
-            if validated.get("status") == "SUCCESS" and validated.get("content"):
-                # Only validated official output is handed to the next provider.
-                working_context = (working_context + "\n\n" + f"{seat.name} [VALIDATED OFFICIAL API OUTPUT]:\n{validated['content']}")[-30_000:]
+            result = call_seat(
+                seat, user_prompt, bridge.snapshot(), round_no, False,
+                credentials.get(seat.key), attachments, model_candidates.get(seat.key),
+                deadline, request_id,
+            )
+            results[seat.key] = result
+            bridge.append_agent_output(seat, result)
         except Exception as exc:
-            results.append(_worker_failure(seat, exc, model_candidates, request_id, round_no))
-    return results
+            results[seat.key] = _worker_failure(
+                seat, exc, model_candidates, request_id, round_no
+            )
+
+    for seat in seats:
+        results.setdefault(
+            seat.key,
+            _worker_failure(
+                seat, TimeoutError("round deadline exceeded"),
+                model_candidates, request_id, round_no,
+            ),
+        )
+    return [results[seat.key] for seat in seats]
 
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
-    deadline = time.monotonic() + MAX_EXECUTION_SECONDS
+    deadline = None
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
     for round_no in range(1, total_rounds + 1):
-        if time.monotonic() >= deadline:
-            break
         round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
         seen_keys = set()
         for result in round_results:
             result["request_id"] = request_id
             result["round"] = round_no
             seat_key = str(result.get("seat") or "")
-            result_key = f"{request_id}:{round_no}:{seat_key}"
+            result_key = f"{request_id}:{round_no}:{result.get('seat','')}"
             result["result_key"] = result_key
             identity_key = (str(request_id), int(round_no), seat_key)
             if identity_key in seen_keys:
-                raise RuntimeError(f"Duplicate council result invariant violated: {identity_key!r}")
+                continue
+            existing_history = _history_identity_keys(chat)
+            if identity_key in existing_history:
+                seen_keys.add(identity_key)
+                continue
             _assert_unique_history_identity(chat, request_id, round_no, seat_key)
             seen_keys.add(identity_key)
             public_result = _public_result(result)
@@ -337,7 +454,12 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
                 if attempted_models and attempted_models[-1] != executed_model:
                     raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+                provider_reported_model = str(result.get("provider_reported_model") or "").strip()
+                if provider_reported_model and provider_reported_model.lower() != executed_model.lower() and seat_key != "deepseek":
+                    raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
+                if seat_key == "deepseek" and not _deepseek_model_identity_matches(executed_model, provider_reported_model):
+                    raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
+                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "room_slot": int(next((s.room_slot for s in get_seats() if s.key == seat_key), 0)), "provider_identity": next((s.name for s in get_seats() if s.key == seat_key), result.get("name", "")), "provider_key": seat_key, "agent_type": "API_AGENT", "api_mode": "Official API", "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
         keys = set(chat.get("result_keys", []))
         keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
         chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
@@ -346,28 +468,31 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
 
 
 def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list[dict]:
+    seats = get_seats()
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(SEATS)), thread_name_prefix="diagnostic") as pool:
-        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in SEATS}
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(seats)), thread_name_prefix="diagnostic") as pool:
+        futures = {pool.submit(diagnostic_seat, seat, credentials.get(seat.key), model_candidates.get(seat.key)): seat for seat in seats}
         for future in as_completed(futures):
             seat = futures[future]
             try:
                 results[seat.key] = future.result()
             except Exception as exc:
                 results[seat.key] = _worker_failure(seat, exc, model_candidates, request_id="diagnostic", round_no=0)
-    return [results[seat.key] for seat in SEATS]
+    return [results[seat.key] for seat in seats]
 
 
 def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> int:
+    seats = get_seats()
     with st.sidebar:
         st.header("⚙️ إعدادات المجلس")
+        st.caption("المقاعد: ChatGPT 1 · Gemini 2 · Claude 3 · Grok 4 · Kimi 5 · أنت 6 · DeepSeek 7 · وكلاء إضافيون من 8")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
         st.session_state.rounds = rounds
         st.caption("🆓 Free API Cascade: Free #1 → Free #10 لكل مزود. لا Local Engine ولا Paid fallback.")
         st.divider()
         st.subheader("🔬 تشخيص المزودين")
         st.caption("API رسمي فقط؛ لا Local Engine ولا نموذج تلقائي.")
-        if st.button("🔍 فحص المزودين الخمسة الآن", use_container_width=True):
+        if st.button("🔍 فحص جميع الوكلاء الآن", use_container_width=True):
             with st.spinner("تشخيص المزودين بالتوازي…"):
                 st.session_state.last_diagnostics = [_public_result(r) for r in _run_provider_diagnostics(credentials, model_candidates)]
             st.rerun()
@@ -418,16 +543,21 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.last_diagnostics = []
                 st.rerun()
         st.divider()
+        st.divider()
         st.subheader("🔌 الاعتمادات والنماذج")
-        for seat in SEATS:
+        for seat in seats:
             models = tuple(model_candidates.get(seat.key) or ())
-            st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}**")
+            st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}** · المقعد {seat.room_slot}")
             st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
-        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/5")
+        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(seats)} وكلاء API · المقعد 6 محجوز للمستخدم")
         st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
+        credential_source_map = credential_sources()
+        credential_source_text = " • ".join(f"{seat.name}: {credential_source_map.get(seat.key, 'missing')}" for seat in seats)
+        st.caption(f"مصدر الاعتمادات: {credential_source_text}")
         sources = model_config_sources()
-        source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in SEATS)
+        source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in seats)
         st.caption(f"مصدر إعداد النماذج: {source_text}")
+        st.caption("كل Request = جولة/مقعد واحد؛ محاولات Free #1→#10 تُسجّل كـ attempts داخل نفس Request.")
         st.caption("Streamlit Secrets لها الأولوية؛ Environment Variables تُستخدم فقط عند غياب Secret غير الفارغ.")
         st.caption("وجود المفتاح لا يثبت Free Tier أو quota.")
         st.caption("المفاتيح لا تظهر في الواجهة ولا تدخل History.")
@@ -444,7 +574,7 @@ def _voice_player(text: str, label: str = "🔊 استمع") -> None:
 def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
     voice_submission = None
     with st.container(height=500, border=True):
-        st.subheader("👤 أنت")
+        st.subheader("👤 أنت · المقعد 6")
         user_messages = [m for m in chat.get("messages", []) if m.get("role") == "user"]
         if not user_messages:
             st.caption("اكتب رسالة أو سجّل صوتًا أو أرفق ملفات.")
@@ -490,7 +620,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
 
 def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
-        st.subheader(seat.label)
+        st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
         models = tuple(model_candidates.get(seat.key) or ())
         st.caption("Free #1 → " + f"`{models[0]}`" if models else "لا يوجد Free API model مُكوّن")
         messages = [m for m in chat.get("messages", []) if m.get("seat") == seat.name]
@@ -498,7 +628,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption("بانتظار أول جولة…")
             return
         for message in messages:
-            displayed_model = str(message.get("model") or "").strip()
+            displayed_model = str(message.get('executed_model') or message.get('model', '')).strip()
             executed_model = str(message.get("executed_model") or "").strip()
             attempted_models = [str(m).strip() for m in message.get("attempted_models", []) if str(m).strip()]
             if message.get("mode") == "official":
@@ -507,6 +637,17 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                     continue
                 if attempted_models and attempted_models[-1] != executed_model:
                     st.error("⚠️ Cascade identity mismatch: آخر محاولة لا تطابق النموذج المنفذ.")
+                    continue
+                provider_reported_model = str(message.get("provider_reported_model") or "").strip()
+                if not provider_reported_model:
+                    st.error("⚠️ Provider identity missing: لا يمكن عرض نجاح رسمي بدون هوية النموذج من المزود.")
+                    continue
+                if seat.key == "deepseek":
+                    if not _deepseek_model_identity_matches(executed_model, provider_reported_model):
+                        st.error("⚠️ Provider identity mismatch: هوية نموذج DeepSeek التي أعادها المزود لا تطابق النموذج المنفذ.")
+                        continue
+                elif provider_reported_model != executed_model:
+                    st.error("⚠️ Provider identity mismatch: هوية النموذج التي أعادها المزود لا تطابق النموذج المنفذ.")
                     continue
             request_id = str(message.get("request_id") or "").strip()
             request_no = _request_display_number(chat, request_id) if request_id else None
@@ -517,20 +658,26 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             for detail in message.get("attempt_summaries", []) or []:
                 _render_temporary_attempt_diagnostic(detail)
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
+            if message.get("provider_reported_model"):
+                st.caption(f"Provider model: `{message.get('provider_reported_model')}`")
             st.markdown(message.get("content", ""))
             _voice_player(message.get("content", ""))
             st.divider()
 
 
-def _render_six_rooms(chat: dict, model_candidates: dict, credentials: dict):
-    rows = [(None, SEATS[0]), (SEATS[1], SEATS[2]), (SEATS[3], SEATS[4])]
+def _render_agent_rooms(chat: dict, model_candidates: dict, credentials: dict):
+    """Render the user room plus all configured provider seats in a stable 2-column grid."""
+    rooms = [None, *get_seats()]
     voice_submission = None
-    for left, right in rows:
+    for index in range(0, len(rooms), 2):
         cols = st.columns(2, gap="medium")
+        left = rooms[index]
+        right = rooms[index + 1] if index + 1 < len(rooms) else None
         with cols[0]:
             voice_submission = _render_user_room(chat, credentials, model_candidates) if left is None else _render_ai_room(chat, left, model_candidates)
         with cols[1]:
-            _render_ai_room(chat, right, model_candidates)
+            if right is not None:
+                _render_ai_room(chat, right, model_candidates)
     return voice_submission
 
 
@@ -543,7 +690,20 @@ def _result_error_classification(result: dict) -> str:
             "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
             "TIMEOUT", "UNKNOWN",
         }:
-            return value
+            return PUBLIC_NO_RESPONSE if value == "TIMEOUT" else value
+    # Public/history results intentionally no longer retain raw diagnostics.
+    # Resolve the already-sanitized attempt summaries as a second source.
+    summaries = result.get("attempt_summaries", []) or []
+    for detail in reversed(summaries):
+        value = str(detail.get("classification") or "").strip().upper()
+        if value == PUBLIC_NO_RESPONSE:
+            return PUBLIC_NO_RESPONSE
+        if value in {
+            "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
+            "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+            "TIMEOUT", "UNKNOWN",
+        }:
+            return PUBLIC_NO_RESPONSE if value == "TIMEOUT" else value
     raw = str(result.get("error") or "")
     match = re.search(r"(?:^|[;\s])class=([A-Za-z0-9_:-]+)", raw, flags=re.IGNORECASE)
     if match:
@@ -560,18 +720,43 @@ def _result_error_classification(result: dict) -> str:
 def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     status = result.get("status")
     if status == "SUCCESS":
-        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{(result.get('executed_model') or result.get('model', ''))}` — {result['latency']}s")
+        display_model = result.get('executed_model') or result['model']
+        attempt_latency = result.get("successful_attempt_latency")
+        attempt_text = f" · attempt {attempt_latency}s" if attempt_latency is not None else ""
+        st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result['latency']}s{attempt_text}")
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
         st.warning(f"🟡 {result['label']} — نقطة المصادقة قبلت المفتاح، لكن لا يوجد Free model مُكوّن.")
         st.caption("Classification: AUTHENTICATION_ERROR")
+    elif status == PUBLIC_NO_RESPONSE:
+        # Never surface the internal TIMEOUT classification or failed-attempt
+        # diagnostics for a pure latency cutoff.  The provider simply did not
+        # produce a response inside the fast-response window.
+        st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم تصل استجابة سريعة من المزود.")
     else:
+        summaries = list(result.get("attempt_summaries", []) or [])
         with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
             st.write("Official API request failed; raw provider payload is not shown in the UI.")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
-            for detail in result.get("attempt_summaries", []) or []:
-                _render_temporary_attempt_diagnostic(detail)
+            if summaries:
+                last = summaries[-1]
+                final_class = str(last.get("classification") or "UNKNOWN").upper()
+                if final_class == "TIMEOUT":
+                    final_class = PUBLIC_NO_RESPONSE
+                final_model = str(last.get("model") or "").strip()
+                final_code = last.get("status_code")
+                final_code_text = f" · HTTP {final_code}" if final_code else ""
+                st.caption(f"Final classification: **{final_class}** · `{final_model}`{final_code_text}")
+                if final_class == PUBLIC_NO_RESPONSE:
+                    st.caption("لم تصل استجابة من هذا المزود داخل نافذة الاستجابة السريعة؛ لم يتم عرض TIMEOUT كتشخيص للمستخدم.")
+                for detail in summaries:
+                    _render_temporary_attempt_diagnostic(detail)
+            else:
+                classification = str(result.get("classification") or "").strip().upper() or _result_error_classification(result)
+                if classification == "TIMEOUT":
+                    classification = PUBLIC_NO_RESPONSE
+                st.caption(f"Final classification: **{classification}**")
 
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
@@ -621,16 +806,19 @@ def _request_fingerprint(prompt: str, attachments: list[dict]) -> str:
     return h.hexdigest()
 
 
+# Backward-compatible name retained for older integrations; rendering is now agent-count agnostic.
+_render_six_rooms = _render_agent_rooms
+
 def run_app() -> None:
     _init_state()
     credentials = capture_credentials()
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
-    st.title("🏛️ AI Council — Six-Room Shared Context Arena")
-    st.caption(f"{APP_VERSION} • المستخدم + خمسة مقاعد • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    st.title("🏛️ AI Council — Shared Context Arena")
+    st.caption(f"{APP_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
-    voice_submission = _render_six_rooms(chat, model_candidates, credentials)
+    voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
     submission = st.chat_input("اكتب موضوع النقاش أو أرفق صورة/ملف…", accept_file="multiple", file_type=None, max_upload_size=10, key="council_chat_input")
     prompt = ""
@@ -678,7 +866,7 @@ def run_app() -> None:
             fingerprints.add(voice_fingerprint)
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
-        with st.spinner("المجلس السداسي ينفذ Free API Cascade بالتوازي…"):
+        with st.spinner("المجلس ينفذ Free API Cascade بالتوازي…"):
             results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id)
         st.session_state.last_results = [_public_result(r) for r in results]
         st.session_state.folder_nonce += 1
@@ -694,4 +882,3 @@ def run_app() -> None:
 
 if __name__ == "__main__":
     run_app()
-

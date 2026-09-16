@@ -167,4 +167,3 @@ def attachment_summary(attachments: list[dict], max_chars: int = MAX_TEXT_CHARS)
 
 def public_metadata(attachments: list[dict]) -> list[dict]:
     return [{"name": a.get("name"), "mime": a.get("mime"), "size": a.get("size", 0), "sha256": a.get("sha256", "")} for a in attachments]
-
