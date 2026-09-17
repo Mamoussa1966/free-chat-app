@@ -1,19 +1,21 @@
-# V22.1-HOTFIX98-PRODUCTION-HARDENED
+# V22.1-HOTFIX99-PRODUCTION-HARDENED
 
-## HOTFIX98 — Clean Release Tree / Production Core Continuity
+## HOTFIX99 — Clean Production Release / Full Test-Passing Build
 
-HOTFIX98 is rebuilt directly from the verified previous verified artifact as a clean, deterministic release tree. The previous verified artifact contains exactly 75 files (excluding the two directory entries) and includes `.streamlit/secrets.toml.example`.
+HOTFIX99 is rebuilt from the verified clean Production-Hardened release tree.
 
-### Scope
-- Preserve the complete verified previous file tree; no historical files are imported from the deployment workspace.
-- Preserve the full retained test suite and its exact test-file set.
-- Advance the canonical release identity to HOTFIX98 across the current production metadata.
-- Keep Production Core, Request Lifecycle, Provider Execution Contract, Free Cascade #1→#10, actual-model attestation, false-success protection, Shared Context / Transaction Guard, and secret redaction unchanged in behavior.
-- No Local Engine, no Paid fallback, no implicit model discovery, and Official API only.
-- Runtime secrets remain excluded; `.streamlit/secrets.toml.example` is included as a regular release file.
+### Release guarantees
+- Version identity is consistently HOTFIX99 across production metadata and runtime surfaces.
+- Official API only.
+- Explicit `*_FREE_MODELS` only; no implicit model discovery.
+- Free Cascade remains strictly sequential, bounded to ten candidates per provider.
+- No Local Engine.
+- No Paid fallback.
+- Actual executed model identity remains authoritative and attested.
+- Shared Context / transaction barriers remain fail-closed.
+- Secret redaction and compact public diagnostics remain enabled.
+- `.streamlit/secrets.toml.example` is preserved while real secrets are excluded.
+- All existing test modules are preserved.
 
-### Clean-tree deployment contract
-The ZIP is the canonical HOTFIX98 artifact. Deployment must use this exact ZIP/tree rather than merging files into an existing checkout. A mixed runtime tree is not part of the artifact and must not be used as release evidence.
-
-### Verification
-Release acceptance requires source compilation, the Production Core harness PASS result, the complete pytest suite PASS result, ZIP structural validation, exact test-set preservation, and a second full-suite run from the extracted ZIP.
+### Validation
+The release builder runs the Production Core harness, the complete pytest suite, packages the exact tree, checks the ZIP manifest, and re-extracts/re-runs the suite from the resulting artifact.
