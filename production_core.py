@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""HOTFIX92 Production Core.
+"""HOTFIX93 Production Core.
 
 Pure orchestration contracts.  This module contains no provider SDKs and never
 accepts or stores credential values.  Provider adapters remain responsible for
@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
-VERSION = "V22.1-HOTFIX92-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX93-PRODUCTION-HARDENED"
 FREE_CASCADE_MAX = 10
 
 
@@ -58,7 +58,8 @@ FAILURE_CLASSES = {
 }
 
 _REDACT_PATTERNS = (
-    re.compile(r"(?i)(api[_ -]?key|authorization|bearer|x-api-key|x-goog-api-key)\s*[:=]\s*[^\s,;]+"),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._-]+"),
+    re.compile(r"(?i)(api[_ -]?key|authorization|x-api-key|x-goog-api-key)\s*[:=]\s*[^\s,;]+"),
     re.compile(r"(?i)(secret|token|password|credential)\s*[:=]\s*[^\s,;]+"),
     re.compile(r"(?i)\b(?:sk|xai)-[A-Za-z0-9._-]{8,}\b"),
     re.compile(r"(?i)\bAIza[A-Za-z0-9_-]{20,}\b"),

@@ -87,7 +87,7 @@ def _validate_bridge_provider_output(seat, result: dict) -> tuple[bool, str]:
 class SharedContextBridge:
     """Transactional, round-scoped bridge with a prompt-safe read protocol.
 
-    HOTFIX92 deliberately does NOT place bridge values in the next provider's
+    HOTFIX93 deliberately does NOT place bridge values in the next provider's
     prompt. Providers receive only a non-sensitive availability manifest and
     may request a value with ``BRIDGE_READ: KEY``. The application resolves that
     request from committed Shared Context after the provider response.
@@ -299,7 +299,7 @@ class SharedContextBridge:
     def consume_read_requests(self, seat, result: dict) -> dict:
         """Resolve a provider's BRIDGE_READ request from committed bridge state.
 
-        HOTFIX92 closes the handoff gap left by HOTFIX92: the provider is never
+        HOTFIX93 closes the handoff gap left by HOTFIX93: the provider is never
         given the bridge value in its input prompt. Instead, its explicit
         BRIDGE_READ request is resolved against the committed transaction state
         immediately after the provider response. A successful single read is
@@ -611,14 +611,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         request_id=request_id,
         round_no=round_no,
     )
-    # HOTFIX92: explicit BRIDGE_* assignments in the current request become
+    # HOTFIX93: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX92: provider calls use an explicit dependency order for bridge
+    # HOTFIX93: provider calls use an explicit dependency order for bridge
     # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
     # remaining seats retain canonical room order. Results are returned in
     # canonical room order, so seat identity/history/UI ordering is unchanged.

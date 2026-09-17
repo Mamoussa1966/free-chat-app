@@ -15,8 +15,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parent
 # Release-name compatibility markers: the current FINAL zip naming convention
 # Release artifact compatibility markers:
-# AI_Council_V22_1_HOTFIX92_PRODUCTION_HARDENED_FINAL.zip
-# AI_Council_V22_1_HOTFIX92_PRODUCTION_HARDENED_FINAL.zip
+# AI_Council_V22_1_HOTFIX93_PRODUCTION_HARDENED_FINAL.zip
+# AI_Council_V22_1_HOTFIX93_PRODUCTION_HARDENED_FINAL.zip
 REQUIRED = [
     "app.py", "main.py", "providers.py", "production_core.py", "attachment_utils.py", "gitops_layer.py",
     "requirements.txt", "VERSION.txt", "README.md", "RELEASE_NOTES.md", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json",
@@ -147,11 +147,18 @@ def _run_suite_in_sandbox(sandbox: Path) -> None:
     env = _scrub_environment()
     env["PYTHONPATH"] = str(sandbox)
     py_files = [str(sandbox / p) for p in (
-        "app.py", "main.py", "providers.py", "attachment_utils.py",
+        "app.py", "main.py", "providers.py", "production_core.py", "production_core_harness.py", "attachment_utils.py",
         "gitops_layer.py", "build_release.py",
     )]
     subprocess.run([sys.executable, "-m", "py_compile", *py_files], cwd=sandbox, env=env, check=True)
     subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=sandbox, env=env, check=True)
+
+
+def run_production_core_harness() -> None:
+    """Run the executable Production Core gate before packaging."""
+    env = _scrub_environment()
+    env["PYTHONPATH"] = str(ROOT)
+    subprocess.run([sys.executable, "production_core_harness.py"], env=env, check=True)
 
 
 def run_tests() -> None:
@@ -241,9 +248,10 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX92_PRODUCTION_HARDENED_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX93_PRODUCTION_HARDENED_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
+    run_production_core_harness()
     run_tests()
     if args.check_only:
         print("RELEASE_CHECK=PASS")
