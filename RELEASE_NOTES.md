@@ -1,13 +1,13 @@
-# V22.1-HOTFIX100-PRODUCTION-HARDENED
+# V22.1-HOTFIX101-PRODUCTION-HARDENED
 
-## HOTFIX100 — Clean Production Tree / Mixed-Tree Isolation Repair
+## HOTFIX101 — Clean Production Tree / Mixed-Tree Isolation Repair
 
-HOTFIX100 is rebuilt from the verified prior release artifact as an isolated,
+HOTFIX101 is rebuilt from the verified prior release artifact as an isolated,
 self-contained production tree. The release does not import or preserve unrelated
 legacy files from a parent/Streamlit workspace.
 
 ### Release guarantees
-- Version identity is consistently HOTFIX100 across production metadata and runtime surfaces.
+- Version identity is consistently HOTFIX101 across production metadata and runtime surfaces.
 - Official API only.
 - Explicit `*_FREE_MODELS` only; no implicit model discovery.
 - Free Cascade remains strictly sequential, bounded to ten candidates per provider.
