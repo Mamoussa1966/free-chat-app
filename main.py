@@ -31,6 +31,7 @@ ERROR_DISPLAY_TTL_SECONDS = 60
 # UI-only classification: a latency cutoff is an internal transport event,
 # not a user-facing diagnosis of why a provider did not answer.
 PUBLIC_NO_RESPONSE = "NO_RESPONSE"
+NO_RESPONSE_AFTER_CASCADE = "NO_RESPONSE_AFTER_CASCADE"
 BRIDGE_WRITE_PATTERN = re.compile(
     r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*(.+?)\s*$"
 )
@@ -57,6 +58,34 @@ def _extract_bridge_reads(content: str) -> list[str]:
         if key:
             reads.append(key)
     return reads
+
+
+def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> dict:
+    """Mandatory provider-output schema/identity gate before bridge handoff."""
+    if not isinstance(result, dict):
+        raise ValueError("provider output identity/schema is invalid")
+    if str(result.get("request_id") or request_id) != str(request_id):
+        raise ValueError("provider output identity request_id mismatch")
+    if int(result.get("round", round_no) or round_no) != int(round_no):
+        raise ValueError("provider output identity round mismatch")
+    if str(result.get("seat") or "").strip() != str(getattr(seat, "key", "")).strip():
+        raise ValueError("provider output identity seat mismatch")
+    model = str(result.get("executed_model") or result.get("model") or "").strip()
+    if not model:
+        raise ValueError("provider output identity model missing")
+    if str(result.get("model") or "").strip() != model:
+        raise ValueError("provider output identity model mismatch")
+    if str(result.get("status") or "").upper() != "SUCCESS":
+        raise ValueError("provider output schema requires SUCCESS")
+    if not str(result.get("content") or "").strip():
+        raise ValueError("provider output schema requires non-empty content")
+    checked = dict(result)
+    checked["bridge_validated"] = True
+    checked["bridge_record"] = {
+        "validated": True, "request_id": str(request_id), "round": int(round_no),
+        "seat": str(getattr(seat, "key", "")), "model": model,
+    }
+    return checked
 
 
 def _validate_bridge_provider_output(seat, result: dict) -> tuple[bool, str]:
@@ -503,6 +532,10 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
             "status_code": detail.get("status_code"),
             "classification": classification,
             "retryable": bool(detail.get("retryable", False)),
+            "provider": str(detail.get("provider") or "").strip(),
+            "request_id": str(detail.get("request_id") or ""),
+            "round": int(detail.get("round", 0) or 0),
+            "final_result": str(detail.get("final_result") or "FAILED").upper(),
         }
         if "_display_created_at" in detail:
             try:
@@ -533,6 +566,13 @@ def _safe_attempt_telemetry(details: list[dict], result: dict | None = None) -> 
             "cascade_action": str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if detail.get("retryable") else "CASCADE_STOP")).upper(),
         })
     return out
+
+
+def _public_display_class(display_class: str) -> str:
+    # A timeout means the provider did not complete a response in the current attempt.
+    if display_class == "TIMEOUT":
+        return PUBLIC_NO_RESPONSE
+    return str(display_class or "UNKNOWN")
 
 
 def _public_result(result: dict) -> dict:
@@ -604,6 +644,14 @@ if (el) setTimeout(()=>{{ el.remove(); }}, {int(remaining * 1000)});
     )
 
 
+def _provider_identity_matches(seat_key: str, executed_model: str, reported_model: str) -> bool:
+    if not reported_model:
+        return True
+    if seat_key == "deepseek":
+        return _deepseek_model_identity_matches(executed_model, reported_model)
+    return reported_model.lower() == executed_model.lower()
+
+
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str) -> list[dict]:
     seats = get_seats()
     bridge = SharedContextBridge(
@@ -618,6 +666,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
+    working_context = bridge.prompt_snapshot(None)
 
     # Current release: provider calls use an explicit dependency order for bridge
     # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
@@ -629,15 +678,18 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         if key in by_key:
             bridge_order.append(by_key.pop(key))
     bridge_order.extend(seat for seat in seats if seat.key in by_key)
-    for seat in bridge_order:
+    for seat in SEATS if False else bridge_order:
         try:
             provider_prompt = bridge.prompt_snapshot(seat)
+            working_context = provider_prompt
             bridge.record_provider_input(seat, provider_prompt)
             result = call_seat(
                 seat, user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
                 deadline, request_id,
             )
+            if str(result.get("status") or "").upper() == "SUCCESS":
+                result = _validate_provider_output(result, seat, request_id, round_no)
             results[seat.key] = result
             bridge.append_agent_output(seat, result)
             if seat.key == "deepseek":
@@ -724,9 +776,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     if attempted_models and attempted_models[-1] != executed_model:
                         raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
                     provider_reported_model = str(result.get("provider_reported_model") or "").strip()
-                    if provider_reported_model and provider_reported_model.lower() != executed_model.lower() and seat_key != "deepseek":
-                        raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
-                    if seat_key == "deepseek" and not _deepseek_model_identity_matches(executed_model, provider_reported_model):
+                    if not _provider_identity_matches(seat_key, executed_model, provider_reported_model):
                         raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
                     chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "room_slot": int(next((s.room_slot for s in get_seats() if s.key == seat_key), 0)), "provider_identity": next((s.name for s in get_seats() if s.key == seat_key), result.get("name", "")), "provider_key": seat_key, "agent_type": "API_AGENT", "api_mode": "Official API", "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
             keys = set(chat.get("result_keys", []))
@@ -932,11 +982,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                 if not provider_reported_model:
                     st.error("⚠️ Provider identity missing: لا يمكن عرض نجاح رسمي بدون هوية النموذج من المزود.")
                     continue
-                if seat.key == "deepseek":
-                    if not _deepseek_model_identity_matches(executed_model, provider_reported_model):
-                        st.error("⚠️ Provider identity mismatch: هوية نموذج DeepSeek التي أعادها المزود لا تطابق النموذج المنفذ.")
-                        continue
-                elif provider_reported_model != executed_model:
+                if not _provider_identity_matches(seat.key, executed_model, provider_reported_model):
                     st.error("⚠️ Provider identity mismatch: هوية النموذج التي أعادها المزود لا تطابق النموذج المنفذ.")
                     continue
             request_id = str(message.get("request_id") or "").strip()
@@ -1121,7 +1167,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX101 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX111 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 

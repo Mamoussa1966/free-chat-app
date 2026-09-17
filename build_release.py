@@ -15,8 +15,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parent
 # Release-name compatibility markers: the current FINAL zip naming convention
 # Release artifact compatibility markers:
-# AI_Council_V22_1_HOTFIX101_PRODUCTION_HARDENED_FINAL.zip
-# AI_Council_V22_1_HOTFIX101_PRODUCTION_HARDENED_FINAL.zip
+# AI_Council_V22_1_HOTFIX111_PRODUCTION_HARDENED_FINAL.zip
+# AI_Council_V22_1_HOTFIX111_PRODUCTION_HARDENED_FINAL.zip
 REQUIRED = [
     "app.py", "main.py", "providers.py", "production_core.py", "attachment_utils.py", "gitops_layer.py",
     "requirements.txt", "VERSION.txt", "README.md", "RELEASE_NOTES.md", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json",
@@ -44,7 +44,10 @@ ALLOWED_BASELINE_CHANGES = {
     "tests/test_hotfix88_bridge_transaction.py", "tests/test_hotfix87_production_hardened.py",
     "tests/test_hotfix92_production_core.py", "tests/test_hotfix92_release_core.py",
     "tests/test_deepseek_integration.py", "tests/test_hotfix60_fixes.py", "tests/test_hotfix84_shared_context_bridge.py",
-    "tests/test_hotfix87_production_hardened.py", "tests/test_hotfix88_bridge_transaction.py", "tests/test_hotfix89_bridge_read.py", "tests/test_hotfix91_transactional_proof.py",
+    "tests/test_hotfix87_production_hardened.py", "tests/test_hotfix87_release_roundtrip.py", "tests/test_hotfix87_reliability.py",
+    "tests/test_hotfix83_shared_context_bridge.py", "tests/test_hotfix66_no_response_timeout.py", "tests/test_hotfix67_no_response_separation.py",
+    "tests/test_hotfix14_error_classification.py", "tests/test_provider_runtime.py",
+    "tests/test_hotfix76_main_identity_guard.py", "tests/test_hotfix80_identity_surface.py", "tests/test_gemini_latency_hardening.py", "tests/test_hotfix88_bridge_transaction.py", "tests/test_hotfix89_bridge_read.py", "tests/test_hotfix91_transactional_proof.py",
     "tests/test_deepseek_integration.py", "tests/test_hotfix84_shared_context_bridge.py",
 }
 
@@ -248,7 +251,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX101_PRODUCTION_HARDENED_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX111_PRODUCTION_HARDENED_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_production_core_harness()

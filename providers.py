@@ -11,7 +11,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX101-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX111-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -672,7 +672,7 @@ def _bounded_timeout(timeout: Optional[float], deadline: Optional[float]) -> Opt
     return min(float(timeout), remaining)
 
 
-def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = None, deadline: Optional[float] = None, retries: Optional[int] = None) -> dict:
+def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = None, deadline: Optional[float] = None, retries: Optional[int] = 0) -> dict:
     last: Optional[ProviderError] = None
     retry_budget = RETRIES if retries is None else max(0, int(retries))
     for attempt in range(retry_budget + 1):
@@ -1050,6 +1050,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
             "request_id": str(d.get("request_id") or request_id or ""),
             "round": int(d.get("round", round_no) or round_no),
             "final_result": str(d.get("final_result") or "FAILED").upper(),
+            "provider": str(d.get("provider") or seat.name or "").strip(),
             "timeout_seconds": d.get("timeout_seconds"),
             **({"created_at_epoch": float(d.get("_display_created_at"))} if d.get("_display_created_at") is not None else {}),
         }
@@ -1120,6 +1121,8 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
 
 def _attempt_record(*, attempt: int, model: str, status_code: Optional[int], classification: str, retryable: bool, execution_time: float, request_id: str, round_no: int, final_result: str, provider: str = "") -> dict:
     """Build the canonical safe attempt trace record used by UI/history tests."""
+    # Legacy public helper contract intentionally stays minimal. Provider identity
+    # is carried by the richer attempt_diagnostics/attempt_summaries surfaces.
     return {
         "provider": str(provider or ""),
         "attempt": int(attempt),
@@ -1127,7 +1130,6 @@ def _attempt_record(*, attempt: int, model: str, status_code: Optional[int], cla
         "status_code": status_code,
         "classification": _canonical_error_classification(classification),
         "retryable": bool(retryable),
-        "latency": round(float(execution_time or 0.0), 3),
         "execution_time": round(float(execution_time or 0.0), 3),
         "request_id": str(request_id or ""),
         "round": int(round_no),
@@ -1231,7 +1233,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         try:
             executed_model = str(model or "").strip()
             attempt_started = time.perf_counter()
-            effective_timeout = None
+            effective_timeout = GEMINI_REQUEST_TIMEOUT if seat.key == "gemini" and GEMINI_REQUEST_TIMEOUT is not None else None
             if seat_deadline is not None:
                 remaining_seat = _remaining(seat_deadline) or 0.0
                 if remaining_seat <= 0:
