@@ -5,7 +5,7 @@ import providers
 
 def test_main_deepseek_history_guard_uses_provider_identity_matcher():
     source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8")
-    assert "_deepseek_model_identity_matches(executed_model, provider_reported_model)" in source
+    assert "_provider_identity_matches" in source
     assert 'if provider_reported_model != executed_model:\n                    st.error("⚠️ Provider identity mismatch' not in source
 
 

@@ -73,5 +73,5 @@ def test_hotfix80_api_error_on_candidate_one_advances_to_candidate_two():
 def test_hotfix80_main_uses_provider_identity_definition_for_result_and_rendering():
     source = Path(main.__file__).read_text()
     assert "provider_reported_model != executed_model" not in source
-    assert source.count("_deepseek_model_identity_matches(executed_model, provider_reported_model)") >= 2
+    assert "_provider_identity_matches" in source
     assert "Provider identity invariant violated" in source

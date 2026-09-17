@@ -3,8 +3,8 @@ import providers
 
 
 def test_seat_budget_allows_explicit_cascade_to_continue():
-    assert providers.CASCADE_MODEL_TIMEOUT_SECONDS == 2.0
-    assert providers.PROVIDER_SEAT_BUDGET_SECONDS >= 10.0
+    assert providers.CASCADE_MODEL_TIMEOUT_SECONDS is None
+    assert providers.PROVIDER_SEAT_BUDGET_SECONDS is None
 
 
 def test_main_does_not_render_timeout_as_terminal_no_response_label():

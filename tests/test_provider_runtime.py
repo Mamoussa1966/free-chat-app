@@ -17,7 +17,7 @@ class ProviderRuntimeTests(unittest.TestCase):
     def test_network_retries_once(self):
         response = type("Response", (), {"status_code": 200, "text": "{}", "headers": {}, "json": lambda self: {}})()
         with patch("providers.requests.post", side_effect=[requests.Timeout(), response]) as post:
-            self.assertEqual(_post("https://example.invalid", {}, {}, 5), {})
+            self.assertEqual(_post("https://example.invalid", {}, {}, 5, retries=1), {})
         self.assertEqual(post.call_count, 2)
 
 if __name__ == "__main__": unittest.main()
