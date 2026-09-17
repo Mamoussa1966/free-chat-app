@@ -9,7 +9,9 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import requests
 
-VERSION = "V22.1-HOTFIX91-PRODUCTION-HARDENED"
+from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
+
+VERSION = "V22.1-HOTFIX92-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1161,7 +1163,11 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     # No artificial provider/seat timeout is imposed. An optional caller-owned
     # deadline is honored only when explicitly supplied by the caller.
     seat_deadline = float(deadline) if deadline is not None else None
-    candidates = _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT]
+    cascade = FreeCascadeController(
+        _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT],
+        TimeoutRetryPolicy(timeout_seconds=CASCADE_MODEL_TIMEOUT_SECONDS, max_transport_retries=0, cascade_max_models=MAX_MODELS_PER_SEAT),
+    )
+    candidates = cascade.candidates
     attempted: list[str] = []
     if not candidates:
         return _result(seat, "NO_FREE_MODEL_CONFIGURED", "", "", "class=no_free_models_configured; No explicitly configured Free API model.", started, attempted, request_id=request_id, round_no=round_no)
@@ -1196,8 +1202,8 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         # API_ERROR. This explicit boundary prevents an internal classification
         # label from accidentally becoming terminal.
         if seat.key == "deepseek" and classification == "API_ERROR":
-            return True
-        return True
+            return FreeCascadeController.should_continue(classification, index < len(candidates) - 1)
+        return FreeCascadeController.should_continue(classification, index < len(candidates) - 1)
 
     for index, model in enumerate(candidates):
         if seat_deadline is not None and (_remaining(seat_deadline) or 0) <= 0:
@@ -1237,7 +1243,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
-            # HOTFIX91: when the official provider returns a model identity,
+            # HOTFIX92: when the official provider returns a model identity,
             # require it to match the requested candidate. This prevents the UI
             # from ever labeling a response with a model that the provider did
             # not actually report.
@@ -1258,6 +1264,13 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 raise ProviderError("cascade execution identity mismatch", error_class="execution_identity_mismatch")
             # Provider Output -> Schema Validation is the mandatory handoff gate.
             _validate_provider_output_schema(seat, result, executed_model)
+            # HOTFIX92 production contract: success is trusted only after the
+            # provider-attested model and cascade identity are validated.
+            ProviderExecutionContract.validate_success(
+                result, seat.key,
+                identity_matcher=_deepseek_model_identity_matches if seat.key == "deepseek" else None,
+            )
+            result["cascade_position"] = attempted.index(executed_model) + 1
             result["output_schema_valid"] = True
             return result
         except ProviderError as exc:

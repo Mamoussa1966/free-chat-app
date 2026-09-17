@@ -1,9 +1,23 @@
-# HOTFIX91 — Bridge Control-Plane Handoff Hardening
+# HOTFIX92 — PRODUCTION CORE / COUNCIL ORCHESTRATOR HARDENING
 
-Version: `V22.1-HOTFIX91-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX92-PRODUCTION-HARDENED`
+
+- Built directly from the complete HOTFIX92 ZIP baseline; no baseline file is removed.
+- Adds a pure production-core contract layer around the existing official API adapters.
+- Adds Request Lifecycle and Round State Machine enforcement.
+- Adds Provider Execution Contract: successful results require provider-attested actual model identity.
+- Adds strict explicit Free Cascade #1→#10 controller; no implicit model discovery, Local Engine, or paid fallback.
+- Adds explicit timeout/retry policy objects without introducing a hidden paid/local fallback.
+- Adds stable failure classification boundaries.
+- Adds Shared Context state machine and Transaction Bridge Guard with commit-before-read and target isolation.
+- Adds secret-safe Audit Event Schema; credential values and raw provider payloads are never stored in audit events.
+- Adds automated HOTFIX92 regression tests while preserving the complete existing suite.
+# HOTFIX92 — Bridge Control-Plane Handoff Hardening
+
+Version: `V22.1-HOTFIX92-PRODUCTION-HARDENED`
 
 ## Purpose
-HOTFIX91 proved the application-side read resolver, but the live provider turn showed that DeepSeek could reject the protocol as if the model itself were expected to own a transactional memory bus. HOTFIX91 separates the application-owned bridge control plane from provider memory semantics.
+HOTFIX92 proved the application-side read resolver, but the live provider turn showed that DeepSeek could reject the protocol as if the model itself were expected to own a transactional memory bus. HOTFIX92 separates the application-owned bridge control plane from provider memory semantics.
 
 ## Fixed path
 `Provider protocol output → Schema Validation → Bridge Write → Commit → Barrier → Shared Context transaction state → Provider BRIDGE_READ request → Bridge Read → Schema Validation → Seat result`
@@ -24,20 +38,20 @@ If DeepSeek does not emit a valid write record, the bridge does not fabricate on
 
 ---
 
-# HOTFIX91 — Transactional Bridge Read Handoff
+# HOTFIX92 — Transactional Bridge Read Handoff
 
-Version: `V22.1-HOTFIX91-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX92-PRODUCTION-HARDENED`
 
 ## Scope
-- Built from the complete HOTFIX91 release tree.
-- Preserves all 64 HOTFIX91 files; no baseline file is removed.
+- Built from the complete HOTFIX92 release tree.
+- Preserves all 64 HOTFIX92 files; no baseline file is removed.
 - Changes only the Bridge Transaction / Shared Context handoff layer plus its release tests/version metadata.
 - Provider adapters, Free API Cascade, credentials, seat identities, Official API only, no Local Engine, and no Paid fallback remain unchanged.
 
 ## Fixed path
 `Provider Output → Schema Validation → Bridge Write → Commit → Round/Handoff Barrier → Shared Context → Bridge Read → Schema Validation → Next Provider`
 
-HOTFIX91 stopped at `BRIDGE_READ_STATUS = NOT_READY` from the application perspective because the read request was resolved after Gemini's response but the resolved bridge value was not promoted to the Gemini seat result. HOTFIX91 closes that gap without a second provider call and without placing the bridge value in Gemini's input prompt.
+HOTFIX92 stopped at `BRIDGE_READ_STATUS = NOT_READY` from the application perspective because the read request was resolved after Gemini's response but the resolved bridge value was not promoted to the Gemini seat result. HOTFIX92 closes that gap without a second provider call and without placing the bridge value in Gemini's input prompt.
 
 ## Security invariant
 - `BRIDGE_RESULT` is never inserted into the Gemini input prompt.
@@ -52,12 +66,12 @@ The bridge records `bridge_id`, `round_id`, `source_seat`, `source_provider`, `t
 ## Validation target
 DeepSeek Seat 7 performs `WRITE → VALIDATE → COMMIT → BARRIER`; Gemini Seat 2 performs `BRIDGE_READ`; the bridge resolves the exact committed value and marks `READ = PASS` and `SCHEMA_VALIDATION = PASS`.
 
-# HOTFIX91 — Bridge Transaction Layer
+# HOTFIX92 — Bridge Transaction Layer
 
-Version: `V22.1-HOTFIX91-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX92-PRODUCTION-HARDENED`
 
 ## Scope
-- Built directly from the complete HOTFIX91 release tree.
+- Built directly from the complete HOTFIX92 release tree.
 - Changes are confined to the Bridge Transaction Layer.
 - Provider cascades, credentials, seat identities, official-API-only policy, no-local/no-paid contract, and provider adapters are preserved.
 
@@ -72,12 +86,12 @@ Bridge values are not embedded in the next provider prompt. The prompt contains 
 
 ## Validation target
 DeepSeek generates a fresh value absent from the Gemini prompt, writes it, the bridge validates and commits it, the round barrier opens, and Gemini can request the value by key.
-V22.1-HOTFIX91-PRODUCTION-HARDENED
+V22.1-HOTFIX92-PRODUCTION-HARDENED
 
-# HOTFIX91 — Structured Bridge Write Final
+# HOTFIX92 — Structured Bridge Write Final
 
 ## Scope
-- Built directly from HOTFIX91.
+- Built directly from HOTFIX92.
 - Preserves seat identity, provider identity, executed-model identity, Free API Cascade, official-API-only behavior, and no-paid/no-local fallback contract.
 - Changes only the SharedContextBridge write protocol.
 
@@ -95,11 +109,11 @@ Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 �
 Bridge values remain untrusted reference data. They cannot redefine seat/provider/model identity or credentials.
 
 
-# HOTFIX91 Production Hardened
+# HOTFIX92 Production Hardened
 
-Version: `V22.1-HOTFIX91-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX92-PRODUCTION-HARDENED`
 
-- Preserved the complete HOTFIX91 release tree and all existing tests.
+- Preserved the complete HOTFIX92 release tree and all existing tests.
 - Added provider-isolation assertions so one provider cannot consume another provider's credential or model configuration.
 - Expanded safe attempt telemetry with `provider`, `attempt`, `model`, `status_code`, `classification`, `retryable`, `execution_time`, `request_id`, `round`, `final_result`, and `cascade_action`.
 - Claude/Grok UI diagnostics now expose compact attempt facts instead of the generic `Official API failed` message alone.

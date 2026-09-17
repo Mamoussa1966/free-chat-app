@@ -14,6 +14,7 @@ from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
+from production_core import RequestLifecycle, ProviderExecutionContract
 
 APP_VERSION = PROVIDER_VERSION
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -86,7 +87,7 @@ def _validate_bridge_provider_output(seat, result: dict) -> tuple[bool, str]:
 class SharedContextBridge:
     """Transactional, round-scoped bridge with a prompt-safe read protocol.
 
-    HOTFIX91 deliberately does NOT place bridge values in the next provider's
+    HOTFIX92 deliberately does NOT place bridge values in the next provider's
     prompt. Providers receive only a non-sensitive availability manifest and
     may request a value with ``BRIDGE_READ: KEY``. The application resolves that
     request from committed Shared Context after the provider response.
@@ -298,7 +299,7 @@ class SharedContextBridge:
     def consume_read_requests(self, seat, result: dict) -> dict:
         """Resolve a provider's BRIDGE_READ request from committed bridge state.
 
-        HOTFIX91 closes the handoff gap left by HOTFIX91: the provider is never
+        HOTFIX92 closes the handoff gap left by HOTFIX92: the provider is never
         given the bridge value in its input prompt. Instead, its explicit
         BRIDGE_READ request is resolved against the committed transaction state
         immediately after the provider response. A successful single read is
@@ -610,14 +611,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         request_id=request_id,
         round_no=round_no,
     )
-    # HOTFIX91: explicit BRIDGE_* assignments in the current request become
+    # HOTFIX92: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
 
-    # HOTFIX91: provider calls use an explicit dependency order for bridge
+    # HOTFIX92: provider calls use an explicit dependency order for bridge
     # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
     # remaining seats retain canonical room order. Results are returned in
     # canonical room order, so seat identity/history/UI ordering is unchanged.
@@ -686,46 +687,67 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
     deadline = None
+    lifecycle = RequestLifecycle.begin(request_id)
+    chat.setdefault("audit_events", [])
+    chat["audit_events"] = [e for e in chat.get("audit_events", []) if e.get("request_id") != request_id]
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
-    for round_no in range(1, total_rounds + 1):
-        round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
-        seen_keys = set()
-        for result in round_results:
-            result["request_id"] = request_id
-            result["round"] = round_no
-            seat_key = str(result.get("seat") or "")
-            result_key = f"{request_id}:{round_no}:{result.get('seat','')}"
-            result["result_key"] = result_key
-            identity_key = (str(request_id), int(round_no), seat_key)
-            if identity_key in seen_keys:
-                continue
-            existing_history = _history_identity_keys(chat)
-            if identity_key in existing_history:
+    try:
+        for round_no in range(1, total_rounds + 1):
+            lifecycle.start_round(round_no)
+            round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
+            seen_keys = set()
+            for result in round_results:
+                result["request_id"] = request_id
+                result["round"] = round_no
+                seat_key = str(result.get("seat") or "")
+                result_key = f"{request_id}:{round_no}:{result.get('seat','')}"
+                result["result_key"] = result_key
+                identity_key = (str(request_id), int(round_no), seat_key)
+                if identity_key in seen_keys:
+                    continue
+                existing_history = _history_identity_keys(chat)
+                if identity_key in existing_history:
+                    seen_keys.add(identity_key)
+                    continue
+                _assert_unique_history_identity(chat, request_id, round_no, seat_key)
                 seen_keys.add(identity_key)
-                continue
-            _assert_unique_history_identity(chat, request_id, round_no, seat_key)
-            seen_keys.add(identity_key)
-            public_result = _public_result(result)
-            all_results.append(public_result)
-            if result.get("status") == "SUCCESS" and result.get("content"):
-                executed_model = str(result.get("executed_model") or "").strip()
-                result_model = str(result.get("model") or "").strip()
-                attempted_models = [str(m).strip() for m in result.get("attempted_models", []) if str(m).strip()]
-                if not executed_model or result_model != executed_model:
-                    raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
-                if attempted_models and attempted_models[-1] != executed_model:
-                    raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
-                provider_reported_model = str(result.get("provider_reported_model") or "").strip()
-                if provider_reported_model and provider_reported_model.lower() != executed_model.lower() and seat_key != "deepseek":
-                    raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
-                if seat_key == "deepseek" and not _deepseek_model_identity_matches(executed_model, provider_reported_model):
-                    raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
-                chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "room_slot": int(next((s.room_slot for s in get_seats() if s.key == seat_key), 0)), "provider_identity": next((s.name for s in get_seats() if s.key == seat_key), result.get("name", "")), "provider_key": seat_key, "agent_type": "API_AGENT", "api_mode": "Official API", "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
-        keys = set(chat.get("result_keys", []))
-        keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
-        chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
-        chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
+                public_result = _public_result(result)
+                all_results.append(public_result)
+                if result.get("status") == "SUCCESS" and result.get("content"):
+                    executed_model = str(result.get("executed_model") or "").strip()
+                    result_model = str(result.get("model") or "").strip()
+                    attempted_models = [str(m).strip() for m in result.get("attempted_models", []) if str(m).strip()]
+                    if not executed_model or result_model != executed_model:
+                        raise RuntimeError(f"Execution identity invariant violated: {result_model!r} != {executed_model!r}")
+                    if attempted_models and attempted_models[-1] != executed_model:
+                        raise RuntimeError(f"Cascade identity invariant violated: {attempted_models!r} -> {executed_model!r}")
+                    provider_reported_model = str(result.get("provider_reported_model") or "").strip()
+                    if provider_reported_model and provider_reported_model.lower() != executed_model.lower() and seat_key != "deepseek":
+                        raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
+                    if seat_key == "deepseek" and not _deepseek_model_identity_matches(executed_model, provider_reported_model):
+                        raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
+                    chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "room_slot": int(next((s.room_slot for s in get_seats() if s.key == seat_key), 0)), "provider_identity": next((s.name for s in get_seats() if s.key == seat_key), result.get("name", "")), "provider_key": seat_key, "agent_type": "API_AGENT", "api_mode": "Official API", "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+            keys = set(chat.get("result_keys", []))
+            keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
+            chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
+            chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
+            success_count = sum(1 for r in round_results if str(r.get("status") or "").upper() == "SUCCESS")
+            lifecycle.finish_round(round_no, success_count, len(round_results))
+            for r in round_results:
+                lifecycle.record(
+                    "PROVIDER_RESULT", round_id=round_no, provider=str(r.get("name") or r.get("seat") or ""),
+                    model=str(r.get("executed_model") or r.get("model") or ""),
+                    cascade_position=r.get("cascade_position"), status=str(r.get("status") or ""),
+                    classification=str(r.get("classification") or ""), latency_ms=(float(r.get("latency", 0.0) or 0.0) * 1000.0),
+                    metadata={"result_key": str(r.get("result_key") or "")},
+                )
+        lifecycle.finish(success=True)
+    except Exception:
+        if lifecycle.state.value == "RUNNING":
+            lifecycle.finish(success=False)
+        raise
+    chat["audit_events"] = lifecycle.audit_snapshot()[-500:]
     return all_results
 
 
