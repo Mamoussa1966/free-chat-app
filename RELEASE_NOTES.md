@@ -1,22 +1,19 @@
-# V22.1-HOTFIX97-PRODUCTION-HARDENED
+# V22.1-HOTFIX98-PRODUCTION-HARDENED
 
-## HOTFIX97 — Production Core / Council Orchestrator Hardening
+## HOTFIX98 — Clean Release Tree / Production Core Continuity
 
-This release is rebuilt from the verified previous verified release Production-Hardened baseline and advances the release identity to HOTFIX97 without removing the retained release files or tests.
+HOTFIX98 is rebuilt directly from the verified previous verified artifact as a clean, deterministic release tree. The previous verified artifact contains exactly 75 files (excluding the two directory entries) and includes `.streamlit/secrets.toml.example`.
 
-### Fixed in HOTFIX97
-- Canonical release identity is synchronized across VERSION.txt, providers.py, main.py, Production Core, README, build_release.py, and the test suite.
-- Release metadata no longer contains stale historical HOTFIX identifiers.
-- Release-consistency tests are version-agnostic for historical regression modules instead of pinning an old release number.
-- `.streamlit/secrets.toml.example` remains included as a regular release file.
-- Runtime secrets are excluded from the release artifact.
-- File preservation remains fail-closed; the canonical release tree is retained rather than replaced by a reduced file set.
-- Production Core remains application-owned and offline: providers are never asked to execute pytest or shell commands.
-- Free Cascade remains #1→#10 per provider, Official API only, with no Local Engine and no Paid fallback.
-- Actual executed-model identity, Shared Context, Transaction Guard, false-success protection, and secret redaction remain enforced.
+### Scope
+- Preserve the complete verified previous file tree; no historical files are imported from the deployment workspace.
+- Preserve the full retained test suite and its exact test-file set.
+- Advance the canonical release identity to HOTFIX98 across the current production metadata.
+- Keep Production Core, Request Lifecycle, Provider Execution Contract, Free Cascade #1→#10, actual-model attestation, false-success protection, Shared Context / Transaction Guard, and secret redaction unchanged in behavior.
+- No Local Engine, no Paid fallback, no implicit model discovery, and Official API only.
+- Runtime secrets remain excluded; `.streamlit/secrets.toml.example` is included as a regular release file.
 
-### Verification contract
-The release is not considered ready unless all retained tests pass, the ZIP is structurally valid, and the Production Core harness returns PASS.
+### Clean-tree deployment contract
+The ZIP is the canonical HOTFIX98 artifact. Deployment must use this exact ZIP/tree rather than merging files into an existing checkout. A mixed runtime tree is not part of the artifact and must not be used as release evidence.
 
-### Deployment note
-This ZIP is the canonical HOTFIX97 artifact. A Streamlit deployment must be redeployed from this exact tree; a previously deployed mixed/stale tree is not evidence of the contents of this artifact.
+### Verification
+Release acceptance requires source compilation, the Production Core harness PASS result, the complete pytest suite PASS result, ZIP structural validation, exact test-set preservation, and a second full-suite run from the extracted ZIP.
