@@ -1,3 +1,4 @@
+from pathlib import Path
 import re
 from unittest.mock import patch
 import main
@@ -17,8 +18,8 @@ def _result(seat, content, request_id="rid88", round_no=1):
 
 def test_hotfix88_version_contract():
     import providers
-    assert providers.VERSION == "V22.1-HOTFIX95-PRODUCTION-HARDENED"
-    assert main.APP_VERSION == "V22.1-HOTFIX95-PRODUCTION-HARDENED"
+    assert providers.VERSION == Path("VERSION.txt").read_text(encoding="utf-8").strip()
+    assert main.APP_VERSION == providers.VERSION
 
 
 def test_hotfix88_transaction_trace_and_prompt_redaction():

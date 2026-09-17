@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 import providers
@@ -58,4 +59,4 @@ def test_provider_response_time_is_unlimited_and_has_no_hidden_retry():
 
 
 def test_hotfix60_version_is_consistent():
-    assert providers.VERSION == "V22.1-HOTFIX95-PRODUCTION-HARDENED"
+    assert providers.VERSION == Path("VERSION.txt").read_text(encoding="utf-8").strip()

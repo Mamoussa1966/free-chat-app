@@ -1,9 +1,10 @@
+from pathlib import Path
 from unittest.mock import patch
 import main
 import providers
 
 def test_version_contract():
-    assert providers.VERSION == "V22.1-HOTFIX95-PRODUCTION-HARDENED"
+    assert providers.VERSION == Path("VERSION.txt").read_text(encoding="utf-8").strip()
 
 def test_deepseek_alias_attestation():
     ds = providers.BUILTIN_SEATS[-1]

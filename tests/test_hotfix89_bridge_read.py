@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 import main
 import providers
@@ -16,8 +17,8 @@ def _result(seat, content, request_id="rid89", round_no=1):
 
 
 def test_hotfix89_version_contract():
-    assert providers.VERSION == "V22.1-HOTFIX95-PRODUCTION-HARDENED"
-    assert main.APP_VERSION == "V22.1-HOTFIX95-PRODUCTION-HARDENED"
+    assert providers.VERSION == Path("VERSION.txt").read_text(encoding="utf-8").strip()
+    assert main.APP_VERSION == providers.VERSION
 
 
 def test_hotfix89_read_is_available_only_after_commit_and_barrier():

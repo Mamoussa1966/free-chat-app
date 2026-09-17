@@ -10,7 +10,7 @@ def test_runner_is_application_local_and_uses_harness():
 
 
 def test_runner_reports_current_release_identity():
-    assert runner.VERSION == "V22.1-HOTFIX95-PRODUCTION-HARDENED"
+    assert runner.VERSION == Path("VERSION.txt").read_text(encoding="utf-8").strip()
 
 
 def test_streamlit_ui_exposes_local_test_runner_button():
