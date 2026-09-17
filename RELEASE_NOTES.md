@@ -25,3 +25,11 @@ legacy files from a parent/Streamlit workspace.
 - Complete pytest suite passes from the clean source tree.
 - Production Core harness passes all deterministic probes.
 - Release builder packages the exact tree, re-extracts the ZIP, and reruns the complete suite from the extracted artifact.
+
+
+## HOTFIX112 correction
+- Transactional Bridge READ is application-owned after COMMIT + BARRIER.
+- A target provider that omits the optional BRIDGE_READ control record no longer causes a false READ=FAIL when a committed BRIDGE_RESULT exists.
+- The committed bridge value is never inserted into the user prompt or target provider input prompt.
+- Regression coverage verifies the observed the prior release failure mode and the prompt boundary.
+- No Secrets or *_FREE_MODELS are modified by this release.

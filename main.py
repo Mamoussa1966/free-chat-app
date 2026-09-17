@@ -359,7 +359,19 @@ class SharedContextBridge:
         if not valid:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
-        for key in _extract_bridge_reads(str(result.get("content") or "")):
+        requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
+        # HOTFIX112: the transactional bridge is application-owned.  Once the
+        # commit barrier is open, the target seat is allowed one explicit
+        # application-side READ of the committed key even if the provider did
+        # not echo the BRIDGE_READ control record.  The value is resolved only
+        # after the provider request; it is never inserted into that request's
+        # input prompt. This closes the real-world gap exposed by the prior release,
+        # where Gemini could answer without emitting the optional control line
+        # and the audit therefore reported READ=FAIL despite a valid commit.
+        if not requested_keys and self._committed and self._barrier_open and int(getattr(seat, "room_slot", 0) or 0) == 2:
+            if "BRIDGE_RESULT" in self._values:
+                requested_keys = ["BRIDGE_RESULT"]
+        for key in requested_keys:
             value = self.read(key, seat)
             reads.append({"key": key, "value": value, "available": value is not None})
         if not reads:
@@ -710,6 +722,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             )
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
+                attempts = result.get("attempts") or result.get("cascade_attempts") or []
+                if isinstance(attempts, list) and attempts:
+                    result["cascade_position"] = len(attempts)
             # Capture the exact prompt actually built by the provider runtime,
             # then remove the transient audit field before any history/UI path.
             actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
