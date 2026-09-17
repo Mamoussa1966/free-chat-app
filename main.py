@@ -1121,7 +1121,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX99 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX100 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 

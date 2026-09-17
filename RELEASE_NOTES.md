@@ -1,11 +1,13 @@
-# V22.1-HOTFIX99-PRODUCTION-HARDENED
+# V22.1-HOTFIX100-PRODUCTION-HARDENED
 
-## HOTFIX99 — Clean Production Release / Full Test-Passing Build
+## HOTFIX100 — Clean Production Tree / Mixed-Tree Isolation Repair
 
-HOTFIX99 is rebuilt from the verified clean Production-Hardened release tree.
+HOTFIX100 is rebuilt from the verified prior release artifact as an isolated,
+self-contained production tree. The release does not import or preserve unrelated
+legacy files from a parent/Streamlit workspace.
 
 ### Release guarantees
-- Version identity is consistently HOTFIX99 across production metadata and runtime surfaces.
+- Version identity is consistently HOTFIX100 across production metadata and runtime surfaces.
 - Official API only.
 - Explicit `*_FREE_MODELS` only; no implicit model discovery.
 - Free Cascade remains strictly sequential, bounded to ten candidates per provider.
@@ -14,8 +16,12 @@ HOTFIX99 is rebuilt from the verified clean Production-Hardened release tree.
 - Actual executed model identity remains authoritative and attested.
 - Shared Context / transaction barriers remain fail-closed.
 - Secret redaction and compact public diagnostics remain enabled.
-- `.streamlit/secrets.toml.example` is preserved while real secrets are excluded.
-- All existing test modules are preserved.
+- `.streamlit/secrets.toml.example` is preserved; real secrets are excluded.
+- The release is packaged from its own isolated tree; runtime caches and symlinks are excluded.
+- The production test harness resolves and tests the application-owned tree rather than unrelated sibling/parent files.
 
 ### Validation
-The release builder runs the Production Core harness, the complete pytest suite, packages the exact tree, checks the ZIP manifest, and re-extracts/re-runs the suite from the resulting artifact.
+- Clean source tree contains the complete release manifest with no deleted baseline files.
+- Complete pytest suite passes from the clean source tree.
+- Production Core harness passes all deterministic probes.
+- Release builder packages the exact tree, re-extracts the ZIP, and reruns the complete suite from the extracted artifact.
