@@ -11,7 +11,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX111-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX112-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1239,12 +1239,13 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 if remaining_seat <= 0:
                     raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
                 effective_timeout = remaining_seat
+            provider_prompt = _prompt(user_prompt, shared_context, round_no, seat, executed_model)
             if deadline is None:
                 # Preserve compatibility with existing test doubles/legacy adapters
                 # that implement call_official with the historical six-argument seam.
-                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no, seat, executed_model), executed_model, credential, effective_timeout, attachments)
+                raw_response = call_official(seat, provider_prompt, executed_model, credential, effective_timeout, attachments)
             else:
-                raw_response = call_official(seat, _prompt(user_prompt, shared_context, round_no, seat, executed_model), executed_model, credential, effective_timeout, attachments, seat_deadline)
+                raw_response = call_official(seat, provider_prompt, executed_model, credential, effective_timeout, attachments, seat_deadline)
             attempt_latency = round(time.perf_counter() - attempt_started, 3)
             provider_reported_model = ""
             if isinstance(raw_response, dict) and "text" in raw_response:
@@ -1259,6 +1260,10 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             for trace in attempt_diagnostics:
                 trace["final_result"] = "FAILED"
             result = _result(seat, "SUCCESS", executed_model, content, None, started, attempted, authenticated=True, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics, provider_reported_model=provider_reported_model)
+            # Internal-only audit seam: the exact prompt sent to the official
+            # provider is returned transiently so the caller can prove bridge
+            # isolation. It is stripped before persistence/UI history.
+            result["_provider_input_prompt"] = provider_prompt
             result["successful_attempt_latency"] = attempt_latency
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:

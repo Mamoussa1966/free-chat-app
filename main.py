@@ -149,8 +149,17 @@ class SharedContextBridge:
         return "\n\n".join(self._entries)[-self.max_chars:]
 
     def prompt_snapshot(self, target_seat=None) -> str:
-        """Return context with bridge values redacted from provider prompts."""
+        """Return provider-safe context with every committed bridge value removed.
+
+        Redaction is value-first and pattern-second: even if a provider output embeds
+        the bridge value inside prose rather than on a BRIDGE_WRITE/Value line, the
+        exact value can never cross the provider-prompt boundary.
+        """
         raw = "\n\n".join(self._entries)
+        for record in self._values.values():
+            value = str(record.get("value") or "")
+            if value:
+                raw = raw.replace(value, "[REDACTED_BRIDGE_VALUE]")
         base = BRIDGE_WRITE_PATTERN.sub(lambda m: f"BRIDGE_WRITE: {m.group(1).strip()} = [REDACTED_BRIDGE_VALUE]", raw)
         base = re.sub(r"(?im)^(\s*Value:\s*).+$", r"\1[REDACTED_BRIDGE_VALUE]", base)
         available = []
@@ -168,7 +177,17 @@ class SharedContextBridge:
         return base[-self.max_chars:]
 
     def record_provider_input(self, seat, prompt: str) -> None:
+        """Record the exact final provider input for post-request isolation auditing."""
         self._provider_input_prompts[int(getattr(seat, "room_slot", 0) or 0)] = str(prompt or "")
+
+    def sanitize_user_prompt(self, user_prompt: str) -> str:
+        """Remove committed bridge values from the user-request portion of a provider prompt."""
+        text = str(user_prompt or "")
+        for record in self._values.values():
+            value = str(record.get("value") or "")
+            if value:
+                text = text.replace(value, "[REDACTED_BRIDGE_VALUE]")
+        return text
 
     def append_user_declarations(self, user_prompt: str) -> None:
         """Keep legacy declarations in internal context; prompt_snapshot redacts values."""
@@ -683,13 +702,18 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             provider_prompt = bridge.prompt_snapshot(seat)
             working_context = provider_prompt
             bridge.record_provider_input(seat, provider_prompt)
+            provider_user_prompt = bridge.sanitize_user_prompt(user_prompt)
             result = call_seat(
-                seat, user_prompt, provider_prompt, round_no, False,
+                seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
                 deadline, request_id,
             )
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
+            # Capture the exact prompt actually built by the provider runtime,
+            # then remove the transient audit field before any history/UI path.
+            actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
+            bridge.record_provider_input(seat, actual_provider_prompt or provider_prompt)
             results[seat.key] = result
             bridge.append_agent_output(seat, result)
             if seat.key == "deepseek":
@@ -1167,7 +1191,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX111 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX112 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
