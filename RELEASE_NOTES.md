@@ -1,23 +1,22 @@
-# HOTFIX95 REPAIR — Production Hardened
+# V22.1-HOTFIX96-PRODUCTION-HARDENED
 
-This artifact is a repair/rebuild of HOTFIX95 from the canonical HOTFIX95 source baseline.
+## HOTFIX96 — Production Core / Council Orchestrator Hardening
 
-Repair guarantees:
-- Preserves the HOTFIX93 file baseline and all retained test modules.
-- Preserves Production Core, Test Harness, and Test Runner.
-- Free Cascade #1 -> #10 only.
-- Official API only.
-- No Local Engine.
-- No Paid fallback.
-- Actual executed-model identity remains authoritative.
-- Shared Context / Transaction Guard remains fail-closed.
-- Gemini and DeepSeek are never used as shell/pytest executors.
-- `.streamlit/secrets.toml.example` is present.
-- The canonical artifact is validated locally by the application-facing Production Core Test Harness.
+This release is rebuilt from the verified previous verified release Production-Hardened baseline and advances the release identity to HOTFIX96 without removing the retained release files or tests.
 
-Validation performed on the release tree:
-- Full pytest suite: PASS
-- Production Core probes: PASS
-- Production Core Gate: PASS
+### Fixed in HOTFIX96
+- Canonical release identity is synchronized across VERSION.txt, providers.py, main.py, Production Core, README, build_release.py, and the test suite.
+- Release metadata no longer contains stale historical HOTFIX identifiers.
+- Release-consistency tests are version-agnostic for historical regression modules instead of pinning an old release number.
+- `.streamlit/secrets.toml.example` remains included as a regular release file.
+- Runtime secrets are excluded from the release artifact.
+- File preservation remains fail-closed; the canonical release tree is retained rather than replaced by a reduced file set.
+- Production Core remains application-owned and offline: providers are never asked to execute pytest or shell commands.
+- Free Cascade remains #1→#10 per provider, Official API only, with no Local Engine and no Paid fallback.
+- Actual executed-model identity, Shared Context, Transaction Guard, false-success protection, and secret redaction remain enforced.
 
-This repair does not claim that an already-deployed Streamlit runtime has been updated until this artifact is redeployed.
+### Verification contract
+The release is not considered ready unless all retained tests pass, the ZIP is structurally valid, and the Production Core harness returns PASS.
+
+### Deployment note
+This ZIP is the canonical HOTFIX96 artifact. A Streamlit deployment must be redeployed from this exact tree; a previously deployed mixed/stale tree is not evidence of the contents of this artifact.
