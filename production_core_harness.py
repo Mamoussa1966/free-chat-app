@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""HOTFIX93 Production Core Test Harness.
+"""HOTFIX94 Production Core Test Harness.
 
 This is an offline, deterministic executor for the Production Core gate.
 It is intentionally independent from provider APIs and never needs secrets.
@@ -193,7 +193,7 @@ def run_core_probes() -> dict[str, dict[str, Any]]:
 
 
 def render(report: dict[str, Any]) -> str:
-    lines = ["=" * 64, "HOTFIX93 — PRODUCTION CORE TEST HARNESS", "=" * 64]
+    lines = ["=" * 64, "HOTFIX94 — PRODUCTION CORE TEST HARNESS", "=" * 64]
     fp = report["file_preservation"]
     lines.append(f"File Preservation: {'PASS' if fp['passed'] else 'FAIL'}")
     lines.append(f"previous-release files: {fp['baseline_files']}")
@@ -219,7 +219,7 @@ def render(report: dict[str, Any]) -> str:
 
 def run() -> tuple[int, dict[str, Any]]:
     report = {
-        "version": "V22.1-HOTFIX93-PRODUCTION-HARDENED",
+        "version": "V22.1-HOTFIX94-PRODUCTION-HARDENED",
         "file_preservation": check_file_preservation(),
         "pytest": run_pytest(),
         "core_probes": run_core_probes(),

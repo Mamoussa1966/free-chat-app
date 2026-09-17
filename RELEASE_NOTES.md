@@ -1,39 +1,55 @@
-# HOTFIX93 — PRODUCTION CORE TEST HARNESS
+# HOTFIX94 — REAL IN-APP PRODUCTION CORE TEST RUNNER
 
-Version: `V22.1-HOTFIX93-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX94-PRODUCTION-HARDENED`
 
-## Purpose
+## Baseline preservation
 
-HOTFIX93 is built directly from the complete HOTFIX93 ZIP. It adds a real executable Production Core Test Harness so validation is performed by Python/pytest in an execution environment, not by asking provider agents to claim they ran tests.
+HOTFIX94 is built from the complete previous release release ZIP. No previous release file is deleted or replaced by a reduced subset.
 
-## Preserved baseline
+- previous release ZIP members preserved: 73/73.
+- New HOTFIX94 files are additive only.
+- `BASELINE_FILE_MANIFEST.json` records the complete previous release file set used by the in-app preservation gate.
 
-- All 69 previous release ZIP members are required to remain present.
-- All HOTFIX93 files are preserved.
-- HOTFIX93's `production_core.py` remains the Production Core implementation.
-- No Local Engine, Paid fallback, or automatic model selection is introduced.
+## Production Core validation path
+
+The application now owns the validation path:
+
+`Run Production Core Tests` → `production_core_test_runner.py` → `production_core_harness.py` → real local pytest + deterministic Production Core probes → `PASS` / `NO-GO`.
+
+The request is executed by the application's Python runtime. It is not sent to Gemini, DeepSeek, Claude, Grok, Kimi, or ChatGPT for execution.
 
 ## Added
 
-1. `production_core_harness.py`
-   - real subprocess execution of the full pytest suite
-   - credential-environment scrubbing
-   - previous release file-preservation check
-   - deterministic lifecycle/cascade/model-identity/false-success/context-transaction/secret-redaction probes
-   - explicit `PASS` / `NO-GO` gate
-2. `previous release_FILE_MANIFEST.json`
-   - immutable file-preservation reference derived from the complete previous release release ZIP
-3. `tests/test_hotfix93_test_harness.py`
-   - regression coverage for harness execution and preservation invariants
+1. `production_core_test_runner.py`
+   - application-facing runner
+   - calls the local harness directly
+   - returns the real exit code and structured report
+2. `production_core_harness.py`
+   - real `python -m pytest -q` execution
+   - credential/environment scrubbing
+   - previous release file-preservation gate
+   - deterministic Production Core contract probes
+   - final `PASS` / `NO-GO` gate
+3. `tests/test_hotfix94_test_runner.py`
+   - verifies the runner is wired to the harness
+   - verifies the HOTFIX94 release identity
+   - verifies the Streamlit UI exposes the runner
+4. Streamlit UI
+   - sidebar button: `🧪 Run Production Core Tests`
+   - displays the actual harness report and gate result in the application
 
-## How to run
+## Execution boundary
+
+The Test Harness does not fabricate provider results and does not require provider credentials. Existing provider integration tests remain governed by their own fixtures/contracts. No Local Engine, paid fallback, or automatic model selection is introduced.
+
+## CLI
+
+```bash
+python production_core_test_runner.py
+```
+
+or:
 
 ```bash
 python production_core_harness.py
 ```
-
-The command runs the real test suite through Python's pytest module invocation and exits with code `0` only when the Production Core gate passes.
-
-## Important boundary
-
-The harness does not claim that an external provider API is free or available. Provider integration tests remain isolated and use their existing project contracts. No secrets are printed or required by the harness.

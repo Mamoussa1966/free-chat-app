@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""HOTFIX93 Production Core.
+"""Production Core.
 
 Pure orchestration contracts.  This module contains no provider SDKs and never
 accepts or stores credential values.  Provider adapters remain responsible for
@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
-VERSION = "V22.1-HOTFIX93-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX94-PRODUCTION-HARDENED"
 FREE_CASCADE_MAX = 10
 
 

@@ -11,7 +11,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX93-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX94-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1243,7 +1243,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:
                 raise ProviderError("model execution identity mismatch", error_class="execution_identity_mismatch")
-            # HOTFIX93: when the official provider returns a model identity,
+            # Current release: when the official provider returns a model identity,
             # require it to match the requested candidate. This prevents the UI
             # from ever labeling a response with a model that the provider did
             # not actually report.
@@ -1264,7 +1264,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 raise ProviderError("cascade execution identity mismatch", error_class="execution_identity_mismatch")
             # Provider Output -> Schema Validation is the mandatory handoff gate.
             _validate_provider_output_schema(seat, result, executed_model)
-            # HOTFIX93 production contract: success is trusted only after the
+            # Current production contract: success is trusted only after the
             # provider-attested model and cascade identity are validated.
             ProviderExecutionContract.validate_success(
                 result, seat.key,
