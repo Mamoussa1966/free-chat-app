@@ -11,7 +11,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX94-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX95-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -54,7 +54,10 @@ DEEPSEEK_THINKING_MODE = str(os.getenv("DEEPSEEK_THINKING_MODE", "disabled")).st
 if DEEPSEEK_THINKING_MODE not in {"enabled", "disabled"}:
     DEEPSEEK_THINKING_MODE = "disabled"
 GEMINI_REQUEST_TIMEOUT_SECONDS = None
+# Backward-compatible public test seam; None means no artificial timeout.
+GEMINI_REQUEST_TIMEOUT = None
 GEMINI_RETRIES = 0
+ERROR_CLASS_NO_RESPONSE = "NO_RESPONSE_AFTER_CASCADE"
 
 
 @dataclass(frozen=True)
@@ -341,6 +344,12 @@ def _read_setting(name: str) -> Tuple[Optional[str], str]:
     empty. This prevents a stale environment variable from silently replacing
     a dashboard Secret and makes the source state diagnosable.
     """
+    # Keep _streamlit_secret as a live/test seam while retaining an explicit
+    # present-but-empty check below.  This gives the runtime and regression
+    # harness one authoritative precedence path.
+    secret_value = _streamlit_secret(name)
+    if secret_value is not None:
+        return secret_value, "streamlit_secrets"
     present, value = _streamlit_secret_state(name)
     if present:
         return value, "streamlit_secrets" if value else "streamlit_secrets_empty"
@@ -429,15 +438,7 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
 
 
 def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
-    # Preserve the public/test seam _streamlit_secret while also distinguishing
-    # a genuinely absent key from a present-but-empty Streamlit Secret.
-    for name in seat.model_env:
-        secret = _streamlit_secret(name)
-        if secret is not None:
-            return _parse_models(secret)
-        present, secret_state = _streamlit_secret_state(name)
-        if present:
-            return _parse_models(secret_state or "")
+    """Return only explicitly configured Free models with strict precedence."""
     return _parse_models(_setting(seat.model_env) or "")
 
 
@@ -1117,6 +1118,23 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
     }
 
 
+def _attempt_record(*, attempt: int, model: str, status_code: Optional[int], classification: str, retryable: bool, execution_time: float, request_id: str, round_no: int, final_result: str, provider: str = "") -> dict:
+    """Build the canonical safe attempt trace record used by UI/history tests."""
+    return {
+        "provider": str(provider or ""),
+        "attempt": int(attempt),
+        "model": str(model or "").strip(),
+        "status_code": status_code,
+        "classification": _canonical_error_classification(classification),
+        "retryable": bool(retryable),
+        "latency": round(float(execution_time or 0.0), 3),
+        "execution_time": round(float(execution_time or 0.0), 3),
+        "request_id": str(request_id or ""),
+        "round": int(round_no),
+        "final_result": str(final_result or "FAILED").upper(),
+    }
+
+
 def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) -> str:
     if exc is None:
         return "class=provider_error; Unknown provider failure."
@@ -1277,6 +1295,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             last_error = exc
             classification = _canonical_error_classification(exc.error_class)
             attempt_diagnostics.append({
+                "provider": seat.name,
                 "attempt": index + 1,
                 "model": executed_model,
                 "status_code": exc.status_code,
@@ -1311,6 +1330,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             wrapped = ProviderError(text or exc.__class__.__name__, status_code, internal)
             last_error = wrapped
             attempt_diagnostics.append({
+                "provider": seat.name,
                 "attempt": index + 1,
                 "model": executed_model,
                 "status_code": status_code,

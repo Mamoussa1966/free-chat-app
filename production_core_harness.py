@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""HOTFIX94 Production Core Test Harness.
+"""HOTFIX95 Production Core Test Harness.
 
 This is an offline, deterministic executor for the Production Core gate.
 It is intentionally independent from provider APIs and never needs secrets.
@@ -37,7 +37,44 @@ from production_core import (
     sanitize_audit_value,
 )
 
-ROOT = Path(__file__).resolve().parent
+def _discover_root() -> Path:
+    """Locate the actual application tree, even when Streamlit launches from a parent workspace.
+
+    Streamlit Cloud can place the repository under a parent checkout directory that also
+    contains legacy test files.  The Production Core must test the application tree that
+    owns this harness, not unrelated sibling/parent files.
+    """
+    required = {"production_core.py", "providers.py", "main.py", "VERSION.txt", "BASELINE_FILE_MANIFEST.json"}
+    here = Path(__file__).absolute().parent
+    if required.issubset({p.name for p in here.iterdir() if p.is_file()}):
+        return here
+    # If the harness was exposed from a workspace root, prefer a direct child that
+    # contains the complete application contract.
+    candidates = []
+    for child in here.iterdir():
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        try:
+            names = {p.name for p in child.iterdir() if p.is_file()}
+        except OSError:
+            continue
+        if required.issubset(names):
+            candidates.append(child)
+    if len(candidates) == 1:
+        return candidates[0]
+    # Finally inspect parents without resolving symlinks; this preserves the path
+    # through which Streamlit exposed the application.
+    for parent in (here, *here.parents):
+        try:
+            names = {p.name for p in parent.iterdir() if p.is_file()}
+        except OSError:
+            continue
+        if required.issubset(names):
+            return parent
+    raise RuntimeError("PRODUCTION_CORE_PROJECT_ROOT_NOT_FOUND")
+
+
+ROOT = _discover_root()
 BASELINE = ROOT / "BASELINE_FILE_MANIFEST.json"
 IGNORED = {".git", "__pycache__", ".pytest_cache", "build", "dist"}
 
@@ -92,7 +129,7 @@ def _pytest_env() -> dict[str, str]:
 def run_pytest() -> dict[str, Any]:
     started = time.perf_counter()
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--tb=short", "-rA"],
+        [sys.executable, "-m", "pytest", "-q", "tests", "--tb=short", "-rA"],
         cwd=ROOT,
         env=_pytest_env(),
         text=True,
@@ -193,7 +230,7 @@ def run_core_probes() -> dict[str, dict[str, Any]]:
 
 
 def render(report: dict[str, Any]) -> str:
-    lines = ["=" * 64, "HOTFIX94 — PRODUCTION CORE TEST HARNESS", "=" * 64]
+    lines = ["=" * 64, "HOTFIX95 — PRODUCTION CORE TEST HARNESS", "=" * 64]
     fp = report["file_preservation"]
     lines.append(f"File Preservation: {'PASS' if fp['passed'] else 'FAIL'}")
     lines.append(f"previous-release files: {fp['baseline_files']}")
@@ -219,7 +256,7 @@ def render(report: dict[str, Any]) -> str:
 
 def run() -> tuple[int, dict[str, Any]]:
     report = {
-        "version": "V22.1-HOTFIX94-PRODUCTION-HARDENED",
+        "version": "V22.1-HOTFIX95-PRODUCTION-HARDENED",
         "file_preservation": check_file_preservation(),
         "pytest": run_pytest(),
         "core_probes": run_core_probes(),

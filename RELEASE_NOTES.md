@@ -1,13 +1,13 @@
-# HOTFIX94 — REAL IN-APP PRODUCTION CORE TEST RUNNER
+# HOTFIX95 — REAL IN-APP PRODUCTION CORE TEST RUNNER
 
-Version: `V22.1-HOTFIX94-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX95-PRODUCTION-HARDENED`
 
 ## Baseline preservation
 
-HOTFIX94 is built from the complete previous release release ZIP. No previous release file is deleted or replaced by a reduced subset.
+HOTFIX95 is built from the complete previous release release ZIP. No previous release file is deleted or replaced by a reduced subset.
 
 - previous release ZIP members preserved: 73/73.
-- New HOTFIX94 files are additive only.
+- New HOTFIX95 files are additive only.
 - `BASELINE_FILE_MANIFEST.json` records the complete previous release file set used by the in-app preservation gate.
 
 ## Production Core validation path
@@ -32,7 +32,7 @@ The request is executed by the application's Python runtime. It is not sent to G
    - final `PASS` / `NO-GO` gate
 3. `tests/test_hotfix94_test_runner.py`
    - verifies the runner is wired to the harness
-   - verifies the HOTFIX94 release identity
+   - verifies the HOTFIX95 release identity
    - verifies the Streamlit UI exposes the runner
 4. Streamlit UI
    - sidebar button: `🧪 Run Production Core Tests`

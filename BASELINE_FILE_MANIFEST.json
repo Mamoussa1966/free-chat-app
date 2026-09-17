@@ -1,5 +1,5 @@
 {
-  "version": "V22.1-HOTFIX93-PRODUCTION-HARDENED",
+  "version": "V22.1-HOTFIX94-PRODUCTION-HARDENED",
   "files": [
     ".gitignore",
     ".streamlit/secrets.toml.example",
@@ -15,6 +15,7 @@
     "main.py",
     "production_core.py",
     "production_core_harness.py",
+    "production_core_test_runner.py",
     "providers.py",
     "requirements.txt",
     "tests/__init__.py",
@@ -62,6 +63,7 @@
     "tests/test_hotfix92_production_core.py",
     "tests/test_hotfix92_release_core.py",
     "tests/test_hotfix93_test_harness.py",
+    "tests/test_hotfix94_test_runner.py",
     "tests/test_model_execution_identity.py",
     "tests/test_model_identity_attestation.py",
     "tests/test_multiagent_architecture.py",
