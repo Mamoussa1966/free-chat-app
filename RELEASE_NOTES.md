@@ -1,10 +1,10 @@
-# V22.1-HOTFIX96-PRODUCTION-HARDENED
+# V22.1-HOTFIX97-PRODUCTION-HARDENED
 
-## HOTFIX96 — Production Core / Council Orchestrator Hardening
+## HOTFIX97 — Production Core / Council Orchestrator Hardening
 
-This release is rebuilt from the verified previous verified release Production-Hardened baseline and advances the release identity to HOTFIX96 without removing the retained release files or tests.
+This release is rebuilt from the verified previous verified release Production-Hardened baseline and advances the release identity to HOTFIX97 without removing the retained release files or tests.
 
-### Fixed in HOTFIX96
+### Fixed in HOTFIX97
 - Canonical release identity is synchronized across VERSION.txt, providers.py, main.py, Production Core, README, build_release.py, and the test suite.
 - Release metadata no longer contains stale historical HOTFIX identifiers.
 - Release-consistency tests are version-agnostic for historical regression modules instead of pinning an old release number.
@@ -19,4 +19,4 @@ This release is rebuilt from the verified previous verified release Production-H
 The release is not considered ready unless all retained tests pass, the ZIP is structurally valid, and the Production Core harness returns PASS.
 
 ### Deployment note
-This ZIP is the canonical HOTFIX96 artifact. A Streamlit deployment must be redeployed from this exact tree; a previously deployed mixed/stale tree is not evidence of the contents of this artifact.
+This ZIP is the canonical HOTFIX97 artifact. A Streamlit deployment must be redeployed from this exact tree; a previously deployed mixed/stale tree is not evidence of the contents of this artifact.
