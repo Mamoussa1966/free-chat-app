@@ -10,7 +10,7 @@ def result(seat, content):
 def test_hotfix91_transactional_proof_audit_redacts_values_and_proves_path():
     ds=Seat("deepseek",7,"DeepSeek"); ge=Seat("gemini",2,"Gemini")
     b=SharedContextBridge(request_id="req-91", round_no=1)
-    user="HOTFIX91 BRIDGE TRANSACTION TEST"
+    user="HOTFIX92 BRIDGE TRANSACTION TEST"
     b.record_provider_input(ds, user)
     value="X9pLm2Qa7Vr4Ts8Z"
     b.append_agent_output(ds, result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {value}"))
