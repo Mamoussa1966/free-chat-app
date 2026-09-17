@@ -4,7 +4,7 @@ from pathlib import Path
 def test_hotfix92_core_module_is_packaged_and_versioned():
     root = Path(__file__).resolve().parents[1]
     assert (root / "production_core.py").is_file()
-    assert "HOTFIX92" in (root / "VERSION.txt").read_text(encoding="utf-8")
+    assert "HOTFIX93" in (root / "VERSION.txt").read_text(encoding="utf-8")
 
 
 def test_main_uses_production_lifecycle():

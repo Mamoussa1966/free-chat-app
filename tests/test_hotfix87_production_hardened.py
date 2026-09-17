@@ -3,7 +3,7 @@ import main
 import providers
 
 def test_version_contract():
-    assert providers.VERSION == "V22.1-HOTFIX92-PRODUCTION-HARDENED"
+    assert providers.VERSION == "V22.1-HOTFIX93-PRODUCTION-HARDENED"
 
 def test_deepseek_alias_attestation():
     ds = providers.BUILTIN_SEATS[-1]
