@@ -52,3 +52,27 @@ def test_hotfix112_release_identity_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
     assert version == "V22.1-HOTFIX112-PRODUCTION-HARDENED"
     assert main.APP_VERSION == version
+
+
+def test_hotfix112_application_owned_read_closes_gap_when_target_omits_control_record():
+    ds = next(s for s in main.get_seats() if s.key == "deepseek")
+    gem = next(s for s in main.get_seats() if s.key == "gemini")
+    bridge = main.SharedContextBridge(request_id="rid112-c", round_no=1)
+    value = "DS112-READ-GAP-CLOSED"
+    bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {value}"))
+    bridge.commit(gem)
+    bridge.barrier()
+    # Gemini's real HTTP response is allowed to omit the optional control line.
+    resolution = bridge.consume_read_requests(gem, _result(gem, "I answered the user normally."))
+    assert resolution["status"] == "RESOLVED"
+    assert resolution["value"] == value
+    audit = bridge.transaction_audit(user_prompt="HOTFIX112 bridge isolation test")
+    assert audit["WRITE"] == "PASS"
+    assert audit["VALIDATE"] == "PASS"
+    assert audit["COMMIT"] == "PASS"
+    assert audit["BARRIER"] == "PASS"
+    assert audit["READ"] == "PASS"
+    assert audit["SCHEMA_VALIDATION"] == "PASS"
+    assert audit["MATCH"] == "PASS"
+    assert audit["GEMINI_INPUT_PROMPT_CONTAINS_VALUE"] == "NO"
+    assert audit["BRIDGE_STATE_CONTAINS_VALUE"] == "YES"
