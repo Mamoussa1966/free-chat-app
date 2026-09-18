@@ -15,7 +15,7 @@ def _result(seat, content, model="test-model", request_id="rid112", round_no=1):
     }
 
 
-def test_hotfix112_prompt_boundary_redacts_value_even_when_embedded_in_prose():
+def test_hotfix113_prompt_boundary_redacts_value_even_when_embedded_in_prose():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid112-a", round_no=1)
@@ -27,7 +27,7 @@ def test_hotfix112_prompt_boundary_redacts_value_even_when_embedded_in_prose():
     assert "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT)" in prompt
 
 
-def test_hotfix112_actual_provider_prompt_is_captured_and_redacted():
+def test_hotfix113_actual_provider_prompt_is_captured_and_redacted():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid112-b", round_no=1)
@@ -48,13 +48,13 @@ def test_hotfix112_actual_provider_prompt_is_captured_and_redacted():
     assert audit["BRIDGE_STATE_CONTAINS_VALUE"] == "YES"
 
 
-def test_hotfix112_release_identity_is_canonical():
+def test_hotfix113_release_identity_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX112-PRODUCTION-HARDENED"
+    assert version == "V22.1-HOTFIX113-PRODUCTION-HARDENED"
     assert main.APP_VERSION == version
 
 
-def test_hotfix112_application_owned_read_closes_gap_when_target_omits_control_record():
+def test_hotfix113_application_owned_read_closes_gap_when_target_omits_control_record():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid112-c", round_no=1)
@@ -66,7 +66,7 @@ def test_hotfix112_application_owned_read_closes_gap_when_target_omits_control_r
     resolution = bridge.consume_read_requests(gem, _result(gem, "I answered the user normally."))
     assert resolution["status"] == "RESOLVED"
     assert resolution["value"] == value
-    audit = bridge.transaction_audit(user_prompt="HOTFIX112 bridge isolation test")
+    audit = bridge.transaction_audit(user_prompt="HOTFIX113 bridge isolation test")
     assert audit["WRITE"] == "PASS"
     assert audit["VALIDATE"] == "PASS"
     assert audit["COMMIT"] == "PASS"
@@ -76,3 +76,35 @@ def test_hotfix112_application_owned_read_closes_gap_when_target_omits_control_r
     assert audit["MATCH"] == "PASS"
     assert audit["GEMINI_INPUT_PROMPT_CONTAINS_VALUE"] == "NO"
     assert audit["BRIDGE_STATE_CONTAINS_VALUE"] == "YES"
+
+
+def test_hotfix113_cascade_position_is_authoritative_and_one_based():
+    from unittest.mock import patch
+    from providers import SEATS, call_seat
+    gem = next(s for s in SEATS if s.key == "gemini")
+    calls = []
+    def fake_call(seat, prompt, model, credential, *args, **kwargs):
+        calls.append(model)
+        if model != "gemini-3.6-flash":
+            from providers import ProviderError
+            raise ProviderError("model unavailable", error_class="model_unavailable", status_code=404)
+        return "OK"
+    with patch("providers.call_official", side_effect=fake_call):
+        result = call_seat(gem, "x", "", 1, False, "key", [], ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"), None, "RID113")
+    assert calls == ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]
+    assert result["attempted_models"] == calls
+    assert result["executed_model"] == calls[-1]
+    assert result["cascade_position"] == 3
+
+
+def test_hotfix113_history_persists_authoritative_cascade_position():
+    from main import _run_council
+    from unittest.mock import patch
+    chat = {"messages": [], "request_records": [], "history_identity_ledger": [], "result_keys": [], "audit_events": []}
+    gem = next(s for s in main.get_seats() if s.key == "gemini")
+    result = {"seat": gem.key, "name": gem.name, "label": gem.label, "status": "SUCCESS", "mode": "official", "model": "m3", "executed_model": "m3", "provider_reported_model": "m3", "content": "ok", "attempted_models": ["m1","m2","m3"], "cascade_position": 3, "attempt_diagnostics": [], "request_id": "RID113H", "round": 1}
+    with patch("main._run_round", return_value=[result]), patch("main._provider_identity_matches", return_value=True):
+        _run_council("x", chat, 1, {gem.key:"key"}, [], {gem.key:("m1","m2","m3")}, "msg", "RID113H")
+    msg = chat["messages"][0]
+    assert msg["cascade_position"] == 3
+    assert msg["attempted_models"][-1] == msg["executed_model"] == "m3"
