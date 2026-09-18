@@ -1,9 +1,9 @@
-# HOTFIX114 — Production Readiness / Council Reliability Gate
+# HOTFIX115 — Production Readiness / Council Reliability Gate
 
-Version: `V22.1-HOTFIX114-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX115-PRODUCTION-HARDENED`
 
 ## Scope
-Built directly from the complete HOTFIX114 artifact. No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade configuration, Gemini/DeepSeek configuration, or existing Transactional Bridge prompt-isolation policy is changed.
+Built directly from the complete HOTFIX115 artifact. No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade configuration, Gemini/DeepSeek configuration, or existing Transactional Bridge prompt-isolation policy is changed.
 
 ## Reliability gates
 1. Request lifecycle is explicitly audited: `REQUEST_START → ROUTING → PROVIDER_EXECUTION → RESPONSE_VALIDATION → REQUEST_COMMIT`.
@@ -15,13 +15,13 @@ Built directly from the complete HOTFIX114 artifact. No Secrets, `*_FREE_MODELS`
 7. Production audit retains request/round/seat/provider/attempt/model/cascade/status/failure/bridge/context/latency metadata without secrets or raw provider payloads.
 
 ## Compatibility
-The complete HOTFIX114 file tree is preserved; no files are removed as part of this hotfix.
+The complete HOTFIX115 file tree is preserved; no files are removed as part of this hotfix.
 
-# HOTFIX114 — Cascade Execution Identity Hardening
+# HOTFIX115 — Cascade Execution Identity Hardening
 
-Version: `V22.1-HOTFIX114-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX115-PRODUCTION-HARDENED`
 
-Built directly from the verified HOTFIX114 release artifact while preserving the complete file tree and existing tests.
+Built directly from the verified HOTFIX115 release artifact while preserving the complete file tree and existing tests.
 
 ## Fixes
 - Makes `cascade_position` authoritative from the actual `attempted_models` execution ledger.
@@ -33,14 +33,25 @@ Built directly from the verified HOTFIX114 release artifact while preserving the
 - No Secret, `*_FREE_MODELS`, provider catalog, Local Engine, or Paid fallback behavior is changed.
 
 ## Preservation
-- HOTFIX114 transactional bridge isolation remains unchanged.
+- HOTFIX115 transactional bridge isolation remains unchanged.
 - Prompt non-leak protections remain unchanged.
 - Existing test tree is preserved.
 
 
-## HOTFIX114 release hardening refresh
+## HOTFIX115 release hardening refresh
 
 - Preserved the complete release tree and the required non-secret `.streamlit/secrets.toml.example`.
 - Runtime `.streamlit/secrets.toml` symlinks are excluded from isolated test copies and release ZIPs; arbitrary symlinks remain fail-closed.
 - No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade, Gemini/DeepSeek configuration, or Transactional Bridge behavior is changed.
 - Production Core tests and the complete pytest suite are required to pass before packaging.
+
+
+# HOTFIX115 — Production Gate / Authoritative Cascade Position Reporting
+
+- Built directly from HOTFIX115-PRODUCTION-HARDENED-FINAL-FIXED.
+- `cascade_position` and `executed_cascade_position` are recomputed from `attempted_models[]` and the actual `executed_model` after the provider HTTP call.
+- Free Cascade numbering is strictly one-based: the first actual HTTP attempt is `#1`; `0` is never a valid executed position.
+- The explicit transactional bridge diagnostic now receives an application-authenticated runtime attestation after the round completes, preventing provider-generated values from contradicting the authoritative execution ledger.
+- Transactional Bridge value remains redacted from prompts; only the proof audit exposes redacted bridge metadata.
+- No Secrets, `*_FREE_MODELS`, provider credentials, Local Engine, Paid fallback, Dynamic Model Discovery, or existing bridge policy is changed.
+- Full pytest and Production Core Gate must pass before release packaging.

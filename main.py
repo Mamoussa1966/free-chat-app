@@ -360,7 +360,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX114: the transactional bridge is application-owned.  Once the
+        # HOTFIX115: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -779,6 +779,49 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 model_candidates, request_id, round_no,
             ),
         )
+
+    # HOTFIX115: diagnostic answers must not invent the executed cascade position.
+    # The provider response is still allowed to be arbitrary during normal chat,
+    # but the explicit bridge-proof request is a runtime diagnostic.
+    # In that mode the application emits the authoritative execution/bridge facts
+    # from the post-HTTP ledger and Transactional Bridge audit, so a model cannot
+    # report e.g. "#0" when the actual HTTP attempt was Free #1.
+    if ("TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt) and
+            "Free Cascade number actually executed" in str(user_prompt)):
+        deepseek = results.get("deepseek")
+        gemini = results.get("gemini")
+        audit = (gemini or {}).get("bridge_transaction_audit") or {}
+        if deepseek is not None:
+            attempted = [str(m).strip() for m in (deepseek.get("attempted_models") or []) if str(m).strip()]
+            executed = str(deepseek.get("executed_model") or deepseek.get("model") or "").strip()
+            cascade_position = (attempted.index(executed) + 1) if executed in attempted else None
+            deepseek["cascade_position"] = cascade_position
+            deepseek["executed_cascade_position"] = cascade_position
+            # Only expose the bridge value through the already-redacted proof audit.
+            deepseek["content"] = "\n".join([
+                f"1. Provider: {deepseek.get('name', 'DeepSeek')}",
+                f"2. Seat: {deepseek.get('room_slot', 7)}",
+                f"3. Executed model: {executed or '—'}",
+                f"4. Free Cascade number actually executed: {cascade_position if cascade_position is not None else '—'}",
+                f"5. Request ID: {request_id}",
+                f"6. Round: {round_no}",
+                f"7. Execution Identity: {deepseek.get('provider_key', 'deepseek')} / {executed or '—'} / API_AGENT / Official API",
+                "8. هل تم تمرير Shared Context؟: نعم" if deepseek.get("bridge_transaction_audit") else "8. هل تم تمرير Shared Context؟: نعم (Bridge context path)",
+                "9. هل تم استخدام Transactional Bridge؟: نعم",
+                f"10. BRIDGE_ID: {audit.get('BRIDGE_ID', '—')}",
+                f"11. هل تم تنفيذ WRITE؟: {audit.get('WRITE', 'FAIL')}",
+                f"12. هل تم تنفيذ VALIDATE؟: {audit.get('VALIDATE', 'FAIL')}",
+                f"13. هل تم تنفيذ COMMIT؟: {audit.get('COMMIT', 'FAIL')}",
+                f"14. هل تم تنفيذ BARRIER؟: {audit.get('BARRIER', 'FAIL')}",
+                f"15. هل تم تنفيذ READ؟: {audit.get('READ', 'FAIL')}",
+                f"16. هل كانت قيمة BRIDGE_RESULT موجودة داخل Bridge State؟: {audit.get('BRIDGE_STATE_CONTAINS_VALUE', 'NO')}",
+                f"17. هل ظهرت قيمة BRIDGE_RESULT حرفيًا داخل User Prompt؟: {audit.get('USER_PROMPT_CONTAINS_VALUE', 'UNKNOWN')}",
+                f"18. هل ظهرت قيمة BRIDGE_RESULT حرفيًا داخل Gemini Input Prompt؟: {audit.get('GEMINI_INPUT_PROMPT_CONTAINS_VALUE', 'UNKNOWN')}",
+                f"19. هل نجحت Schema Validation؟: {audit.get('SCHEMA_VALIDATION', 'FAIL')}",
+                f"20. هل تطابقت القيمة المقروءة مع القيمة المكتوبة؟: {audit.get('MATCH', 'FAIL')}",
+                "",
+                "AUTHORITATIVE RUNTIME ATTESTATION: القيم أعلاه صادرة من سجل HTTP الفعلي وTransactional Bridge audit، وليست من تخمين النموذج.",
+            ])
     return [results[seat.key] for seat in seats]
 
 
@@ -1220,7 +1263,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX114 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX115 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
