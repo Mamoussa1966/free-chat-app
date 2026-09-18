@@ -33,7 +33,8 @@ def test_hotfix83_bridge_passes_prior_agent_output_to_later_agent(monkeypatch):
 
     results = main._run_round("bridge", chat, 1, credentials, [], candidates, "u1", None, "r1")
 
-    assert "BRIDGE_WRITE: CURRENT_RELEASE" in seen["gemini"]
+    assert "BRIDGE CONTEXT CAPABILITY (SANITIZED)" in seen["gemini"]
+    assert "CURRENT_RELEASE" not in seen["gemini"]
     assert "Room seat: 7" in seen["gemini"]
     assert "Provider identity: DeepSeek" in seen["gemini"]
     assert [r["seat"] for r in results] == [s.key for s in seats]

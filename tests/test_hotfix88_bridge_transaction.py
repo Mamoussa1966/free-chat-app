@@ -31,8 +31,9 @@ def test_hotfix88_transaction_trace_and_prompt_redaction():
     bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {generated}"))
     prompt = bridge.prompt_snapshot(gem)
     assert generated not in prompt
-    assert "Key: BRIDGE_RESULT" in prompt
-    assert "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT)" in prompt
+    assert "Key: BRIDGE_RESULT" not in prompt
+    assert "BRIDGE_RESULT" not in prompt
+    assert "BRIDGE CONTEXT CAPABILITY (SANITIZED)" in prompt
     bridge.commit()
     bridge.barrier()
     assert bridge.read("BRIDGE_RESULT", gem) == generated

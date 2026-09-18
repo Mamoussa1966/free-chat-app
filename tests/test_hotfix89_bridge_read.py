@@ -63,7 +63,7 @@ def test_hotfix89_resolves_gemini_read_without_putting_value_in_gemini_prompt(mo
     out = main._run_round("bridge", chat, 1, credentials, [], models, "u", None, "rid89")
     gemini = next(r for r in out if r["seat"] == "gemini")
     assert "DS89-ONLY-IN-BRIDGE-STATE" not in seen["gemini"]
-    assert "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT)" in seen["gemini"]
+    assert "BRIDGE CONTEXT CAPABILITY (SANITIZED)" in seen["gemini"]
     assert gemini["bridge_read_status"] == "PASS"
     assert gemini["bridge_schema_validation"] == "PASS"
     assert gemini["content"] == "DS89-ONLY-IN-BRIDGE-STATE"

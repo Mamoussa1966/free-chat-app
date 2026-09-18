@@ -39,7 +39,7 @@ def test_hotfix85_seat7_write_reaches_gemini_seat2(monkeypatch):
         chat, 1, credentials, [], candidates, "u85", None, "r85"
     )
 
-    assert "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT)" in seen["gemini"]
-    assert "Key: BRIDGE_RESULT" in seen["gemini"]
+    assert "BRIDGE CONTEXT CAPABILITY (SANITIZED)" in seen["gemini"]
+    assert "Key: BRIDGE_RESULT" not in seen["gemini"]
     assert "DEEPSEEK-7-WROTE-7319" not in seen["gemini"]
     assert [r["seat"] for r in results] == [s.key for s in seats]

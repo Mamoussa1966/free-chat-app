@@ -37,7 +37,7 @@ def test_bridge_dependency_order_deepseek_then_gemini(monkeypatch):
     monkeypatch.setattr(main,"call_seat",fake)
     c={s.key:"TEST" for s in seats}; m={s.key:("m",) for s in seats}; chat={"messages":[],"request_ids":[],"request_records":[],"history_identity_ledger":[],"result_keys":[]}
     out=main._run_round("bridge",chat,1,c,[],m,"u",None,"rid87")
-    assert "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT)" in seen["gemini"]
-    assert "Key: BRIDGE_RESULT" in seen["gemini"]
+    assert "BRIDGE CONTEXT CAPABILITY (SANITIZED)" in seen["gemini"]
+    assert "Key: BRIDGE_RESULT" not in seen["gemini"]
     assert "DEEPSEEK-7-GENERATED-87" not in seen["gemini"]
     assert [r["seat"] for r in out]==[s.key for s in seats]
