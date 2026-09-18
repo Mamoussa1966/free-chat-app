@@ -360,7 +360,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX112: the transactional bridge is application-owned.  Once the
+        # HOTFIX113: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -722,9 +722,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             )
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
-                attempts = result.get("attempts") or result.get("cascade_attempts") or []
-                if isinstance(attempts, list) and attempts:
-                    result["cascade_position"] = len(attempts)
+                # Authoritative cascade identity comes from the actual API-attempt
+                # ledger, never from a provider-generated field.
+                attempted_models = [str(m).strip() for m in result.get("attempted_models", []) if str(m).strip()]
+                executed_model = str(result.get("executed_model") or result.get("model") or "").strip()
+                if executed_model and executed_model in attempted_models:
+                    result["cascade_position"] = attempted_models.index(executed_model) + 1
+                elif executed_model:
+                    raise RuntimeError("Execution identity has no matching actual cascade attempt")
             # Capture the exact prompt actually built by the provider runtime,
             # then remove the transient audit field before any history/UI path.
             actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
@@ -817,7 +822,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     provider_reported_model = str(result.get("provider_reported_model") or "").strip()
                     if not _provider_identity_matches(seat_key, executed_model, provider_reported_model):
                         raise RuntimeError(f"Provider identity invariant violated: {provider_reported_model!r} != {executed_model!r}")
-                    chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "room_slot": int(next((s.room_slot for s in get_seats() if s.key == seat_key), 0)), "provider_identity": next((s.name for s in get_seats() if s.key == seat_key), result.get("name", "")), "provider_key": seat_key, "agent_type": "API_AGENT", "api_mode": "Official API", "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
+                    chat["messages"].append({"role": "assistant", "id": uuid.uuid4().hex, "seat": result["name"], "seat_key": seat_key, "label": result["label"], "content": result["content"], "round": round_no, "mode": "official", "model": executed_model, "executed_model": executed_model, "provider_reported_model": provider_reported_model, "cascade_position": int(result.get("cascade_position") or len(attempted_models) or 0), "room_slot": int(next((s.room_slot for s in get_seats() if s.key == seat_key), 0)), "provider_identity": next((s.name for s in get_seats() if s.key == seat_key), result.get("name", "")), "provider_key": seat_key, "agent_type": "API_AGENT", "api_mode": "Official API", "attempted_models": attempted_models, "attempt_summaries": _history_attempt_summaries(result.get("attempt_diagnostics", []) or []), "request_id": request_id, "result_key": result_key, "created_at": _now()})
             keys = set(chat.get("result_keys", []))
             keys.update(f"{request_id}:{round_no}:{r.get('seat', '')}" for r in round_results)
             chat["result_keys"] = list(keys)[-MAX_CHAT_MESSAGES:]
@@ -1001,7 +1006,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
         st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
         models = tuple(model_candidates.get(seat.key) or ())
-        st.caption("Free #1 → " + f"`{models[0]}`" if models else "لا يوجد Free API model مُكوّن")
+        st.caption("Configured Free #1 → " + f"`{models[0]}`" if models else "لا يوجد Free API model مُكوّن")
         messages = [m for m in chat.get("messages", []) if m.get("seat") == seat.name]
         if not messages:
             st.caption("بانتظار أول جولة…")
@@ -1029,7 +1034,10 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             prefix = f"Request {request_no} · " if request_no is not None else ""
             st.markdown(f"**{prefix}Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
             if attempted_models:
-                st.caption("Cascade attempts: " + " → ".join(f"`{m}`" for m in attempted_models))
+                st.caption("Cascade attempts: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(attempted_models)))
+            cascade_position = int(message.get("cascade_position") or (attempted_models.index(executed_model) + 1 if executed_model in attempted_models else 0))
+            if cascade_position > 0:
+                st.caption(f"Executed Free Cascade: **#{cascade_position}** · `{executed_model}`")
             for detail in message.get("attempt_summaries", []) or []:
                 _render_temporary_attempt_diagnostic(detail)
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
@@ -1206,7 +1214,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX112 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX113 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 

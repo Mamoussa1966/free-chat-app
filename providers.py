@@ -11,7 +11,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX112-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX113-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1089,6 +1089,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         })
 
 
+    cascade_position = (attempted.index(normalized_model) + 1) if normalized_model and normalized_model in attempted else (len(attempted) if attempted else None)
     return {
         "seat": seat.key,
         "name": seat.name,
@@ -1103,6 +1104,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         "error": error,
         "latency": round(time.perf_counter() - started, 3),
         "attempted_models": list(attempted),
+        "cascade_position": cascade_position,
         "attempt_diagnostics": [dict(x) for x in (attempt_diagnostics or [])],
         # Public-safe summaries are available to the live diagnostic renderer.
         # Raw attempt diagnostics remain transient and are never required by UI/history.
