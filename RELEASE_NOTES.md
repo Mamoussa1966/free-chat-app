@@ -36,3 +36,11 @@ Built directly from the verified HOTFIX114 release artifact while preserving the
 - HOTFIX114 transactional bridge isolation remains unchanged.
 - Prompt non-leak protections remain unchanged.
 - Existing test tree is preserved.
+
+
+## HOTFIX114 release hardening refresh
+
+- Preserved the complete release tree and the required non-secret `.streamlit/secrets.toml.example`.
+- Runtime `.streamlit/secrets.toml` symlinks are excluded from isolated test copies and release ZIPs; arbitrary symlinks remain fail-closed.
+- No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade, Gemini/DeepSeek configuration, or Transactional Bridge behavior is changed.
+- Production Core tests and the complete pytest suite are required to pass before packaging.

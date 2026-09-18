@@ -123,6 +123,11 @@ def _copy_tree_safely(destination: Path) -> None:
         if any(part in IGNORED_DIRS for part in rel.parts):
             continue
         if src.is_symlink():
+            # Runtime Streamlit credentials may be represented as a symlink in
+            # deployment workspaces. Never copy/package the runtime secret;
+            # preserve the non-secret .streamlit/secrets.toml.example instead.
+            if rel.as_posix() == ".streamlit/secrets.toml":
+                continue
             raise SystemExit(f"Refusing to test/package symlinked source: {rel}")
         dst = destination / rel
         if src.is_dir():
@@ -217,6 +222,11 @@ def package(output: Path) -> None:
             if rel.endswith((".pyc", ".pyo", ".zip", ".sha256")) or rel == "RELEASE_MANIFEST.json":
                 continue
             if path.is_symlink():
+                # Never ship the runtime Streamlit secret, even when a hosting
+                # workspace materializes it as a symlink. Other symlinks remain
+                # fail-closed because they are not part of a reproducible release.
+                if rel == ".streamlit/secrets.toml":
+                    continue
                 raise SystemExit(f"Refusing to package symlink: {rel}")
             zf.write(path, rel)
 
