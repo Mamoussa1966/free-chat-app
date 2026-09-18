@@ -8,6 +8,7 @@ import json
 import re
 import time
 import uuid
+import threading
 
 import streamlit as st
 from streamlit.components.v1 import html as components_html
@@ -15,6 +16,12 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract
+
+# HOTFIX116: process-local idempotency gate for duplicate Streamlit submissions.
+# A rerun can arrive before the first request has persisted its fingerprint;
+# reserve the fingerprint before generating request_id or making any provider call.
+_REQUEST_GATE_LOCK = threading.RLock()
+_ACTIVE_REQUEST_FINGERPRINTS: set[str] = set()
 from production_core_test_runner import run_production_core_tests, render_report as render_production_core_report
 
 APP_VERSION = PROVIDER_VERSION
@@ -360,7 +367,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX115: the transactional bridge is application-owned.  Once the
+        # HOTFIX116: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -780,7 +787,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             ),
         )
 
-    # HOTFIX115: diagnostic answers must not invent the executed cascade position.
+    # HOTFIX116: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
     # but the explicit bridge-proof request is a runtime diagnostic.
     # In that mode the application emits the authoritative execution/bridge facts
@@ -1263,7 +1270,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX115 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX116 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
@@ -1334,9 +1341,18 @@ def run_app() -> None:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
         fingerprint = _request_fingerprint(prompt, attachments)
-        if fingerprint in chat.get("request_ids", []):
-            st.warning("تم تجاهل طلب مكرر مطابق تمامًا لطلب أُرسل في هذه المحادثة.")
-            return
+        # HOTFIX116: atomic reservation closes the race where two Streamlit
+        # reruns submit the same logical request before either can persist it.
+        # The second submission is rejected before request_id allocation and
+        # before _run_council(), so it cannot create a second provider run.
+        with _REQUEST_GATE_LOCK:
+            if fingerprint in chat.get("request_ids", []):
+                st.warning("تم تجاهل طلب مكرر مطابق تمامًا لطلب أُرسل في هذه المحادثة.")
+                return
+            if fingerprint in _ACTIVE_REQUEST_FINGERPRINTS:
+                st.warning("تم تجاهل طلب مكرر قيد التنفيذ بالفعل.")
+                return
+            _ACTIVE_REQUEST_FINGERPRINTS.add(fingerprint)
         if not chat["messages"]:
             chat["title"] = _title_from_prompt(prompt)
         user_message_id = uuid.uuid4().hex
@@ -1346,6 +1362,10 @@ def run_app() -> None:
         chat["request_ids"].append(fingerprint)
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
         chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now()})
+        # The fingerprint is now durably present in the active chat identity
+        # ledger; release the process gate so unrelated requests may proceed.
+        with _REQUEST_GATE_LOCK:
+            _ACTIVE_REQUEST_FINGERPRINTS.discard(fingerprint)
         attachment_context = "\n".join(f"- {a.get('name')} ({a.get('mime')}, {a.get('size', 0)} bytes, sha256={a.get('sha256', '')})" for a in attachments)[:6000]
         request_no = _request_display_number(chat, request_id)
         chat["messages"].append({"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()})
