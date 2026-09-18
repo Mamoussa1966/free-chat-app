@@ -50,5 +50,5 @@ def test_shared_context_and_bridge_require_commit_before_read_and_isolate_target
         pass
     else:
         raise AssertionError("read before commit must fail")
-    bridge.commit(); bridge.read("gemini")
+    bridge.commit(); bridge.barrier(); bridge.read("gemini")
     assert bridge.state.value == "BARRIER_OPEN"
