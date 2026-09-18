@@ -40,4 +40,4 @@ def test_lifecycle_has_production_gate_events():
     assert life.state is RequestState.COMPLETED
 
 def test_version():
-    assert Path("VERSION.txt").read_text().strip()=="V22.1-HOTFIX118-PRODUCTION-HARDENED"
+    assert Path("VERSION.txt").read_text().strip()=="V22.1-HOTFIX119-PRODUCTION-HARDENED"

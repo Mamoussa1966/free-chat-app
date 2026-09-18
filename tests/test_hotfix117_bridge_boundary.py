@@ -20,7 +20,7 @@ def test_hotfix117_gemini_prompt_contains_neither_bridge_key_nor_value():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid117-a", round_no=1)
-    value = "HOTFIX118-CANARY-9Q7X"
+    value = "HOTFIX119-CANARY-9Q7X"
     bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {value}"))
     bridge.commit(gem)
     bridge.barrier()
@@ -38,7 +38,7 @@ def test_hotfix117_read_is_application_owned_and_happens_after_barrier():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid117-b", round_no=1)
-    value = "HOTFIX118-READ-AFTER-BARRIER"
+    value = "HOTFIX119-READ-AFTER-BARRIER"
     bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {value}"))
     assert bridge.read("BRIDGE_RESULT", gem) is None
     bridge.commit(gem)
@@ -47,7 +47,7 @@ def test_hotfix117_read_is_application_owned_and_happens_after_barrier():
     resolved = bridge.consume_read_requests(gem, _result(gem, "normal Gemini response"))
     assert resolved["status"] == "RESOLVED"
     assert resolved["value"] == value
-    audit = bridge.transaction_audit(user_prompt="HOTFIX118 bridge isolation test")
+    audit = bridge.transaction_audit(user_prompt="HOTFIX119 bridge isolation test")
     assert audit["WRITE"] == "PASS"
     assert audit["VALIDATE"] == "PASS"
     assert audit["COMMIT"] == "PASS"
@@ -57,4 +57,4 @@ def test_hotfix117_read_is_application_owned_and_happens_after_barrier():
 
 
 def test_hotfix117_release_identity_is_canonical():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX118-PRODUCTION-HARDENED"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX119-PRODUCTION-HARDENED"
