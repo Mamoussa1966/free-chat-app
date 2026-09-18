@@ -4,7 +4,7 @@ import re
 
 def test_hotfix111_version_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX114-PRODUCTION-HARDENED"
+    assert version == "V22.1-HOTFIX115-PRODUCTION-HARDENED"
     assert Path("providers.py").read_text(encoding="utf-8").count(version) >= 1
     assert "APP_VERSION = PROVIDER_VERSION" in Path("main.py").read_text(encoding="utf-8")
 
@@ -32,5 +32,5 @@ def test_hotfix111_free_only_contract_remains_explicit():
 
 def test_hotfix111_harness_reports_current_identity():
     harness = Path("production_core_harness.py").read_text(encoding="utf-8")
-    assert "HOTFIX114" in harness
-    assert '"version": "V22.1-HOTFIX114-PRODUCTION-HARDENED"' in harness
+    assert "HOTFIX115" in harness
+    assert '"version": "V22.1-HOTFIX115-PRODUCTION-HARDENED"' in harness

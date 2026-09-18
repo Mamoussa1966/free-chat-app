@@ -50,7 +50,7 @@ def test_hotfix113_actual_provider_prompt_is_captured_and_redacted():
 
 def test_hotfix113_release_identity_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX114-PRODUCTION-HARDENED"
+    assert version == "V22.1-HOTFIX115-PRODUCTION-HARDENED"
     assert main.APP_VERSION == version
 
 
@@ -66,7 +66,7 @@ def test_hotfix113_application_owned_read_closes_gap_when_target_omits_control_r
     resolution = bridge.consume_read_requests(gem, _result(gem, "I answered the user normally."))
     assert resolution["status"] == "RESOLVED"
     assert resolution["value"] == value
-    audit = bridge.transaction_audit(user_prompt="HOTFIX114 bridge isolation test")
+    audit = bridge.transaction_audit(user_prompt="HOTFIX115 bridge isolation test")
     assert audit["WRITE"] == "PASS"
     assert audit["VALIDATE"] == "PASS"
     assert audit["COMMIT"] == "PASS"
@@ -108,3 +108,23 @@ def test_hotfix113_history_persists_authoritative_cascade_position():
     msg = chat["messages"][0]
     assert msg["cascade_position"] == 3
     assert msg["attempted_models"][-1] == msg["executed_model"] == "m3"
+
+
+def test_hotfix115_diagnostic_cascade_position_is_authoritative_and_one_based():
+    from unittest.mock import patch
+    from providers import SEATS, ProviderError, call_seat
+    gem = next(s for s in SEATS if s.key == "gemini")
+    calls = []
+    def fake_call(seat, prompt, model, credential, *args, **kwargs):
+        calls.append(model)
+        if model != "m3":
+            raise ProviderError("model unavailable", error_class="model_unavailable", status_code=404)
+        return "provider text"
+    with patch("providers.call_official", side_effect=fake_call):
+        result = call_seat(gem, "x", "", 1, False, "key", [], ("m1", "m2", "m3"), None, "RID115")
+    assert calls == ["m1", "m2", "m3"]
+    assert result["attempted_models"] == calls
+    assert result["executed_model"] == "m3"
+    assert result["cascade_position"] == 3
+    assert result["executed_cascade_position"] == 3
+    assert result["cascade_position"] != 0
