@@ -8,7 +8,7 @@ def test_hotfix119_application_owned_read_is_resolved_before_target_http():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid119-read", round_no=1)
-    value = "HOTFIX119-READ-CANARY-7Q9X"
+    value = "HOTFIX120-READ-CANARY-7Q9X"
     bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {value}"))
     bridge.commit(gem)
     bridge.barrier()
@@ -27,4 +27,4 @@ def test_hotfix119_application_owned_read_is_resolved_before_target_http():
     assert audit["BRIDGE_STATE_CONTAINS_VALUE"] == "YES"
 
 def test_hotfix119_release_identity():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX119-PRODUCTION-HARDENED"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120-PRODUCTION-HARDENED"

@@ -11,7 +11,7 @@ def test_hotfix118_runtime_payload_attestation_is_final_gate():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid118-a", round_no=1)
-    value = "HOTFIX119-RUNTIME-CANARY-7Q9X"
+    value = "HOTFIX120-RUNTIME-CANARY-7Q9X"
     bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {value}"))
     bridge.commit(gem); bridge.barrier()
     user = bridge.sanitize_user_prompt("runtime payload isolation test")
@@ -36,7 +36,7 @@ def test_hotfix118_tampered_post_seal_audit_fails_gate():
     ds = next(s for s in main.get_seats() if s.key == "deepseek")
     gem = next(s for s in main.get_seats() if s.key == "gemini")
     bridge = main.SharedContextBridge(request_id="rid118-b", round_no=1)
-    value = "HOTFIX119-TAMPER-CANARY"
+    value = "HOTFIX120-TAMPER-CANARY"
     bridge.append_agent_output(ds, _result(ds, f"BRIDGE_WRITE: BRIDGE_RESULT = {value}"))
     bridge.commit(gem); bridge.barrier()
     bridge.record_provider_input(gem, "sanitized")
@@ -49,4 +49,4 @@ def test_hotfix118_tampered_post_seal_audit_fails_gate():
 
 
 def test_hotfix118_release_identity():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX119-PRODUCTION-HARDENED"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120-PRODUCTION-HARDENED"
