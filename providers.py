@@ -11,7 +11,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX113-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX114-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1298,6 +1298,10 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 identity_matcher=_deepseek_model_identity_matches if seat.key == "deepseek" else None,
             )
             result["cascade_position"] = attempted.index(executed_model) + 1
+            result["executed_cascade_position"] = result["cascade_position"]
+            result["configured_model"] = candidates[0]
+            result["execution_status"] = "SUCCESS"
+            result["api_mode"] = "Official API"
             result["output_schema_valid"] = True
             return result
         except ProviderError as exc:

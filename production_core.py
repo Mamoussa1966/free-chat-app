@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
-VERSION = "V22.1-HOTFIX113-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX114-PRODUCTION-HARDENED"
 FREE_CASCADE_MAX = 10
 
 
@@ -262,12 +262,16 @@ class TransactionBridgeGuard:
             raise RuntimeError("Transaction commit requires PENDING state")
         self.state = TransactionState.COMMITTED
 
-    def read(self, requesting_provider: str) -> None:
+    def barrier(self) -> None:
         if self.state != TransactionState.COMMITTED:
-            raise RuntimeError("Bridge read is forbidden before committed barrier")
+            raise RuntimeError("Bridge barrier requires COMMITTED state")
+        self.state = TransactionState.BARRIER_OPEN
+
+    def read(self, requesting_provider: str) -> None:
+        if self.state != TransactionState.BARRIER_OPEN:
+            raise RuntimeError("Bridge read is forbidden before barrier")
         if str(requesting_provider) != self.target_provider:
             raise PermissionError("Bridge read target isolation violation")
-        self.state = TransactionState.BARRIER_OPEN
 
     def reject(self) -> None:
         self.state = TransactionState.REJECTED
@@ -302,9 +306,11 @@ class ProviderExecutionContract:
         attempted = [str(x).strip() for x in (result.get("attempted_models") or []) if str(x).strip()]
         if attempted and attempted[-1] != executed:
             raise ValueError("cascade position does not match executed model")
-        position = result.get("cascade_position")
+        position = result.get("cascade_position", result.get("executed_cascade_position"))
         if position is not None and int(position) != (attempted.index(executed) + 1 if executed in attempted else int(position)):
             raise ValueError("cascade position mismatch")
+        if "executed_cascade_position" in result and int(result.get("executed_cascade_position")) != int(position or 0):
+            raise ValueError("executed cascade position mismatch")
 
     @staticmethod
     def validate_failure(result: Mapping[str, Any]) -> None:

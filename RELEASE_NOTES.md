@@ -1,8 +1,27 @@
-# HOTFIX113 — Cascade Execution Identity Hardening
+# HOTFIX114 — Production Readiness / Council Reliability Gate
 
-Version: `V22.1-HOTFIX113-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX114-PRODUCTION-HARDENED`
 
-Built directly from the verified HOTFIX113 release artifact while preserving the complete file tree and existing tests.
+## Scope
+Built directly from the complete HOTFIX114 artifact. No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade configuration, Gemini/DeepSeek configuration, or existing Transactional Bridge prompt-isolation policy is changed.
+
+## Reliability gates
+1. Request lifecycle is explicitly audited: `REQUEST_START → ROUTING → PROVIDER_EXECUTION → RESPONSE_VALIDATION → REQUEST_COMMIT`.
+2. Provider execution identity records the configured model, actual attempted models, executed model, authoritative one-based cascade position, API mode, status, and failure classification.
+3. Cascade position is derived from the actual HTTP-attempt ledger; only the model receiving the HTTP request can become `executed_model`.
+4. Transactional Bridge now enforces `WRITE → VALIDATE → COMMIT → BARRIER → READ`; direct READ before BARRIER fails closed.
+5. Bridge values remain application-owned and are excluded from provider prompts; audit records remain value-redacted.
+6. Provider failures remain failures and are never converted into successful results.
+7. Production audit retains request/round/seat/provider/attempt/model/cascade/status/failure/bridge/context/latency metadata without secrets or raw provider payloads.
+
+## Compatibility
+The complete HOTFIX114 file tree is preserved; no files are removed as part of this hotfix.
+
+# HOTFIX114 — Cascade Execution Identity Hardening
+
+Version: `V22.1-HOTFIX114-PRODUCTION-HARDENED`
+
+Built directly from the verified HOTFIX114 release artifact while preserving the complete file tree and existing tests.
 
 ## Fixes
 - Makes `cascade_position` authoritative from the actual `attempted_models` execution ledger.
@@ -14,6 +33,6 @@ Built directly from the verified HOTFIX113 release artifact while preserving the
 - No Secret, `*_FREE_MODELS`, provider catalog, Local Engine, or Paid fallback behavior is changed.
 
 ## Preservation
-- HOTFIX113 transactional bridge isolation remains unchanged.
+- HOTFIX114 transactional bridge isolation remains unchanged.
 - Prompt non-leak protections remain unchanged.
 - Existing test tree is preserved.

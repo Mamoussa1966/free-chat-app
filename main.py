@@ -360,7 +360,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX113: the transactional bridge is application-owned.  Once the
+        # HOTFIX114: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -790,8 +790,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
     try:
+        lifecycle.record("REQUEST_START", round_id=0, status="RUNNING")
+        lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds)})
         for round_no in range(1, total_rounds + 1):
             lifecycle.start_round(round_no)
+            lifecycle.record("PROVIDER_EXECUTION", round_id=round_no, status="STARTED")
             round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
             seen_keys = set()
             for result in round_results:
@@ -829,6 +832,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
             success_count = sum(1 for r in round_results if str(r.get("status") or "").upper() == "SUCCESS")
             lifecycle.finish_round(round_no, success_count, len(round_results))
+            lifecycle.record("RESPONSE_VALIDATION", round_id=round_no, status="PASS" if all(str(r.get("status") or "").upper() != "SUCCESS" or bool(r.get("content")) for r in round_results) else "FAIL")
             for r in round_results:
                 lifecycle.record(
                     "PROVIDER_RESULT", round_id=round_no, provider=str(r.get("name") or r.get("seat") or ""),
@@ -837,7 +841,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                     classification=str(r.get("classification") or ""), latency_ms=(float(r.get("latency", 0.0) or 0.0) * 1000.0),
                     metadata={"result_key": str(r.get("result_key") or "")},
                 )
-        lifecycle.finish(success=True)
+        any_success = any(str(r.get("status") or "").upper() == "SUCCESS" for r in all_results)
+        lifecycle.record("REQUEST_COMMIT", round_id=0, status="COMMITTED" if any_success else "REJECTED", metadata={"success_count": str(sum(1 for r in all_results if str(r.get("status") or "").upper() == "SUCCESS"))})
+        lifecycle.finish(success=any_success)
     except Exception:
         if lifecycle.state.value == "RUNNING":
             lifecycle.finish(success=False)
@@ -1214,7 +1220,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX113 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX114 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
