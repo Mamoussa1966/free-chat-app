@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
-VERSION = "V22.1-HOTFIX117-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX118-PRODUCTION-HARDENED"
 FREE_CASCADE_MAX = 10
 
 

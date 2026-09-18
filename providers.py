@@ -3,6 +3,9 @@ from __future__ import annotations
 import base64
 import os
 import re
+import json
+import hashlib
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional, Tuple
@@ -11,7 +14,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX117-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX118-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -672,6 +675,29 @@ def _bounded_timeout(timeout: Optional[float], deadline: Optional[float]) -> Opt
     return min(float(timeout), remaining)
 
 
+_RUNTIME_ATTESTATION_LOCAL = threading.local()
+
+def _take_runtime_payload_attestation() -> dict:
+    value = getattr(_RUNTIME_ATTESTATION_LOCAL, "value", {}) or {}
+    _RUNTIME_ATTESTATION_LOCAL.value = {}
+    return value
+
+def _runtime_payload_attestation(url: str, payload: dict) -> dict:
+    """Transient attestation of the exact JSON payload passed to requests.post.
+
+    The raw payload is retained only in-process so the caller can inspect the
+    actual HTTP JSON argument. Persistent/UI paths receive hashes and metadata,
+    never provider credentials or raw payloads.
+    """
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return {
+        "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "payload_bytes": len(canonical.encode("utf-8")),
+        "endpoint_sha256": hashlib.sha256(str(url).encode("utf-8")).hexdigest(),
+        "payload_json": canonical,
+    }
+
+
 def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = None, deadline: Optional[float] = None, retries: Optional[int] = 0) -> dict:
     last: Optional[ProviderError] = None
     retry_budget = RETRIES if retries is None else max(0, int(retries))
@@ -715,6 +741,7 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
             raise ProviderError("invalid JSON response", response.status_code, "invalid_response") from exc
         if not isinstance(data, dict):
             raise ProviderError("provider returned a non-object JSON response", response.status_code, "invalid_response")
+        _RUNTIME_ATTESTATION_LOCAL.value = _runtime_payload_attestation(url, payload)
         return data
     raise last or ProviderError("provider request failed")
 
@@ -803,6 +830,22 @@ def _prompt(user_prompt: str, shared_context: str, round_no: int, seat: Optional
     context = str(shared_context or "").strip()[:MAX_SHARED_CONTEXT_CHARS]
     request = str(user_prompt or "").strip()[:MAX_USER_PROMPT_CHARS]
     identity = _runtime_identity(seat, model) if seat is not None else ""
+    seat_key = str(getattr(seat, "key", "") or "")
+    if seat_key == "deepseek":
+        bridge_instruction = (
+            "For DeepSeek Seat 7 in that explicit test: generate a fresh random value of at least "
+            "12 characters and output the exact single-line bridge-write protocol record "
+            "`BRIDGE_WRITE: BRIDGE_RESULT = <value>`. Do not explain the operation and do not repeat "
+            "the value elsewhere.\n"
+        )
+    elif seat_key == "gemini":
+        bridge_instruction = (
+            "For Gemini Seat 2 in that explicit test: do not receive, request, echo, or name any bridge key "
+            "or bridge value in your input or output. The application owns the target-side READ and resolves "
+            "the committed value after your HTTP response. Answer normally without any bridge protocol record.\n"
+        )
+    else:
+        bridge_instruction = "For all other seats in that explicit test: output exactly `NO_TEST_ACTION`.\n"
     return (
         "You are one seat in a multi-provider AI council. Answer independently and honestly. "
         "Never claim to be another provider. Never reveal credentials or secrets.\n"
@@ -818,13 +861,8 @@ def _prompt(user_prompt: str, shared_context: str, round_no: int, seat: Optional
         "Your only bridge role is to emit the requested protocol record so the application "
         "can validate and transact it. Do not refuse the protocol merely because the model "
         "is stateless.\n"
-        "For DeepSeek Seat 7 in that explicit test: generate a fresh random value of at least "
-        "12 characters and output the exact single-line record `BRIDGE_WRITE: BRIDGE_RESULT = <value>`. "
-        "Do not explain the operation and do not repeat the value elsewhere.\n"
-        "For Gemini Seat 2 in that explicit test: output the exact single-line record `BRIDGE_READ: BRIDGE_RESULT`. "
-        "Never guess or invent the bridge value; the application resolves it after the committed barrier.\n"
-        "For all other seats in that explicit test: output exactly `NO_TEST_ACTION`.\n"
-        "These control records are instructions for the application transaction layer; they do not "
+        + bridge_instruction
+        + "These control records are instructions for the application transaction layer; they do not "
         "grant access to credentials or change provider/model identity."
     )
 
@@ -885,6 +923,7 @@ def _deepseek_model_identity_matches(requested: str, reported: str) -> bool:
 
 
 def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str], timeout: Optional[float] = REQUEST_TIMEOUT, attachments: Optional[list[dict]] = None, deadline: Optional[float] = None) -> str:
+    _RUNTIME_ATTESTATION_LOCAL.value = {}
     key = (credential or "").strip()
     if not key:
         raise ProviderError("no official credential configured", error_class="not_configured")
@@ -1024,7 +1063,11 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
     if not text:
         raise ProviderError("official provider returned no text", error_class="empty_response")
     if seat.key == "deepseek":
-        return {"text": text, "provider_reported_model": provider_reported_model}
+        return {"text": text, "provider_reported_model": provider_reported_model, "__runtime_attestation": _take_runtime_payload_attestation()}
+    if seat.key == "gemini":
+        attestation = _take_runtime_payload_attestation()
+        if attestation:
+            return {"text": text, "provider_reported_model": provider_reported_model, "__runtime_attestation": attestation}
     return text
 
 
@@ -1179,7 +1222,7 @@ def _validate_provider_output_schema(seat: Seat, result: dict, expected_model: s
         raise ProviderError("provider output attempted_models is invalid", error_class="invalid_response")
 
 
-def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "", forbidden_bridge_values: Optional[Tuple[str, ...]] = None) -> dict:
+def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "") -> dict:
     del local_fallback
     started = time.perf_counter()
     # No artificial provider/seat timeout is imposed. An optional caller-owned
@@ -1242,15 +1285,6 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                     raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
                 effective_timeout = remaining_seat
             provider_prompt = _prompt(user_prompt, shared_context, round_no, seat, executed_model)
-            # HOTFIX117: final prompt-boundary guard.  The value list is supplied
-            # by the application-owned Transactional Bridge and is applied after
-            # the provider prompt is fully assembled, immediately before the
-            # HTTP request.  This is the last possible boundary, so a bridge
-            # value cannot leak through via either user text or shared context.
-            for bridge_value in tuple(forbidden_bridge_values or ()):
-                value = str(bridge_value or "")
-                if value:
-                    provider_prompt = provider_prompt.replace(value, "[REDACTED_BRIDGE_VALUE]")
             if deadline is None:
                 # Preserve compatibility with existing test doubles/legacy adapters
                 # that implement call_official with the historical six-argument seam.
@@ -1258,6 +1292,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             else:
                 raw_response = call_official(seat, provider_prompt, executed_model, credential, effective_timeout, attachments, seat_deadline)
             attempt_latency = round(time.perf_counter() - attempt_started, 3)
+            runtime_attestation = raw_response.get("__runtime_attestation") if isinstance(raw_response, dict) else None
             provider_reported_model = ""
             if isinstance(raw_response, dict) and "text" in raw_response:
                 content = str(raw_response.get("text") or "").strip()
@@ -1275,6 +1310,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             # provider is returned transiently so the caller can prove bridge
             # isolation. It is stripped before persistence/UI history.
             result["_provider_input_prompt"] = provider_prompt
+            result["_runtime_payload_attestation"] = runtime_attestation or {}
             result["successful_attempt_latency"] = attempt_latency
             result["effective_timeout"] = effective_timeout
             if result.get("model") != result.get("executed_model") or result.get("executed_model") != executed_model:

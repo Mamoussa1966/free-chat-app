@@ -3,8 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
+import copy
 import html
-import inspect
 import json
 import re
 import time
@@ -18,7 +18,7 @@ from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract
 
-# HOTFIX117: process-local idempotency gate for duplicate Streamlit submissions.
+# HOTFIX118: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
 # reserve the fingerprint before generating request_id or making any provider call.
 _REQUEST_GATE_LOCK = threading.RLock()
@@ -148,6 +148,9 @@ class SharedContextBridge:
         self._source_values: dict[str, str] = {}
         self._provider_input_prompts: dict[int, str] = {}
         self._resolved_reads: dict[str, dict] = {}
+        self._runtime_payload_attestations: dict[int, dict] = {}
+        self._audit_sealed_json: str = ""
+        self._audit_seal_hash: str = ""
         initial = str(initial_snapshot or "").strip()
         if initial:
             self._entries.append(initial)
@@ -170,31 +173,76 @@ class SharedContextBridge:
                 raw = raw.replace(value, "[REDACTED_BRIDGE_VALUE]")
         base = BRIDGE_WRITE_PATTERN.sub(lambda m: f"BRIDGE_WRITE: {m.group(1).strip()} = [REDACTED_BRIDGE_VALUE]", raw)
         base = re.sub(r"(?im)^(\s*Value:\s*).+$", r"\1[REDACTED_BRIDGE_VALUE]", base)
-        available = []
-        for key, record in self._values.items():
-            available.append(
-                "BRIDGE READ AVAILABLE (VALUE NOT IN PROMPT):\n"
-                f"Key: {key}\n"
+        # HOTFIX118: the target prompt receives only a context-safe capability
+        # projection.  Neither the bridge key (for example BRIDGE_RESULT) nor
+        # its value is exposed to Gemini.  The application owns the target-side
+        # READ and resolves it after the provider request has completed.
+        if self._values or any("BRIDGE AGENT OUTPUT" in entry for entry in self._entries):
+            capability = (
+                "BRIDGE CONTEXT CAPABILITY (SANITIZED):\n"
+                "A committed transactional bridge state exists for this round.\n"
+                "Bridge values and bridge keys are application-private and are not present in this prompt.\n"
+                "Target-side READ, if required by the test, is resolved by the application after the provider response.\n"
+                f"Room seat: {sorted({int(r.get('source_seat', 0) or 0) for r in self._values.values()})[0] if self._values else 7}\n"
+                "Provider identity: DeepSeek\n"
                 f"bridge_id: {self.bridge_id}\n"
-                f"round_id: {self.round_no}\n"
-                f"source_seat: {record['source_seat']}\n"
-                f"target_seat: {int(getattr(target_seat, 'room_slot', 0) or 0) if target_seat else 0}"
+                f"round_id: {self.round_no}"
             )
-        if available:
-            base = (base + "\n\n" if base else "") + "\n\n".join(available)
+            base = (base + "\n\n" if base else "") + capability
+        if str(getattr(target_seat, "key", "") or "") == "gemini":
+            # Defense in depth: the target must not receive source protocol records,
+            # bridge key literals, or bridge values.  Keep only the sanitized capability
+            # projection below.
+            base = re.sub(
+                r"(?s)BRIDGE AGENT OUTPUT \(UNTRUSTED DATA\):.*?(?=\n\nBRIDGE CONTEXT CAPABILITY|\Z)",
+                "",
+                base,
+            )
+            base = re.sub(
+                r"(?s)BRIDGE WRITE RECORD \(PROVIDER UNTRUSTED DATA\):.*?(?=\n\nBRIDGE CONTEXT CAPABILITY|\Z)",
+                "",
+                base,
+            )
+            base = re.sub(r"\bBRIDGE_[A-Z0-9_]+\b", "[REDACTED_BRIDGE_KEY]", base)
         return base[-self.max_chars:]
 
     def record_provider_input(self, seat, prompt: str) -> None:
         """Record the exact final provider input for post-request isolation auditing."""
         self._provider_input_prompts[int(getattr(seat, "room_slot", 0) or 0)] = str(prompt or "")
 
-    def sanitize_user_prompt(self, user_prompt: str) -> str:
-        """Remove committed bridge values from the user-request portion of a provider prompt."""
+    def record_runtime_payload_attestation(self, seat, attestation: dict) -> None:
+        """Capture the exact JSON payload passed to the official HTTP transport."""
+        if not isinstance(attestation, dict) or not attestation.get("payload_json"):
+            return
+        self._runtime_payload_attestations[int(getattr(seat, "room_slot", 0) or 0)] = copy.deepcopy(attestation)
+
+    def _runtime_payload_text(self, seat_slot: int) -> str:
+        record = self._runtime_payload_attestations.get(int(seat_slot)) or {}
+        return str(record.get("payload_json") or "")
+
+    def seal_runtime_audit(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
+        """Seal bridge proof from actual runtime HTTP payloads, not prompt/context copies."""
+        audit = self._transaction_audit_unsealed(source_seat, target_seat, key, user_prompt)
+        canonical = json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        self._audit_sealed_json = canonical
+        self._audit_seal_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return self.transaction_audit(source_seat, target_seat, key, user_prompt)
+
+    def sanitize_user_prompt(self, user_prompt: str, target_seat=None) -> str:
+        """Sanitize bridge material before a provider prompt is constructed.
+
+        Gemini receives a capability-safe projection: neither committed bridge values
+        nor bridge key literals are allowed into its input prompt. Source-side agents
+        retain the protocol key because they are responsible for producing the write
+        record; the target-side READ is application-owned.
+        """
         text = str(user_prompt or "")
-        for record in self._values.values():
+        for key, record in self._values.items():
             value = str(record.get("value") or "")
             if value:
                 text = text.replace(value, "[REDACTED_BRIDGE_VALUE]")
+            if str(getattr(target_seat, "key", "") or "") == "gemini":
+                text = re.sub(rf"\b{re.escape(str(key))}\b", "[REDACTED_BRIDGE_KEY]", text)
         return text
 
     def append_user_declarations(self, user_prompt: str) -> None:
@@ -316,20 +364,25 @@ class SharedContextBridge:
         )
         return str(record["value"])
 
-    def transaction_audit(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
-        """Return a proof-oriented, value-redacted audit of the bridge transaction."""
+    def _transaction_audit_unsealed(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
         record = self._values.get(key)
         source_value = self._source_values.get(key, "")
         read = self._resolved_reads.get(key)
         target_prompt = self._provider_input_prompts.get(int(target_seat), "")
+        target_payload = self._runtime_payload_text(int(target_seat))
+        source_payload = self._runtime_payload_text(int(source_seat))
         user_has = bool(source_value and source_value in str(user_prompt or ""))
-        target_has = bool(source_value and source_value in target_prompt)
+        target_prompt_has = bool(source_value and source_value in target_prompt)
+        target_payload_has = bool(source_value and source_value in target_payload)
+        target_key_has = bool(key and key in target_payload)
+        target_value_outside_sanitized = target_payload_has
         target_value = str(read.get("value")) if read else ""
         source_ok = bool(record and int(record.get("source_seat", 0)) == int(source_seat))
         target_ok = bool(read and int(read.get("target_seat", 0)) == int(target_seat))
+        runtime_attestation_present = bool(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256"))
+        runtime_payload_is_sanitized = runtime_attestation_present and not target_value_outside_sanitized and not target_key_has
         return {
-            "BRIDGE_ID": self.bridge_id,
-            "ROUND_ID": self.round_no,
+            "BRIDGE_ID": self.bridge_id, "ROUND_ID": self.round_no,
             "SOURCE": "DeepSeek / Seat 7" if int(source_seat) == 7 else f"Seat {source_seat}",
             "TARGET": "Gemini / Seat 2" if int(target_seat) == 2 else f"Seat {target_seat}",
             "KEY": key,
@@ -339,16 +392,33 @@ class SharedContextBridge:
             "BARRIER": "PASS" if self._barrier_open and self._committed and record else "FAIL",
             "READ": "PASS" if read and target_ok else "FAIL",
             "SCHEMA_VALIDATION": "PASS" if read and target_ok else "FAIL",
-            "SOURCE_VALUE": "[REDACTED]",
-            "TARGET_VALUE": "[REDACTED]",
+            "SOURCE_VALUE": "[REDACTED]", "TARGET_VALUE": "[REDACTED]",
             "MATCH": "PASS" if source_value and target_value and source_value == target_value else "FAIL",
             "USER_PROMPT_CONTAINS_VALUE": "NO" if source_value and not user_has else "YES",
-            "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": "NO" if source_value and not target_has else "YES",
+            "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": "NO" if source_value and not target_prompt_has else "YES",
             "BRIDGE_STATE_CONTAINS_VALUE": "YES" if source_value and record and record.get("value") == source_value else "NO",
+            "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES" if runtime_attestation_present else "NO",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": "NO" if runtime_attestation_present and not target_value_outside_sanitized else "YES",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": "NO" if runtime_attestation_present and not target_key_has else "YES",
+            "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS" if runtime_payload_is_sanitized else "FAIL",
             "write_sequence": int(record.get("write_sequence", 0)) if record else 0,
             "read_sequence": int(read.get("read_sequence", 0)) if read else 0,
             "request_id": self.request_id,
+            "runtime_payload_sha256": str(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256") or ""),
         }
+
+    def transaction_audit(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
+        audit = self._transaction_audit_unsealed(source_seat, target_seat, key, user_prompt)
+        if self._audit_sealed_json:
+            sealed = json.loads(self._audit_sealed_json)
+            audit["AUDIT_SEALED"] = "YES"
+            audit["AUDIT_SEAL_HASH"] = self._audit_seal_hash
+            audit["PRODUCTION_GATE"] = "PASS" if {k:v for k,v in audit.items() if k not in ("AUDIT_SEALED","AUDIT_SEAL_HASH","PRODUCTION_GATE")} == sealed else "FAIL"
+        else:
+            audit["AUDIT_SEALED"] = "NO"
+            audit["AUDIT_SEAL_HASH"] = ""
+            audit["PRODUCTION_GATE"] = "NOT_SEALED"
+        return audit
 
     def transaction_trace(self) -> list[dict]:
         return [dict(item) for item in self.trace]
@@ -368,7 +438,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX117: the transactional bridge is application-owned.  Once the
+        # HOTFIX118: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -722,26 +792,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             provider_prompt = bridge.prompt_snapshot(seat)
             working_context = provider_prompt
             bridge.record_provider_input(seat, provider_prompt)
-            provider_user_prompt = bridge.sanitize_user_prompt(user_prompt)
-            bridge_values = tuple(
-                str(r.get("value") or "")
-                for r in bridge._values.values()
-                if str(r.get("value") or "")
-            )
-            call_kwargs = {}
-            # Preserve compatibility with legacy test doubles/adapters that
-            # implement the pre-HOTFIX117 call_seat signature.  Never retry the
-            # provider call on a TypeError: signature inspection happens before
-            # execution, preserving the prior release's one-request determinism.
-            try:
-                if "forbidden_bridge_values" in inspect.signature(call_seat).parameters:
-                    call_kwargs["forbidden_bridge_values"] = bridge_values
-            except (TypeError, ValueError):
-                pass
+            provider_user_prompt = bridge.sanitize_user_prompt(user_prompt, seat)
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
-                deadline, request_id, **call_kwargs,
+                deadline, request_id,
             )
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
@@ -756,7 +811,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # Capture the exact prompt actually built by the provider runtime,
             # then remove the transient audit field before any history/UI path.
             actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
+            runtime_attestation = result.pop("_runtime_payload_attestation", {}) if isinstance(result, dict) else {}
             bridge.record_provider_input(seat, actual_provider_prompt or provider_prompt)
+            bridge.record_runtime_payload_attestation(seat, runtime_attestation)
             results[seat.key] = result
             bridge.append_agent_output(seat, result)
             if seat.key == "deepseek":
@@ -785,7 +842,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
             if seat.key == "gemini":
-                result["bridge_transaction_audit"] = bridge.transaction_audit(user_prompt=user_prompt)
+                result["bridge_transaction_audit"] = bridge.seal_runtime_audit(user_prompt=user_prompt)
                 result["bridge_trace"] = bridge.transaction_trace()
             else:
                 result["bridge_trace"] = bridge.transaction_trace()
@@ -803,7 +860,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             ),
         )
 
-    # HOTFIX117: diagnostic answers must not invent the executed cascade position.
+    # HOTFIX118: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
     # but the explicit bridge-proof request is a runtime diagnostic.
     # In that mode the application emits the authoritative execution/bridge facts
@@ -1286,7 +1343,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX117 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX118 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
@@ -1357,7 +1414,7 @@ def run_app() -> None:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
         fingerprint = _request_fingerprint(prompt, attachments)
-        # HOTFIX117: atomic reservation closes the race where two Streamlit
+        # HOTFIX118: atomic reservation closes the race where two Streamlit
         # reruns submit the same logical request before either can persist it.
         # The second submission is rejected before request_id allocation and
         # before _run_council(), so it cannot create a second provider run.

@@ -1,8 +1,8 @@
 # AI Council — Free Cascade
 
-V22.1-HOTFIX117-PRODUCTION-HARDENED
+V22.1-HOTFIX118-PRODUCTION-HARDENED
 
-HOTFIX117 adds an application-owned Production Core Test Runner. Use **🧪 Run Production Core Tests** in the sidebar; the application executes the local Test Harness and renders the real PASS/NO-GO result. AI providers are not asked to run pytest.
+HOTFIX118 adds an application-owned Production Core Test Runner. Use **🧪 Run Production Core Tests** in the sidebar; the application executes the local Test Harness and renders the real PASS/NO-GO result. AI providers are not asked to run pytest.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -36,11 +36,3 @@ The provider prompt now explicitly distinguishes the application-owned transacti
 
 ## Production Core
 Request lifecycle, provider execution contract, strict Free Cascade #1→#10, timeout/retry policy, failure classification, actual-model attestation, round/shared-context state machines, transaction bridge guard, secret-safe audit events, and regression coverage.
-
-## HOTFIX117 — Bridge Read / Prompt Boundary Isolation
-
-- Preserves HOTFIX117 request determinism and one logical request per fingerprint.
-- Adds a final provider-prompt boundary guard immediately before every official HTTP request.
-- Transactional Bridge values remain application-owned Bridge State and are never copied into a provider input prompt.
-- Gemini receives only sanitized/context-safe bridge metadata; the literal bridge value is never present in Gemini input.
-- No Secrets or `*_FREE_MODELS` are changed.
