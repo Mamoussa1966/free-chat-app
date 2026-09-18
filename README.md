@@ -1,8 +1,8 @@
 # AI Council — Free Cascade
 
-V22.1-HOTFIX119-PRODUCTION-HARDENED
+V22.1-HOTFIX120-PRODUCTION-HARDENED
 
-HOTFIX119 adds an application-owned Production Core Test Runner. Use **🧪 Run Production Core Tests** in the sidebar; the application executes the local Test Harness and renders the real PASS/NO-GO result. AI providers are not asked to run pytest.
+HOTFIX120 adds an application-owned Production Chat Reliability layer + Production Core Test Runner. Use **🧪 Run Production Core Tests** in the sidebar; the application executes the local Test Harness and renders the real PASS/NO-GO result. AI providers are not asked to run pytest.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 

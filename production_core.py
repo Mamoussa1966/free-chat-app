@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
-VERSION = "V22.1-HOTFIX119-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX120-PRODUCTION-HARDENED"
 FREE_CASCADE_MAX = 10
 
 
@@ -191,6 +191,41 @@ class RequestLifecycle:
 
     def audit_snapshot(self) -> list[dict]:
         return [event.public() for event in self.audit]
+
+
+class SeatExecutionLedger:
+    """Round-scoped exactly-once execution ledger for provider seats.
+
+    This is an in-process orchestration guard. A seat may be claimed once for a
+    given request/round and must be released only by the owner that claimed it.
+    Provider cascade attempts remain internal to that single claim.
+    """
+    def __init__(self, request_id: str, round_id: int):
+        self.request_id = str(request_id or "").strip()
+        self.round_id = int(round_id)
+        if not self.request_id or self.round_id <= 0:
+            raise ValueError("request_id and positive round_id are required")
+        self._claims: dict[str, str] = {}
+
+    def claim(self, seat_key: str) -> str:
+        key = str(seat_key or "").strip()
+        if not key:
+            raise ValueError("seat_key is required")
+        if key in self._claims:
+            raise RuntimeError(f"Duplicate seat execution claim: {self.request_id}:{self.round_id}:{key}")
+        execution_id = hashlib.sha256(
+            f"{self.request_id}:{self.round_id}:{key}".encode("utf-8")
+        ).hexdigest()[:24]
+        self._claims[key] = execution_id
+        return execution_id
+
+    def assert_claimed(self, seat_key: str, execution_id: str) -> None:
+        key = str(seat_key or "").strip()
+        if self._claims.get(key) != str(execution_id or ""):
+            raise RuntimeError("Seat execution ownership mismatch")
+
+    def snapshot(self) -> dict[str, str]:
+        return dict(self._claims)
 
 
 class RoundStateMachine:
