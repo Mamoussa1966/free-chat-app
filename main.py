@@ -18,7 +18,7 @@ from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract
 
-# HOTFIX118: process-local idempotency gate for duplicate Streamlit submissions.
+# HOTFIX119: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
 # reserve the fingerprint before generating request_id or making any provider call.
 _REQUEST_GATE_LOCK = threading.RLock()
@@ -173,7 +173,7 @@ class SharedContextBridge:
                 raw = raw.replace(value, "[REDACTED_BRIDGE_VALUE]")
         base = BRIDGE_WRITE_PATTERN.sub(lambda m: f"BRIDGE_WRITE: {m.group(1).strip()} = [REDACTED_BRIDGE_VALUE]", raw)
         base = re.sub(r"(?im)^(\s*Value:\s*).+$", r"\1[REDACTED_BRIDGE_VALUE]", base)
-        # HOTFIX118: the target prompt receives only a context-safe capability
+        # HOTFIX119: the target prompt receives only a context-safe capability
         # projection.  Neither the bridge key (for example BRIDGE_RESULT) nor
         # its value is exposed to Gemini.  The application owns the target-side
         # READ and resolves it after the provider request has completed.
@@ -438,7 +438,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX118: the transactional bridge is application-owned.  Once the
+        # HOTFIX119: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -450,7 +450,15 @@ class SharedContextBridge:
             if "BRIDGE_RESULT" in self._values:
                 requested_keys = ["BRIDGE_RESULT"]
         for key in requested_keys:
-            value = self.read(key, seat)
+            # HOTFIX119: if the application already performed the canonical
+            # post-barrier READ before the target HTTP request, reuse that exact
+            # committed read record. Do not increment read_sequence twice when
+            # Gemini later echoes BRIDGE_READ in its response.
+            existing = self._resolved_reads.get(key)
+            if existing and int(existing.get("target_seat", 0) or 0) == int(getattr(seat, "room_slot", 0) or 0):
+                value = str(existing.get("value"))
+            else:
+                value = self.read(key, seat)
             reads.append({"key": key, "value": value, "available": value is not None})
         if not reads:
             return {"schema_validation": "PASS", "reads": [], "status": "NO_READ_REQUEST"}
@@ -789,6 +797,16 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     bridge_order.extend(seat for seat in seats if seat.key in by_key)
     for seat in SEATS if False else bridge_order:
         try:
+            # HOTFIX119: resolve the committed target-side READ at the application
+            # boundary, after COMMIT + BARRIER and before the target provider HTTP
+            # request. The resolved value is retained only in bridge state/audit;
+            # it is NEVER injected into the Gemini prompt or HTTP payload. This
+            # closes the prior gap where READ depended on a provider echo/control
+            # record and could therefore fail when Gemini returned normally or
+            # failed before emitting BRIDGE_READ.
+            if seat.key == "gemini" and bridge._committed and bridge._barrier_open:
+                bridge.read("BRIDGE_RESULT", seat)
+
             provider_prompt = bridge.prompt_snapshot(seat)
             working_context = provider_prompt
             bridge.record_provider_input(seat, provider_prompt)
@@ -860,7 +878,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             ),
         )
 
-    # HOTFIX118: diagnostic answers must not invent the executed cascade position.
+    # HOTFIX119: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
     # but the explicit bridge-proof request is a runtime diagnostic.
     # In that mode the application emits the authoritative execution/bridge facts
@@ -1343,7 +1361,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX118 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX119 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
@@ -1414,7 +1432,7 @@ def run_app() -> None:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
         fingerprint = _request_fingerprint(prompt, attachments)
-        # HOTFIX118: atomic reservation closes the race where two Streamlit
+        # HOTFIX119: atomic reservation closes the race where two Streamlit
         # reruns submit the same logical request before either can persist it.
         # The second submission is rejected before request_id allocation and
         # before _run_council(), so it cannot create a second provider run.
