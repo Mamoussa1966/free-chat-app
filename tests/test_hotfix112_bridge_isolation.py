@@ -50,7 +50,7 @@ def test_hotfix113_actual_provider_prompt_is_captured_and_redacted():
 
 def test_hotfix113_release_identity_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX116-PRODUCTION-HARDENED"
+    assert version == "V22.1-HOTFIX117-PRODUCTION-HARDENED"
     assert main.APP_VERSION == version
 
 
@@ -66,7 +66,7 @@ def test_hotfix113_application_owned_read_closes_gap_when_target_omits_control_r
     resolution = bridge.consume_read_requests(gem, _result(gem, "I answered the user normally."))
     assert resolution["status"] == "RESOLVED"
     assert resolution["value"] == value
-    audit = bridge.transaction_audit(user_prompt="HOTFIX116 bridge isolation test")
+    audit = bridge.transaction_audit(user_prompt="HOTFIX117 bridge isolation test")
     assert audit["WRITE"] == "PASS"
     assert audit["VALIDATE"] == "PASS"
     assert audit["COMMIT"] == "PASS"
