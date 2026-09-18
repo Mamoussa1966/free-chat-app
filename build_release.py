@@ -15,8 +15,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parent
 # Release-name compatibility markers: the current FINAL zip naming convention
 # Release artifact compatibility markers:
-# AI_Council_V22_1_HOTFIX116_PRODUCTION_HARDENED_FINAL.zip
-# AI_Council_V22_1_HOTFIX116_PRODUCTION_HARDENED_FINAL.zip
+# AI_Council_V22_1_HOTFIX117_PRODUCTION_HARDENED_FINAL.zip
+# AI_Council_V22_1_HOTFIX117_PRODUCTION_HARDENED_FINAL.zip
 REQUIRED = [
     "app.py", "main.py", "providers.py", "production_core.py", "attachment_utils.py", "gitops_layer.py",
     "requirements.txt", "VERSION.txt", "README.md", "RELEASE_NOTES.md", "CLAUDE_GOLDEN_BASELINE_MANIFEST.json",
@@ -43,6 +43,7 @@ ALLOWED_BASELINE_CHANGES = {
     "tests/test_hotfix60_fixes.py", "tests/test_hotfix61_integration.py",
     "tests/test_hotfix88_bridge_transaction.py", "tests/test_hotfix87_production_hardened.py",
     "tests/test_hotfix92_production_core.py", "tests/test_hotfix92_release_core.py",
+    "tests/test_hotfix111_release_contract.py", "tests/test_hotfix112_bridge_isolation.py", "tests/test_hotfix114_production_readiness.py", "tests/test_hotfix116_determinism.py", "tests/test_hotfix117_bridge_prompt_boundary.py",
     "tests/test_deepseek_integration.py", "tests/test_hotfix60_fixes.py", "tests/test_hotfix84_shared_context_bridge.py",
     "tests/test_hotfix87_production_hardened.py", "tests/test_hotfix87_release_roundtrip.py", "tests/test_hotfix87_reliability.py",
     "tests/test_hotfix83_shared_context_bridge.py", "tests/test_hotfix66_no_response_timeout.py", "tests/test_hotfix67_no_response_separation.py",
@@ -261,7 +262,7 @@ def check_zip(path: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX116_PRODUCTION_HARDENED_FINAL.zip")
+    parser.add_argument("--output", default="AI_Council_V22_1_HOTFIX117_PRODUCTION_HARDENED_FINAL.zip")
     args = parser.parse_args()
     validate_sources()
     run_production_core_harness()

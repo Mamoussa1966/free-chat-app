@@ -11,7 +11,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX116-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX117-PRODUCTION-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1179,7 +1179,7 @@ def _validate_provider_output_schema(seat: Seat, result: dict, expected_model: s
         raise ProviderError("provider output attempted_models is invalid", error_class="invalid_response")
 
 
-def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "") -> dict:
+def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "", forbidden_bridge_values: Optional[Tuple[str, ...]] = None) -> dict:
     del local_fallback
     started = time.perf_counter()
     # No artificial provider/seat timeout is imposed. An optional caller-owned
@@ -1242,6 +1242,15 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                     raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
                 effective_timeout = remaining_seat
             provider_prompt = _prompt(user_prompt, shared_context, round_no, seat, executed_model)
+            # HOTFIX117: final prompt-boundary guard.  The value list is supplied
+            # by the application-owned Transactional Bridge and is applied after
+            # the provider prompt is fully assembled, immediately before the
+            # HTTP request.  This is the last possible boundary, so a bridge
+            # value cannot leak through via either user text or shared context.
+            for bridge_value in tuple(forbidden_bridge_values or ()):
+                value = str(bridge_value or "")
+                if value:
+                    provider_prompt = provider_prompt.replace(value, "[REDACTED_BRIDGE_VALUE]")
             if deadline is None:
                 # Preserve compatibility with existing test doubles/legacy adapters
                 # that implement call_official with the historical six-argument seam.

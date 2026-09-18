@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
 import html
+import inspect
 import json
 import re
 import time
@@ -17,7 +18,7 @@ from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract
 
-# HOTFIX116: process-local idempotency gate for duplicate Streamlit submissions.
+# HOTFIX117: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
 # reserve the fingerprint before generating request_id or making any provider call.
 _REQUEST_GATE_LOCK = threading.RLock()
@@ -367,7 +368,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX116: the transactional bridge is application-owned.  Once the
+        # HOTFIX117: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -722,10 +723,25 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             working_context = provider_prompt
             bridge.record_provider_input(seat, provider_prompt)
             provider_user_prompt = bridge.sanitize_user_prompt(user_prompt)
+            bridge_values = tuple(
+                str(r.get("value") or "")
+                for r in bridge._values.values()
+                if str(r.get("value") or "")
+            )
+            call_kwargs = {}
+            # Preserve compatibility with legacy test doubles/adapters that
+            # implement the pre-HOTFIX117 call_seat signature.  Never retry the
+            # provider call on a TypeError: signature inspection happens before
+            # execution, preserving the prior release's one-request determinism.
+            try:
+                if "forbidden_bridge_values" in inspect.signature(call_seat).parameters:
+                    call_kwargs["forbidden_bridge_values"] = bridge_values
+            except (TypeError, ValueError):
+                pass
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
-                deadline, request_id,
+                deadline, request_id, **call_kwargs,
             )
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
@@ -787,7 +803,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             ),
         )
 
-    # HOTFIX116: diagnostic answers must not invent the executed cascade position.
+    # HOTFIX117: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
     # but the explicit bridge-proof request is a runtime diagnostic.
     # In that mode the application emits the authoritative execution/bridge facts
@@ -1270,7 +1286,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX116 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX117 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
@@ -1341,7 +1357,7 @@ def run_app() -> None:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
         fingerprint = _request_fingerprint(prompt, attachments)
-        # HOTFIX116: atomic reservation closes the race where two Streamlit
+        # HOTFIX117: atomic reservation closes the race where two Streamlit
         # reruns submit the same logical request before either can persist it.
         # The second submission is rejected before request_id allocation and
         # before _run_council(), so it cannot create a second provider run.
