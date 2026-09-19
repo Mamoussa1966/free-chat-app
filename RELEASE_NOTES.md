@@ -1,6 +1,6 @@
 # HOTFIX120 — Production Chat Reliability
 
-Version: `V22.1-HOTFIX120-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
 
 Built directly from the complete previous release release artifact. No Secrets, `*_FREE_MODELS`, provider configuration, or Transactional Bridge prompt-isolation policy is changed.
 
@@ -17,7 +17,7 @@ Reliability invariants covered by this release:
 
 # HOTFIX120 — Production Readiness / Council Reliability Gate
 
-Version: `V22.1-HOTFIX120-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
 
 ## Scope
 Built directly from the complete previous release artifact. No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade configuration, Gemini/DeepSeek configuration, or existing Transactional Bridge prompt-isolation policy is changed.
@@ -36,7 +36,7 @@ The complete previous release file tree is preserved; no files are removed as pa
 
 # HOTFIX120 — Cascade Execution Identity Hardening
 
-Version: `V22.1-HOTFIX120-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
 
 Built directly from the verified previous release release artifact while preserving the complete file tree and existing tests.
 
@@ -75,7 +75,7 @@ Built directly from the verified previous release release artifact while preserv
 
 # HOTFIX120 — Runtime Payload Attestation / Immutable Bridge Audit
 
-Version: `V22.1-HOTFIX120-PRODUCTION-HARDENED`
+Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
 
 Built directly from the complete previous release artifact. The complete file tree is preserved.
 

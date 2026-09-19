@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
-VERSION = "V22.1-HOTFIX120-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
 FREE_CASCADE_MAX = 10
 
 
@@ -54,7 +54,8 @@ class TransactionState(str, Enum):
 
 FAILURE_CLASSES = {
     "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
-    "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN",
+    "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST",
+    "NETWORK_ERROR", "TIMEOUT", "UNKNOWN",
 }
 
 _REDACT_PATTERNS = (
@@ -377,11 +378,36 @@ class FreeCascadeController:
         return model
 
     @staticmethod
-    def should_continue(classification: str, has_next_model: bool) -> bool:
-        if not has_next_model:
-            return False
+    def cascade_decision(classification: str, has_next_model: bool) -> tuple[str, str]:
+        """Deterministic action/reason contract for one failed cascade attempt."""
         cls = str(classification or "UNKNOWN").upper()
-        return cls not in {"AUTHENTICATION_ERROR", "EXECUTION_IDENTITY_MISMATCH", "NOT_CONFIGURED", "CONFIGURATION"}
+        if not has_next_model:
+            return ("CASCADE_STOP", "NO_NEXT_FREE_MODEL")
+        terminal = {
+            "AUTHENTICATION_ERROR": "AUTH_ERROR_TERMINAL",
+            "INVALID_REQUEST": "INVALID_REQUEST_TERMINAL",
+            "UNKNOWN": "UNKNOWN_ERROR_FAIL_CLOSED",
+            "API_ERROR": "GENERIC_API_ERROR_ADVANCE_TO_NEXT_MODEL",
+        }
+        if cls in terminal:
+            if cls == "API_ERROR":
+                return ("CASCADE_CONTINUE", terminal[cls])
+            return ("CASCADE_STOP", terminal[cls])
+        reasons = {
+            "MODEL_UNAVAILABLE": "MODEL_UNAVAILABLE_ADVANCE_TO_NEXT_MODEL",
+            "RATE_LIMITED": "RATE_LIMITED_ADVANCE_TO_NEXT_MODEL",
+            "TRANSIENT_PROVIDER_ERROR": "TRANSIENT_PROVIDER_ERROR_ADVANCE_TO_NEXT_MODEL",
+            "QUOTA_EXCEEDED": "QUOTA_EXCEEDED_ADVANCE_TO_NEXT_MODEL",
+            "NETWORK_ERROR": "NETWORK_ERROR_ADVANCE_TO_NEXT_MODEL",
+            "TIMEOUT": "TIMEOUT_ADVANCE_TO_NEXT_MODEL",
+        }
+        if cls in reasons:
+            return ("CASCADE_CONTINUE", reasons[cls])
+        return ("CASCADE_STOP", "UNCLASSIFIED_FAIL_CLOSED")
+
+    @staticmethod
+    def should_continue(classification: str, has_next_model: bool) -> bool:
+        return FreeCascadeController.cascade_decision(classification, has_next_model)[0] == "CASCADE_CONTINUE"
 
     @staticmethod
     def classify_attempt(status: Optional[int], classification: str) -> str:
@@ -390,8 +416,14 @@ class FreeCascadeController:
             return cls
         if status == 401 or status == 403:
             return "AUTHENTICATION_ERROR"
+        if status == 404:
+            return "MODEL_UNAVAILABLE"
         if status == 408:
             return "TIMEOUT"
+        if status == 429:
+            return "RATE_LIMITED"
         if status is not None and status >= 500:
-            return "API_ERROR"
+            return "TRANSIENT_PROVIDER_ERROR"
+        if status in (400, 422):
+            return "INVALID_REQUEST"
         return "UNKNOWN"

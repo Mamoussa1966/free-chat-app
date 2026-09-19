@@ -633,7 +633,7 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     """Persist only the original compact, non-sensitive classifications in History."""
     allowed = {
         "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
-        "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+        "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST", "NETWORK_ERROR",
         "TIMEOUT", "UNKNOWN",
     }
     summaries: list[dict] = []
@@ -681,6 +681,7 @@ def _safe_attempt_telemetry(details: list[dict], result: dict | None = None) -> 
             "round": int(detail.get("round", result.get("round", 0)) or 0),
             "final_result": str(detail.get("final_result") or "FAILED").upper(),
             "cascade_action": str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if detail.get("retryable") else "CASCADE_STOP")).upper(),
+            "cascade_reason": str(detail.get("cascade_reason") or "").strip(),
         })
     return out
 
@@ -702,7 +703,7 @@ def _public_result(result: dict) -> dict:
         if str(telemetry.get("classification") or "").upper() == "TIMEOUT":
             telemetry["classification"] = PUBLIC_NO_RESPONSE
     classification = str(public.get("classification") or "").strip().upper()
-    if classification not in {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN"}:
+    if classification not in {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN"}:
         classification = "UNKNOWN"
     if classification == "TIMEOUT":
         classification = PUBLIC_NO_RESPONSE
@@ -1229,7 +1230,7 @@ def _result_error_classification(result: dict) -> str:
         value = str(detail.get("classification") or "").strip().upper()
         if value in {
             "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
-            "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+            "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST", "NETWORK_ERROR",
             "TIMEOUT", "UNKNOWN",
         }:
             return PUBLIC_NO_RESPONSE if value == "TIMEOUT" else value
@@ -1242,7 +1243,7 @@ def _result_error_classification(result: dict) -> str:
             return PUBLIC_NO_RESPONSE
         if value in {
             "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
-            "AUTHENTICATION_ERROR", "API_ERROR", "NETWORK_ERROR",
+            "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST", "NETWORK_ERROR",
             "TIMEOUT", "UNKNOWN",
         }:
             return PUBLIC_NO_RESPONSE if value == "TIMEOUT" else value
@@ -1279,8 +1280,9 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
             round_no = detail.get("round", result.get("round", "?"))
             final_result = str(detail.get("final_result") or "FAILED").upper()
             action = str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if retryable else "CASCADE_STOP")).upper()
+            reason = str(detail.get("cascade_reason") or "").strip()
             http = f"HTTP {code}" if code is not None else "HTTP —"
-            st.caption(f"{provider} · Attempt {attempt} · `{model}` · {http} · {cls} · Retryable={retryable} · {float(execution):.3f}s · Request {request_id[:48] or '—'} · Round {round_no} · Final={final_result} · {action}")
+            st.caption(f"{provider} · Attempt {attempt} · `{model}` · {http} · {cls} · Retryable={retryable} · {float(execution):.3f}s · Request {request_id[:48] or '—'} · Round {round_no} · Final={final_result} · {action}" + (f" · Reason={reason}" if reason else ""))
 
     if status == "SUCCESS":
         # Execution identity must drive the rendered model: result.get('executed_model') or result['model']

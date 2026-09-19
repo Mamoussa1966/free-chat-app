@@ -1,6 +1,6 @@
 # AI Council — Free Cascade
 
-V22.1-HOTFIX120-PRODUCTION-HARDENED
+V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED
 
 HOTFIX120 adds an application-owned Production Chat Reliability layer + Production Core Test Runner. Use **🧪 Run Production Core Tests** in the sidebar; the application executes the local Test Harness and renders the real PASS/NO-GO result. AI providers are not asked to run pytest.
 

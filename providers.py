@@ -14,7 +14,7 @@ import requests
 
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
-VERSION = "V22.1-HOTFIX120-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -149,14 +149,16 @@ ERROR_CLASS_QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
 ERROR_CLASS_RATE_LIMITED = "RATE_LIMITED"
 ERROR_CLASS_AUTHENTICATION_ERROR = "AUTHENTICATION_ERROR"
 ERROR_CLASS_API_ERROR = "API_ERROR"
+ERROR_CLASS_TRANSIENT_PROVIDER_ERROR = "TRANSIENT_PROVIDER_ERROR"
+ERROR_CLASS_INVALID_REQUEST = "INVALID_REQUEST"
 ERROR_CLASS_NETWORK_ERROR = "NETWORK_ERROR"
 ERROR_CLASS_TIMEOUT = "TIMEOUT"
 ERROR_CLASS_UNKNOWN = "UNKNOWN"
 ERROR_CLASSES = (
     ERROR_CLASS_MODEL_UNAVAILABLE, ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_RATE_LIMITED, ERROR_CLASS_AUTHENTICATION_ERROR,
-    ERROR_CLASS_API_ERROR, ERROR_CLASS_NETWORK_ERROR,
-    ERROR_CLASS_TIMEOUT, ERROR_CLASS_UNKNOWN,
+    ERROR_CLASS_API_ERROR, ERROR_CLASS_TRANSIENT_PROVIDER_ERROR, ERROR_CLASS_INVALID_REQUEST,
+    ERROR_CLASS_NETWORK_ERROR, ERROR_CLASS_TIMEOUT, ERROR_CLASS_UNKNOWN,
 )
 
 
@@ -573,8 +575,12 @@ def _classify(status: Optional[int], body: str) -> str:
     if status == 429:
         return "http_429_rate_limit_or_quota"
     if status is not None and status >= 500:
-        return "provider_server"
+        return "transient_provider_error"
     if status is not None and status >= 400:
+        if status == 404:
+            return "http_404_resource_not_found"
+        if status in (400, 422):
+            return "invalid_request"
         return f"http_{status}_provider_request_rejected"
     if any(x in low for x in rate_markers):
         return "http_429_rate_limit_or_quota"
@@ -585,7 +591,7 @@ def _canonical_error_classification(error_class: str) -> str:
     """Map provider-internal error classes to stable UI/history categories."""
     categories = {
         "model_not_found_or_invalid": "MODEL_UNAVAILABLE",
-        "http_404_resource_not_found": "API_ERROR",
+        "http_404_resource_not_found": "MODEL_UNAVAILABLE",
         "http_429_rate_limit_or_quota": "RATE_LIMITED",
         "billing_or_quota": "QUOTA_EXCEEDED",
         "http_401_authentication_failed": "AUTHENTICATION_ERROR",
@@ -596,6 +602,7 @@ def _canonical_error_classification(error_class: str) -> str:
         "http_403_permission_denied": "AUTHENTICATION_ERROR",
         "http_408_timeout": "TIMEOUT",
         "provider_server": "API_ERROR",
+        "transient_provider_error": "TRANSIENT_PROVIDER_ERROR",
         "network": "NETWORK_ERROR",
         "timeout": "TIMEOUT",
         "invalid_response": "API_ERROR",
@@ -606,7 +613,10 @@ def _canonical_error_classification(error_class: str) -> str:
         "execution_identity_mismatch": "API_ERROR",
         "response_too_large": "API_ERROR",
         "provider_error": "API_ERROR",
+        "api_error": "API_ERROR",
+        "transient": "TRANSIENT_PROVIDER_ERROR",
         "provider": "API_ERROR",
+        "invalid_request": "INVALID_REQUEST",
     }
     normalized = str(error_class or "").strip().upper()
     if normalized in ERROR_CLASSES:
@@ -624,6 +634,8 @@ def _friendly_error_class(error_class: str) -> str:
         "RATE_LIMITED": "RATE_LIMITED",
         "AUTHENTICATION_ERROR": "AUTHENTICATION_ERROR",
         "API_ERROR": "API_ERROR",
+        "TRANSIENT_PROVIDER_ERROR": "TRANSIENT_PROVIDER_ERROR",
+        "INVALID_REQUEST": "INVALID_REQUEST",
         "NETWORK_ERROR": "NETWORK_ERROR",
         "TIMEOUT": "TIMEOUT",
         "UNKNOWN": "UNKNOWN",
@@ -632,13 +644,26 @@ def _friendly_error_class(error_class: str) -> str:
 
 
 def _retryable(status: int, body: str) -> bool:
-    if status in (408, 409, 425) or status >= 500:
-        return True
-    if status != 429:
+    """Transport retry policy; distinct from Free Cascade advancement.
+
+    A model-unavailable 404 is NEVER retried against the same model.
+    5xx is transient and may be retried by a caller-owned transport policy.
+    The production cascade itself still advances deterministically.
+    """
+    classification = _canonical_error_classification(_classify(status, body))
+    if classification == "MODEL_UNAVAILABLE":
         return False
-    # Keep retry policy aligned with the public taxonomy: explicit quota/billing
-    # exhaustion is not transient, while a generic 429 is retryable.
-    return _canonical_error_classification(_classify(status, body)) != "QUOTA_EXCEEDED"
+    if classification == "INVALID_REQUEST":
+        return False
+    if classification == "AUTHENTICATION_ERROR":
+        return False
+    if classification == "RATE_LIMITED":
+        return True
+    if classification == "QUOTA_EXCEEDED":
+        return False
+    if classification == "TRANSIENT_PROVIDER_ERROR":
+        return True
+    return status in (408, 409, 425)
 
 
 def _retry_delay(response: Any, attempt: int) -> float:
@@ -1249,26 +1274,16 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     # requested model identity.
     terminal = {"not_configured", "configuration", "deadline_exceeded", "execution_identity_mismatch"}
 
-    def _should_continue_cascade(exc: ProviderError, classification: str, index: int) -> bool:
-        if index >= len(candidates) - 1:
-            return False
-
-        # Preserve fail-closed execution-identity attestation. A successful HTTP
-        # response that does not attest the requested DeepSeek model is NOT an
-        # ordinary API failure and must never be silently advanced.
+    def _cascade_decision(exc: ProviderError, classification: str, index: int) -> tuple[str, str]:
+        has_next = index < len(candidates) - 1
         if exc.error_class == "execution_identity_mismatch":
-            return False
-        if exc.error_class in terminal or classification == "AUTHENTICATION_ERROR":
-            return False
+            return ("CASCADE_STOP", "EXECUTION_IDENTITY_MISMATCH")
+        if exc.error_class in terminal:
+            return ("CASCADE_STOP", str(exc.error_class).upper())
+        return FreeCascadeController.cascade_decision(classification, has_next)
 
-        # DeepSeek HTTP/API failures are retryable at the cascade level. The
-        # transport layer supplies the concrete HTTP status/error class, while
-        # the public taxonomy intentionally collapses those failures to
-        # API_ERROR. This explicit boundary prevents an internal classification
-        # label from accidentally becoming terminal.
-        if seat.key == "deepseek" and classification == "API_ERROR":
-            return FreeCascadeController.should_continue(classification, index < len(candidates) - 1)
-        return FreeCascadeController.should_continue(classification, index < len(candidates) - 1)
+    def _should_continue_cascade(exc: ProviderError, classification: str, index: int) -> bool:
+        return _cascade_decision(exc, classification, index)[0] == "CASCADE_CONTINUE"
 
     for index, model in enumerate(candidates):
         if seat_deadline is not None and (_remaining(seat_deadline) or 0) <= 0:
@@ -1352,6 +1367,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         except ProviderError as exc:
             last_error = exc
             classification = _canonical_error_classification(exc.error_class)
+            cascade_action, cascade_reason = _cascade_decision(exc, classification, index)
             attempt_diagnostics.append({
                 "provider": seat.name,
                 "attempt": index + 1,
@@ -1365,8 +1381,9 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "attempt_id": f"{request_id}:r{int(round_no)}:a{index + 1}" if request_id else f"r{int(round_no)}:a{index + 1}",
                 "round": int(round_no),
                 "final_result": "FAILED",
-                "cascade_action": "CASCADE_CONTINUE" if _should_continue_cascade(exc, classification, index) else "CASCADE_STOP",
-                "retryable": _should_continue_cascade(exc, classification, index),
+                "cascade_action": cascade_action,
+                "cascade_reason": cascade_reason,
+                "retryable": cascade_action == "CASCADE_CONTINUE",
                 "latency": round(time.perf_counter() - attempt_started, 3),
                 "execution_time": round(time.perf_counter() - attempt_started, 3),
                 "timeout_seconds": effective_timeout,
@@ -1387,6 +1404,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             normalized = _canonical_error_classification(internal)
             wrapped = ProviderError(text or exc.__class__.__name__, status_code, internal)
             last_error = wrapped
+            cascade_action, cascade_reason = _cascade_decision(wrapped, normalized, index)
             attempt_diagnostics.append({
                 "provider": seat.name,
                 "attempt": index + 1,
@@ -1400,14 +1418,15 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 "attempt_id": f"{request_id}:r{int(round_no)}:a{index + 1}" if request_id else f"r{int(round_no)}:a{index + 1}",
                 "round": int(round_no),
                 "final_result": "FAILED",
-                "cascade_action": "CASCADE_CONTINUE" if (normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1) else "CASCADE_STOP",
-                "retryable": normalized != "AUTHENTICATION_ERROR" and index < len(candidates) - 1,
+                "cascade_action": cascade_action,
+                "cascade_reason": cascade_reason,
+                "retryable": cascade_action == "CASCADE_CONTINUE",
                 "latency": round(time.perf_counter() - attempt_started, 3),
                 "execution_time": round(time.perf_counter() - attempt_started, 3),
                 "timeout_seconds": effective_timeout,
                 "_display_created_at": time.time(),
             })
-            if normalized == "AUTHENTICATION_ERROR" or index == len(candidates) - 1:
+            if cascade_action == "CASCADE_STOP":
                 break
 
     return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)

@@ -11,7 +11,7 @@ from typing import Any
 import production_core_harness as harness
 
 
-VERSION = "V22.1-HOTFIX120-PRODUCTION-HARDENED"
+VERSION = "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
 
 
 def run_production_core_tests() -> tuple[int, dict[str, Any]]:
