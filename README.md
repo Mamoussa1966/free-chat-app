@@ -41,3 +41,12 @@ Request lifecycle, provider execution contract, strict Free Cascade #1→#10, ti
 Single-request determinism is enforced at the orchestration boundary. A Request ID may not be re-orchestrated while active and a completed Request ID is returned from its immutable in-chat result cache. Each round has one execution scope and each seat can be claimed once within that scope. Free Cascade attempts remain internal to the provider call and reuse the same Request ID + Round. Transactional Bridge creation therefore occurs once per Request ID + Round.
 
 The live UI exposes authoritative telemetry in the form `model → classification → cascade action`; these values come from the provider attempt diagnostics rather than model-generated prose.
+
+
+## HOTFIX127 — Execution Accounting / Attempt-Record Integrity
+- Based on HOTFIX126; all existing files preserved.
+- Worker/orchestration failures never synthesize provider Attempt #1 records.
+- Authoritative counters distinguish configured/requested/executed/successful seats and cascade attempts.
+- Provider execution audit events are emitted only from runtime execution events.
+- Cascade attempts remain inside the same Request ID.
+- No secrets or raw provider payloads are persisted.

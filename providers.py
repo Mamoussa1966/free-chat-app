@@ -1164,9 +1164,29 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
             "provider": seat.name, "attempt": len(attempted), "model": normalized_model, "status_code": 200,
             "classification": "SUCCESS", "retryable": False, "execution_time": round(time.perf_counter() - started, 3),
             "request_id": str(request_id or ""), "attempt_id": f"{request_id}:r{int(round_no)}:a{len(attempted)}" if request_id else f"r{int(round_no)}:a{len(attempted)}",
-            "round": int(round_no), "final_result": "SUCCESS", "cascade_action": "SUCCESS",
+            "round": int(round_no), "final_result": "SUCCESS", "cascade_action": "SUCCESS", "execution_started": True,
         })
 
+
+    # HOTFIX127: authoritative runtime execution events are a projection of
+    # actual provider attempts only. They are never synthesized for a worker
+    # failure, missing model list, or unconfigured credential.
+    runtime_execution_events = []
+    for item in telemetry:
+        if isinstance(item, dict) and item.get("execution_started") is True:
+            runtime_execution_events.append({
+                "execution_started": True,
+                "provider": seat.name,
+                "attempt": item.get("attempt"),
+                "model": str(item.get("model") or "").strip(),
+                "attempt_id": str(item.get("attempt_id") or ""),
+                "request_id": str(item.get("request_id") or request_id or ""),
+                "round": int(item.get("round", round_no) or round_no),
+                "classification": _canonical_error_classification(str(item.get("classification") or "UNKNOWN")),
+                "cascade_action": str(item.get("cascade_action") or "").upper(),
+                "execution_time": float(item.get("execution_time", item.get("latency", 0.0)) or 0.0),
+                "status": "SUCCESS" if str(item.get("final_result") or "").upper() == "SUCCESS" else "FAILED",
+            })
 
     cascade_position = (attempted.index(normalized_model) + 1) if normalized_model and normalized_model in attempted else (len(attempted) if attempted else None)
     return {
@@ -1183,6 +1203,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         "error": error,
         "latency": round(time.perf_counter() - started, 3),
         "attempted_models": list(attempted),
+        "runtime_execution_events": runtime_execution_events,
         "cascade_position": cascade_position,
         "attempt_diagnostics": [dict(x) for x in (attempt_diagnostics or [])],
         # Public-safe summaries are available to the live diagnostic renderer.
@@ -1380,6 +1401,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             classification = _canonical_error_classification(exc.error_class)
             cascade_action, cascade_reason = _cascade_decision(exc, classification, index)
             attempt_diagnostics.append({
+                "execution_started": True,
                 "provider": seat.name,
                 "attempt": index + 1,
                 "model": executed_model,
@@ -1417,6 +1439,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             last_error = wrapped
             cascade_action, cascade_reason = _cascade_decision(wrapped, normalized, index)
             attempt_diagnostics.append({
+                "execution_started": True,
                 "provider": seat.name,
                 "attempt": index + 1,
                 "model": executed_model,

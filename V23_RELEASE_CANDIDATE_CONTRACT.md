@@ -8,3 +8,12 @@ HOTFIX124 UX/session integrity/observability; HOTFIX125 conversation persistence
 
 ## Explicit non-goals
 No Secrets changes. No model-list changes. No Dynamic Model Discovery. No Local Engine. No Paid fallback. No provider-to-provider credential fallback. No counter derived from seat-generated prose.
+
+
+## HOTFIX127 — Execution Accounting / Attempt-Record Integrity
+- Based on HOTFIX126; all existing files preserved.
+- Worker/orchestration failures never synthesize provider Attempt #1 records.
+- Authoritative counters distinguish configured/requested/executed/successful seats and cascade attempts.
+- Provider execution audit events are emitted only from runtime execution events.
+- Cascade attempts remain inside the same Request ID.
+- No secrets or raw provider payloads are persisted.

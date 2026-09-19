@@ -122,3 +122,12 @@ Built directly from the complete previous release artifact. The complete file tr
 - HOTFIX129: secret/raw-payload/prompt-isolation audit surface.
 - HOTFIX130: regression validation remains additive to the inherited Production Core test runner.
 - V23 Release Candidate: all layers are additive above HOTFIX123.2; Secrets, explicit `*_FREE_MODELS`, Official API only, no Local Engine, and no Paid fallback are preserved.
+
+
+## HOTFIX127 — Execution Accounting / Attempt-Record Integrity
+- Based on HOTFIX126; all existing files preserved.
+- Worker/orchestration failures never synthesize provider Attempt #1 records.
+- Authoritative counters distinguish configured/requested/executed/successful seats and cascade attempts.
+- Provider execution audit events are emitted only from runtime execution events.
+- Cascade attempts remain inside the same Request ID.
+- No secrets or raw provider payloads are persisted.

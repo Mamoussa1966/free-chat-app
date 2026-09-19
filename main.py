@@ -732,9 +732,22 @@ def _shared_context(chat: dict, exclude_message_id: str | None = None, max_chars
 
 
 def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, request_id: str = "", round_no: int = 0) -> dict:
+    # HOTFIX127: a worker-level failure is NOT a provider execution attempt.
+    # It may occur before the provider adapter is entered (deadline, orchestration
+    # exception, missing configuration, etc.). Never synthesize Attempt #1 here.
     models = tuple((model_candidates or {}).get(seat.key) or ())
-    return {"seat": seat.key, "name": seat.name, "label": seat.label, "status": "FAILED", "mode": "internal", "model": models[0] if models else "", "content": "", "classification": "API_ERROR", "error": f"class=provider_error; internal worker failure: {exc.__class__.__name__}",
-        "attempt_summaries": [{"attempt": 1, "model": models[0] if models else "", "status_code": None, "classification": "API_ERROR", "retryable": False}], "latency": 0.0, "attempted_models": [], "official_authenticated": False, "request_id": request_id, "round": round_no}
+    return {
+        "seat": seat.key, "name": seat.name, "label": seat.label,
+        "status": "FAILED", "mode": "internal",
+        "model": models[0] if models else "", "content": "",
+        "classification": "API_ERROR",
+        "error": f"class=provider_error; internal worker failure: {exc.__class__.__name__}",
+        "attempt_summaries": [], "attempt_telemetry": [],
+        "latency": 0.0, "attempted_models": [],
+        "official_authenticated": False, "execution_started": False,
+        "runtime_execution_events": [],
+        "request_id": request_id, "round": round_no,
+    }
 
 
 def _history_attempt_summaries(details: list[dict]) -> list[dict]:
@@ -973,6 +986,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
             provider_prompt = bridge.prompt_snapshot(seat)
             working_context = provider_prompt
+            # HOTFIX127: configuration/routing are separate from execution.
+            # This records only booleans; credentials themselves never enter state.
+            result_request_routed = bool(credentials.get(seat.key) and model_candidates.get(seat.key))
             provider_user_prompt = bridge.sanitize_user_prompt(user_prompt, seat)
             _assert_provider_boundary(provider_user_prompt, provider_prompt, bridge_controls)
             bridge.record_provider_input(seat, provider_prompt)
@@ -998,6 +1014,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             bridge.record_provider_input(seat, actual_provider_prompt or provider_prompt)
             bridge.record_runtime_payload_attestation(seat, runtime_attestation)
             _render_live_cascade_telemetry(result)
+            result["request_routed"] = result_request_routed
+            result["model_candidates_configured"] = bool(model_candidates.get(seat.key))
             result["execution_id"] = execution_id
             result["execution_claim"] = f"{request_id}:{round_no}:{seat.key}"
             results[seat.key] = result
@@ -1035,6 +1053,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 result["bridge_trace"] = bridge.transaction_trace()
         except Exception as exc:
             failure = _worker_failure(seat, exc, model_candidates, request_id, round_no)
+            failure["request_routed"] = bool(credentials.get(seat.key) and model_candidates.get(seat.key))
+            failure["model_candidates_configured"] = bool(model_candidates.get(seat.key))
             failure["execution_id"] = execution_id
             failure["execution_claim"] = f"{request_id}:{round_no}:{seat.key}"
             results[seat.key] = failure
@@ -1094,53 +1114,76 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
 
 def _authoritative_request_metrics(request_id: str, round_results: list[dict], audit_events: list[dict]) -> dict:
-    """Build request counters only from the orchestrator-owned request/audit record.
+    """HOTFIX127: authoritative accounting from actual runtime execution events only.
 
-    Seat-generated prose is never used as an authority for these counters. Provider
-    attempt telemetry is used only for attempt records already attached to the
-    request result; execution counts and identity counts are anchored to the
-    request/round audit and persisted result objects.
+    CONFIGURED, REQUEST_CREATED, REQUESTED, EXECUTED, SUCCESSFUL and CASCADE_ATTEMPTS
+    are intentionally separate quantities. A placeholder/worker failure is never an
+    execution event and therefore never increments attempt or provider-execution
+    counters.
     """
     rid = str(request_id or "").strip()
     results = [r for r in (round_results or []) if isinstance(r, dict)]
     events = [e for e in (audit_events or []) if isinstance(e, dict) and str(e.get("request_id") or "") == rid]
-    result_request_ids = {str(r.get("request_id") or "").strip() for r in results if str(r.get("request_id") or "").strip()}
-    telemetry_request_ids: set[str] = set()
-    total_attempts = 0
+
+    def runtime_events(result: dict) -> list[dict]:
+        raw = result.get("runtime_execution_events")
+        if isinstance(raw, list):
+            return [e for e in raw if isinstance(e, dict) and e.get("execution_started") is True]
+        telemetry = result.get("attempt_telemetry") or result.get("attempt_summaries") or result.get("attempt_diagnostics") or []
+        out = []
+        for d in telemetry:
+            if not isinstance(d, dict):
+                continue
+            # Only actual attempt records qualify. Legacy summaries without an
+            # explicit execution marker are accepted when they have a model AND
+            # a positive attempt number AND the result has attempted_models.
+            if d.get("execution_started") is True or (d.get("model") and d.get("attempt")):
+                x = dict(d)
+                x["execution_started"] = True
+                out.append(x)
+        return out
+
+    actual_by_result = [(r, runtime_events(r)) for r in results]
+    executed_seat_keys = {str(r.get("seat") or "").strip() for r, evs in actual_by_result if evs}
+    successful_seat_keys = {str(r.get("seat") or "").strip() for r, evs in actual_by_result
+                            if evs and str(r.get("status") or "").upper() == "SUCCESS" and r.get("content")}
+    requested_seat_keys = {str(r.get("seat") or "").strip() for r in results
+                           if r.get("request_routed") is True}
+    configured_seat_keys = {str(r.get("seat") or "").strip() for r in results
+                            if r.get("model_candidates_configured") is True and r.get("request_routed") is True}
+
+    total_attempts = sum(len(evs) for _, evs in actual_by_result)
     attempts_by_provider: dict[str, int] = {}
-    for r in results:
+    for r, evs in actual_by_result:
         provider = str(r.get("name") or r.get("seat") or "").strip()
-        details = r.get("attempt_diagnostics") or r.get("attempt_telemetry") or r.get("attempt_summaries") or []
-        valid_details = [d for d in details if isinstance(d, dict)]
-        total_attempts += len(valid_details)
-        attempts_by_provider[provider] = attempts_by_provider.get(provider, 0) + len(valid_details)
-        for d in valid_details:
-            x = str(d.get("request_id") or "").strip()
-            if x:
-                telemetry_request_ids.add(x)
-    audit_request_ids = {str(e.get("request_id") or "").strip() for e in events if str(e.get("request_id") or "").strip()}
-    all_request_ids = {rid} | result_request_ids | telemetry_request_ids | audit_request_ids
-    bridge_ids = set()
-    for r in results:
-        audit = r.get("bridge_transaction_audit")
-        if isinstance(audit, dict):
-            bid = str(audit.get("BRIDGE_ID") or "").strip()
-            if bid:
-                bridge_ids.add(bid)
-    provider_exec_events = [e for e in events if str(e.get("event_type") or "") == "PROVIDER_RESULT"]
-    deepseek_exec_events = [e for e in provider_exec_events if str(e.get("provider") or "").strip().lower() == "deepseek" and int(e.get("round_id") or 0) == 1]
-    # Fallback to the persisted per-seat result only if the lifecycle event is absent;
-    # this keeps legacy records readable while still avoiding seat-generated prose.
-    deepseek_result_count = sum(1 for r in results if str(r.get("seat") or "").strip().lower() == "deepseek" and int(r.get("round") or 0) == 1)
-    deepseek_round1_executions = len(deepseek_exec_events) if deepseek_exec_events else deepseek_result_count
+        if evs:
+            attempts_by_provider[provider] = attempts_by_provider.get(provider, 0) + len(evs)
+
+    provider_exec_events = [e for e in events if str(e.get("event_type") or "") == "PROVIDER_RESULT"
+                            and e.get("metadata", {}).get("runtime_execution") == "true"]
+    bridge_ids = {str(r.get("bridge_transaction_audit", {}).get("BRIDGE_ID") or "").strip()
+                  for r in results if isinstance(r.get("bridge_transaction_audit"), dict)}
+    bridge_ids.discard("")
+    all_request_ids = {rid} | {str(r.get("request_id") or "").strip() for r in results if r.get("request_id")}
+    all_request_ids |= {str(e.get("request_id") or "").strip() for e in events if e.get("request_id")}
     rounds = sorted({int(e.get("round_id") or 0) for e in events if int(e.get("round_id") or 0) > 0})
+    deepseek_round1_executions = sum(len(evs) for r, evs in actual_by_result
+                                     if str(r.get("seat") or "").lower() == "deepseek" and int(r.get("round") or 0) == 1)
     return {
         "request_id": rid,
         "rounds": rounds,
         "unique_request_ids": len(all_request_ids),
-        "request_ids": sorted(all_request_ids),
+        "request_ids": sorted(x for x in all_request_ids if x),
         "unique_bridge_ids": len(bridge_ids),
         "bridge_ids": sorted(bridge_ids),
+        "configured_seats": len(configured_seat_keys),
+        "configured_seat_keys": sorted(x for x in configured_seat_keys if x),
+        "requested_seats": len(requested_seat_keys),
+        "requested_seat_keys": sorted(x for x in requested_seat_keys if x),
+        "executed_seats": len(executed_seat_keys),
+        "executed_seat_keys": sorted(x for x in executed_seat_keys if x),
+        "successful_seats": len(successful_seat_keys),
+        "successful_seat_keys": sorted(x for x in successful_seat_keys if x),
         "total_cascade_attempts": total_attempts,
         "attempts_by_provider": attempts_by_provider,
         "provider_execution_events": len(provider_exec_events),
@@ -1233,13 +1276,17 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             lifecycle.finish_round(round_no, success_count, len(round_results))
             lifecycle.record("RESPONSE_VALIDATION", round_id=round_no, status="PASS" if all(str(r.get("status") or "").upper() != "SUCCESS" or bool(r.get("content")) for r in round_results) else "FAIL")
             for r in round_results:
-                lifecycle.record(
-                    "PROVIDER_RESULT", round_id=round_no, provider=str(r.get("name") or r.get("seat") or ""),
-                    model=str(r.get("executed_model") or r.get("model") or ""),
-                    cascade_position=r.get("cascade_position"), status=str(r.get("status") or ""),
-                    classification=str(r.get("classification") or ""), latency_ms=(float(r.get("latency", 0.0) or 0.0) * 1000.0),
-                    metadata={"result_key": str(r.get("result_key") or "")},
-                )
+                runtime_events = r.get("runtime_execution_events") or []
+                for ev in runtime_events if isinstance(runtime_events, list) else []:
+                    if not isinstance(ev, dict) or ev.get("execution_started") is not True:
+                        continue
+                    lifecycle.record(
+                        "PROVIDER_RESULT", round_id=round_no, provider=str(r.get("name") or r.get("seat") or ""),
+                        model=str(ev.get("model") or r.get("executed_model") or r.get("model") or ""),
+                        cascade_position=ev.get("attempt"), status=str(ev.get("status") or ("SUCCESS" if str(r.get("status") or "").upper() == "SUCCESS" and int(ev.get("attempt", 0) or 0) == len(r.get("attempted_models") or []) else "FAILED")),
+                        classification=str(ev.get("classification") or ""), latency_ms=(float(ev.get("execution_time", 0.0) or 0.0) * 1000.0),
+                        metadata={"result_key": str(r.get("result_key") or ""), "runtime_execution": "true", "attempt_id": str(ev.get("attempt_id") or "")},
+                    )
         any_success = any(str(r.get("status") or "").upper() == "SUCCESS" for r in all_results)
         lifecycle.record("REQUEST_COMMIT", round_id=0, status="COMMITTED" if any_success else "REJECTED", metadata={"success_count": str(sum(1 for r in all_results if str(r.get("status") or "").upper() == "SUCCESS"))})
         lifecycle.finish(success=any_success)
