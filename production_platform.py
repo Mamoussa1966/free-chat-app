@@ -133,6 +133,94 @@ def synthesize_council_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str = "") -> dict[str, Any]:
+    """Verify the application-owned conversation record contains required safe artifacts.
+
+    This is a structural runtime audit; it never treats provider prose as authority.
+    """
+    chat = chat if isinstance(chat, dict) else {}
+    rid = str(request_id or "").strip()
+    records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
+    messages = [m for m in chat.get("messages", []) if isinstance(m, dict)]
+    record = next((r for r in records if str(r.get("request_id") or "") == rid), None) if rid else (records[-1] if records else None)
+    required = {
+        "SESSION_ID": bool(chat.get("id")),
+        "USER_MESSAGE": any(m.get("role") == "user" for m in messages),
+        "REQUEST_ID": bool(record and record.get("request_id")),
+        "ROUND_ID": bool(record and (record.get("rounds_executed") or record.get("rounds"))),
+        "SEAT_RESULTS": bool(record and isinstance(record.get("results"), list)),
+        "EXECUTED_MODELS": bool(record and isinstance(record.get("results"), list)),
+        "CASCADE_SUMMARIES": bool(record and any(isinstance(r, dict) and (r.get("attempt_summaries") or r.get("attempt_telemetry")) for r in record.get("results", []))),
+        "BRIDGE_AUDIT": bool(record and any(isinstance(r, dict) and r.get("bridge_transaction_audit") for r in record.get("results", []))),
+        "FINAL_RESULT": bool(record and record.get("synthesis")),
+        "AUTHORITATIVE_METRICS": bool(record and record.get("request_metrics")),
+    }
+    forbidden = json.dumps(chat, ensure_ascii=False, default=str)
+    forbidden_hits = {
+        "API_KEYS": bool(re.search(r"\b(?:AIza[A-Za-z0-9_-]{20,}|(?:sk|xai)-[A-Za-z0-9._-]{16,})\b", forbidden)),
+        "AUTH_HEADERS": bool(re.search(r"(?i)\b(?:authorization|x-api-key|x-goog-api-key)\s*[:=]", forbidden)),
+        "RAW_PROVIDER_PAYLOADS": "raw_provider_payload" in forbidden,
+        "SENSITIVE_DIAGNOSTICS": "attempt_diagnostics" in forbidden,
+    }
+    ok = all(required.values()) and not any(forbidden_hits.values())
+    return {"status": "PASS" if ok else "FAIL", "required_artifacts": required, "forbidden_data": forbidden_hits, "messages": len(messages), "request_records": len(records)}
+
+
+def session_integrity_audit(chat: dict[str, Any] | None, request_id: str = "") -> dict[str, Any]:
+    """Check persisted identity ledgers for duplicate request/seat/bridge identities."""
+    chat = chat if isinstance(chat, dict) else {}
+    rid = str(request_id or "").strip()
+    request_ids = [str(r.get("request_id") or "") for r in chat.get("request_records", []) if isinstance(r, dict) and r.get("request_id")]
+    duplicate_requests = len(request_ids) - len(set(request_ids))
+    keys = []
+    for raw in chat.get("history_identity_ledger", []):
+        if isinstance(raw, (list, tuple)) and len(raw) == 3:
+            keys.append(tuple(str(x) for x in raw))
+    duplicate_seat_round = len(keys) - len(set(keys))
+    bridge_ids = []
+    for r in chat.get("request_records", []):
+        if not isinstance(r, dict):
+            continue
+        for result in r.get("results", []) if isinstance(r.get("results"), list) else []:
+            if isinstance(result, dict):
+                a = result.get("bridge_transaction_audit")
+                if isinstance(a, dict) and a.get("BRIDGE_ID"):
+                    bridge_ids.append(str(a["BRIDGE_ID"]))
+    duplicate_bridges = len(bridge_ids) - len(set(bridge_ids))
+    return {
+        "status": "PASS" if duplicate_requests == duplicate_seat_round == duplicate_bridges == 0 else "FAIL",
+        "duplicate_requests": max(0, duplicate_requests),
+        "duplicate_seat_round_executions": max(0, duplicate_seat_round),
+        "duplicate_bridges": max(0, duplicate_bridges),
+        "request_id": rid,
+    }
+
+
+def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, context_meta: dict[str, Any] | None, health: list[dict[str, Any]] | None, security: dict[str, Any] | None, regression: dict[str, Any] | None) -> dict[str, Any]:
+    """Assemble one application-owned V23 continuation report from runtime records."""
+    chat = chat if isinstance(chat, dict) else {}
+    persistence = conversation_persistence_audit(chat, request_id)
+    session = session_integrity_audit(chat, request_id)
+    ctx = context_meta if isinstance(context_meta, dict) else {}
+    context_status = "PASS" if ctx.get("chars", 0) >= 0 and "digest" in ctx else "FAIL"
+    health_rows = health if isinstance(health, list) else []
+    health_status = "PASS" if health_rows and all(r.get("status") in {"READY", "CREDENTIAL_MISSING", "MODEL_LIST_MISSING"} for r in health_rows) else "FAIL"
+    regression = regression if isinstance(regression, dict) else {}
+    regression_status = str(regression.get("gate") or regression.get("status") or "NOT_RUN").upper()
+    security_status = str((security or {}).get("status") or "NOT_RUN").upper()
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status))
+    return {
+        "schema": "v23-platform-audit/v1",
+        "status": "PASS" if overall else "FAIL",
+        "security_audit": security or {"status": "NOT_RUN"},
+        "context_window": {"status": context_status, **ctx},
+        "conversation_persistence": persistence,
+        "session_integrity": session,
+        "provider_health": {"status": health_status, "rows": health_rows},
+        "regression_core": {"status": regression_status, **regression},
+    }
+
+
 def provider_health_snapshot(seats: list[Any], credentials: dict[str, Any], models: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for seat in seats:

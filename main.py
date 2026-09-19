@@ -17,7 +17,7 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
-from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit
+from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
@@ -558,7 +558,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 
 def _init_state() -> None:
-    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}}
+    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -1658,6 +1658,9 @@ def run_app() -> None:
         with st.spinner("المجلس ينفذ Free API Cascade بالتوازي…"):
             results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id)
         st.session_state.last_results = [_public_result(r) for r in results]
+        _shared_context(chat, max_chars=30_000)
+        st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
+        st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1
         st.rerun()
@@ -1673,11 +1676,30 @@ def run_app() -> None:
             st.subheader("🧠 Council Synthesis / Authoritative Result Set")
             st.json(syn)
     _render_production_core_validation()
-    with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=False):
+    with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=True):
         if st.button("Run full V23 platform audit", key="v23_platform_audit"):
+            chat = _active_chat()
+            latest = chat.get("request_records", [])[-1] if chat.get("request_records") else {}
+            rid = str(latest.get("request_id") or "")
+            # Context audit is derived from the actual persisted conversation.
+            _shared_context(chat, max_chars=30_000)
+            st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
             st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
-        st.json(st.session_state.get("last_security_audit") or {"status": "NOT_RUN"})
-        st.json(st.session_state.get("platform_context_meta") or {"status": "NOT_RUN"})
+            if not st.session_state.get("last_production_core_report"):
+                code, report = run_production_core_tests()
+                st.session_state.last_production_core_report = report
+                st.session_state.last_production_core_code = code
+            st.session_state.last_v23_platform_audit = build_v23_platform_audit(
+                chat, rid, st.session_state.get("platform_context_meta"),
+                st.session_state.get("last_health_snapshot"),
+                st.session_state.get("last_security_audit"),
+                st.session_state.get("last_production_core_report"),
+            )
+        report = st.session_state.get("last_v23_platform_audit") or {}
+        if report:
+            st.json(report)
+        else:
+            st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
 
 
 if __name__ == "__main__":
