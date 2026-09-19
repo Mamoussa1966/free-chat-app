@@ -15,7 +15,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit
 
@@ -29,7 +29,8 @@ _ACTIVE_ORCHESTRATOR_REQUESTS: set[str] = set()
 from production_core_test_runner import run_production_core_tests, render_report as render_production_core_report
 
 APP_VERSION = PROVIDER_VERSION
-HOTFIX_VERSION = "HOTFIX125.5"
+DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
+HOTFIX_VERSION = "HOTFIX132"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -988,15 +989,49 @@ def _provider_identity_matches(seat_key: str, executed_model: str, reported_mode
 
 
 def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls: list[tuple[str, str]] | None = None) -> None:
-    """Hard boundary: bridge control keys/values cannot enter provider inputs."""
-    combined = f"{prompt}\n{provider_prompt}"
-    if re.search(r"(?i)\bBRIDGE_RESULT\b", combined):
+    """HOTFIX132: validate the *actual provider input*, not the user's diagnostic instructions.
+
+    The previous implementation concatenated ``prompt`` with ``provider_prompt``.
+    That made a legitimate diagnostic request containing the literal token
+    ``BRIDGE_RESULT`` fail the dispatch gate before any provider execution.
+    The user request is control/input data; only the sanitized provider-layer
+    prompt is subject to the no-leak invariant.
+    """
+    provider_text = str(provider_prompt or "")
+    if re.search(r"(?i)\bBRIDGE_RESULT\b", provider_text):
         raise RuntimeError("BRIDGE_RESULT leaked into provider-layer prompt")
     for key, value in (bridge_controls or []):
-        if str(key).strip() and re.search(rf"(?i)\b{re.escape(str(key).strip())}\b", combined):
+        key_text = str(key or "").strip()
+        value_text = str(value or "").strip()
+        if key_text and re.search(rf"(?i)\b{re.escape(key_text)}\b", provider_text):
             raise RuntimeError("bridge key leaked into provider-layer prompt")
-        if str(value).strip() and str(value).strip() in combined:
+        if value_text and value_text in provider_text:
             raise RuntimeError("bridge value leaked into provider-layer prompt")
+
+
+def _dispatch_gate(seat, request_id: str, round_no: int, credential, model_candidates) -> tuple[bool, str]:
+    """HOTFIX132 authoritative pre-execution dispatch contract.
+
+    A configured seat with an explicit Free model, a valid request identity and
+    positive round is dispatchable. This gate never calls a provider and never
+    treats provider/API errors as dispatch failures.
+    """
+    if not str(request_id or "").strip():
+        return False, "REQUEST_ID_MISSING"
+    try:
+        rid = int(round_no)
+    except (TypeError, ValueError):
+        return False, "ROUND_INVALID"
+    if rid <= 0:
+        return False, "ROUND_INVALID"
+    if credential is None or not str(credential).strip():
+        return False, "CREDENTIAL_MISSING"
+    candidates = tuple(str(m).strip() for m in (model_candidates or ()) if str(m).strip())
+    if not candidates:
+        return False, "FREE_MODEL_LIST_EMPTY"
+    if not str(getattr(seat, "key", "") or "").strip():
+        return False, "SEAT_KEY_MISSING"
+    return True, "READY_FREE_MODEL"
 
 
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str, bridge_controls: list[tuple[str, str]] | None = None) -> list[dict]:
@@ -1038,7 +1073,30 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     bridge_order.extend(seat for seat in seats if seat.key in by_key)
     for seat in SEATS if False else bridge_order:
         execution_id = execution_ledger.claim(seat.key)
+        dispatch_ok, dispatch_reason = _dispatch_gate(
+            seat, request_id, round_no, credentials.get(seat.key), model_candidates.get(seat.key)
+        )
+        if not dispatch_ok:
+            results[seat.key] = {
+                "seat": seat.key, "name": seat.name, "label": seat.label,
+                "status": "NOT_CONFIGURED" if dispatch_reason in {"CREDENTIAL_MISSING", "FREE_MODEL_LIST_EMPTY"} else "DISPATCH_REJECTED",
+                "classification": "NOT_CONFIGURED" if dispatch_reason in {"CREDENTIAL_MISSING", "FREE_MODEL_LIST_EMPTY"} else "DISPATCH_REJECTED",
+                "dispatch_decision": "DISPATCH_REJECTED",
+                "dispatch_reason": dispatch_reason,
+                "dispatch_accepted": False, "dispatch_gate": "HOTFIX132",
+                "mode": "internal", "model": "", "executed_model": "", "content": "",
+                "attempt_summaries": [], "attempt_telemetry": [], "attempted_models": [],
+                "official_authenticated": False, "execution_started": False,
+                "runtime_execution_events": [], "request_id": request_id, "round": round_no,
+                "request_routed": False,
+                "model_candidates_configured": bool(model_candidates.get(seat.key)),
+                "execution_id": execution_id,
+                "execution_claim": f"{request_id}:{round_no}:{seat.key}",
+            }
+            continue
         try:
+            # HOTFIX132: dispatch is accepted before entering the Provider Execution Contract.
+            # Provider/API failures after this point are execution outcomes, never dispatch failures.
             # HOTFIX123: execution ownership is immutable for this request/round/seat.
             # The provider may perform multiple Free Cascade attempts, but all
             # attempts belong to this one execution claim.
@@ -1066,6 +1124,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
                 deadline, request_id,
             )
+            result["dispatch_decision"] = "DISPATCH_ACCEPTED"
+            result["dispatch_reason"] = "READY_FREE_MODEL"
+            result["dispatch_accepted"] = True
+            result["dispatch_gate"] = "HOTFIX132"
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
                 # Authoritative cascade identity comes from the actual API-attempt
@@ -1124,11 +1186,26 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             else:
                 result["bridge_trace"] = bridge.transaction_trace()
         except Exception as exc:
-            failure = _worker_failure(seat, exc, model_candidates, request_id, round_no)
-            failure["request_routed"] = bool(credentials.get(seat.key) and model_candidates.get(seat.key))
-            failure["model_candidates_configured"] = bool(model_candidates.get(seat.key))
-            failure["execution_id"] = execution_id
-            failure["execution_claim"] = f"{request_id}:{round_no}:{seat.key}"
+            # HOTFIX132: once DISPATCH_ACCEPTED has been recorded, an exception is
+            # an execution/provider-contract failure, not a dispatch rejection.
+            failure = {
+                "seat": seat.key, "name": seat.name, "label": seat.label,
+                "status": "PROVIDER_ERROR", "mode": "official_api",
+                "model": "", "executed_model": "", "content": "",
+                "classification": "PROVIDER_ERROR",
+                "error": f"provider execution failed after dispatch acceptance: {exc.__class__.__name__}",
+                "attempt_summaries": [], "attempt_telemetry": [], "attempted_models": [],
+                "official_authenticated": bool(credentials.get(seat.key)),
+                "execution_started": False, "runtime_execution_events": [],
+                "request_id": request_id, "round": round_no,
+                "dispatch_decision": "DISPATCH_ACCEPTED",
+                "dispatch_reason": "READY_FREE_MODEL",
+                "dispatch_accepted": True, "dispatch_gate": "HOTFIX132",
+                "request_routed": True,
+                "model_candidates_configured": bool(model_candidates.get(seat.key)),
+                "execution_id": execution_id,
+                "execution_claim": f"{request_id}:{round_no}:{seat.key}",
+            }
             results[seat.key] = failure
 
     for seat in seats:
@@ -1910,7 +1987,7 @@ def run_app() -> None:
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
     st.title("🏛️ AI Council — Shared Context Arena")
-    st.caption(f"{APP_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
     st.caption("V23 RC layers: Session Integrity · Conversation Persistence · Context Compaction · Council Synthesis · Provider Health · Security Audit · Regression Core")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
