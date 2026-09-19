@@ -953,6 +953,11 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
     if not key:
         raise ProviderError("no official credential configured", error_class="not_configured")
     model = str(model or "").strip()
+    # Some official response envelopes (notably Gemini generateContent) do not
+    # expose a top-level model field. Keep the attestation optional for those
+    # providers; execution identity is still anchored to the requested cascade
+    # model by call_seat().
+    provider_reported_model = ""
     if not model or len(model) > 160 or not re.fullmatch(r"[A-Za-z0-9._:/@-]+", model):
         raise ProviderError("invalid model identifier", error_class="configuration")
     safe_attachments = _provider_attachments(attachments)

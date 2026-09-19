@@ -1,3 +1,16 @@
+# HOTFIX120.3 — PROVIDER RESPONSE PATH HARDENING
+
+Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
+
+Built from the complete HOTFIX120.2 artifact. No Secrets, `*_FREE_MODELS`, provider endpoints, or cascade model lists are changed.
+
+Fixes:
+- Restores the missing `_render_live_cascade_telemetry()` runtime function introduced by HOTFIX120.2. Its absence raised a `NameError` after provider execution and converted otherwise successful official responses into worker failures.
+- Makes Gemini's optional provider-reported model field explicitly initialized, because the official `generateContent` response envelope does not require a top-level `model` field.
+- Keeps all cascade attempts inside the same Request ID / Round / Seat execution claim.
+- Adds persistent, safe live telemetry rendering as `MODEL → CLASSIFICATION → CASCADE ACTION` without creating any new request or retry path.
+- Regression suite: 335 tests passing.
+
 # HOTFIX120 — Production Chat Reliability
 
 Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`

@@ -718,6 +718,32 @@ def _public_result(result: dict) -> dict:
     public.pop("error", None)
     return public
 
+def _render_live_cascade_telemetry(result: dict) -> None:
+    """Render safe per-attempt telemetry immediately after one seat execution.
+
+    This function is intentionally side-effect free with respect to provider
+    execution. It only renders already-sanitized attempt telemetry and never
+    starts another request, retry, cascade, or orchestrator path.
+    """
+    if not isinstance(result, dict):
+        return
+    details = list(result.get("attempt_diagnostics", []) or [])
+    telemetry = list(result.get("attempt_telemetry", []) or _safe_attempt_telemetry(details, result))
+    if not telemetry:
+        return
+    provider = str(result.get("name") or result.get("seat") or "Provider").strip()
+    for item in telemetry:
+        model = str(item.get("model") or "—").strip()
+        classification = str(item.get("classification") or "UNKNOWN").strip().upper()
+        action = str(item.get("cascade_action") or "CASCADE_STOP").strip().upper()
+        attempt = item.get("attempt", "?")
+        request_id = str(item.get("request_id") or result.get("request_id") or "—")
+        round_no = item.get("round", result.get("round", "?"))
+        st.caption(
+            f"{provider} · Attempt {attempt} · `{model}` → {classification} → {action} · Request {request_id} · Round {round_no}"
+        )
+
+
 def _attempt_display_remaining(detail: dict, now: float | None = None) -> float:
     """Return remaining UI visibility time; never expose or mutate raw provider errors."""
     try:
