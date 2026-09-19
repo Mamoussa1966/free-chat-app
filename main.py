@@ -18,7 +18,7 @@ from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 
-# HOTFIX120: process-local idempotency gate for duplicate Streamlit submissions.
+# HOTFIX121: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
 # reserve the fingerprint before generating request_id or making any provider call.
 _REQUEST_GATE_LOCK = threading.RLock()
@@ -175,7 +175,7 @@ class SharedContextBridge:
                 raw = raw.replace(value, "[REDACTED_BRIDGE_VALUE]")
         base = BRIDGE_WRITE_PATTERN.sub(lambda m: f"BRIDGE_WRITE: {m.group(1).strip()} = [REDACTED_BRIDGE_VALUE]", raw)
         base = re.sub(r"(?im)^(\s*Value:\s*).+$", r"\1[REDACTED_BRIDGE_VALUE]", base)
-        # HOTFIX120: the target prompt receives only a context-safe capability
+        # HOTFIX121: the target prompt receives only a context-safe capability
         # projection.  Neither the bridge key (for example BRIDGE_RESULT) nor
         # its value is exposed to Gemini.  The application owns the target-side
         # READ and resolves it after the provider request has completed.
@@ -440,7 +440,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX120: the transactional bridge is application-owned.  Once the
+        # HOTFIX121: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -452,7 +452,7 @@ class SharedContextBridge:
             if "BRIDGE_RESULT" in self._values:
                 requested_keys = ["BRIDGE_RESULT"]
         for key in requested_keys:
-            # HOTFIX120: if the application already performed the canonical
+            # HOTFIX121: if the application already performed the canonical
             # post-barrier READ before the target HTTP request, reuse that exact
             # committed read record. Do not increment read_sequence twice when
             # Gemini later echoes BRIDGE_READ in its response.
@@ -813,7 +813,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
     working_context = bridge.prompt_snapshot(None)
-    # HOTFIX120: one logical seat execution claim per request/round. Free Cascade
+    # HOTFIX121: one logical seat execution claim per request/round. Free Cascade
     # attempts remain inside call_seat() and therefore cannot create a second
     # seat Request. This is the production boundary for Request Determinism.
     execution_ledger = SeatExecutionLedger(request_id, round_no)
@@ -831,11 +831,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     for seat in SEATS if False else bridge_order:
         execution_id = execution_ledger.claim(seat.key)
         try:
-            # HOTFIX120: execution ownership is immutable for this request/round/seat.
+            # HOTFIX121: execution ownership is immutable for this request/round/seat.
             # The provider may perform multiple Free Cascade attempts, but all
             # attempts belong to this one execution claim.
             execution_ledger.assert_claimed(seat.key, execution_id)
-            # HOTFIX120: resolve the committed target-side READ at the application
+            # HOTFIX121: resolve the committed target-side READ at the application
             # boundary, after COMMIT + BARRIER and before the target provider HTTP
             # request. The resolved value is retained only in bridge state/audit;
             # it is NEVER injected into the Gemini prompt or HTTP payload. This
@@ -920,7 +920,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             ),
         )
 
-    # HOTFIX120: diagnostic answers must not invent the executed cascade position.
+    # HOTFIX121: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
     # but the explicit bridge-proof request is a runtime diagnostic.
     # In that mode the application emits the authoritative execution/bridge facts
@@ -966,7 +966,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
-    # HOTFIX120.2: one orchestrator invocation per Request ID. A secondary
+    # HOTFIX121.2: one orchestrator invocation per Request ID. A secondary
     # execution path must never create another lifecycle/round/bridge. A completed
     # request is returned from its immutable in-chat result cache.
     request_id = str(request_id or "").strip()
@@ -1330,32 +1330,26 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     def render_attempts() -> None:
         if not summaries:
             return
-        st.caption("Safe attempt telemetry — raw provider payloads/credentials hidden")
+        st.caption("LIVE Cascade telemetry — raw provider payloads/credentials hidden")
         for detail in summaries:
             provider = str(detail.get("provider") or result.get("name") or "Provider")
             attempt = detail.get("attempt", "?")
-            model = str(detail.get("model") or "")
-            code = detail.get("status_code")
+            model = str(detail.get("model") or "—")
             cls = str(detail.get("classification") or "UNKNOWN").upper()
-            retryable = bool(detail.get("retryable", False))
-            execution = detail.get("execution_time", detail.get("latency", 0))
-            request_id = str(detail.get("request_id") or result.get("request_id") or "")
+            action = str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if detail.get("retryable") else "CASCADE_STOP")).upper()
+            request_id = str(detail.get("request_id") or result.get("request_id") or "—")
             round_no = detail.get("round", result.get("round", "?"))
             final_result = str(detail.get("final_result") or "FAILED").upper()
-            action = str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if retryable else "CASCADE_STOP")).upper()
-            reason = str(detail.get("cascade_reason") or "").strip()
-            http = f"HTTP {code}" if code is not None else "HTTP —"
-            st.caption(f"{provider} · Attempt {attempt} · `{model}` · {http} · {cls} · Retryable={retryable} · {float(execution):.3f}s · Request {request_id[:48] or '—'} · Round {round_no} · Final={final_result} · {action}" + (f" · Reason={reason}" if reason else ""))
+            status_text = "SUCCESS" if final_result == "SUCCESS" or cls == "SUCCESS" else "FAILED"
+            st.caption(f"{provider} · Attempt {attempt} · Request ID = {request_id} · Round = {round_no} · {model} → {cls} → {action} · Status = {status_text}")
 
     if status == "SUCCESS":
-        # Execution identity must drive the rendered model: result.get('executed_model') or result['model']
         display_model = result.get('executed_model') or result['model']
         attempt_latency = result.get("successful_attempt_latency")
         attempt_text = f" · attempt {attempt_latency}s" if attempt_latency is not None else ""
         st.success(f"{'🟢' if diagnostic_only else '✅'} {result['label']} — Official API — `{display_model}` — total {result.get('latency', 0)}s{attempt_text}")
-        failed_attempts = [x for x in summaries if str(x.get("final_result") or "").upper() == "FAILED"]
-        if failed_attempts:
-            with st.expander("🧪 Cascade attempt diagnostics", expanded=diagnostic_only):
+        if summaries:
+            with st.expander("🧪 LIVE Cascade attempt telemetry", expanded=True):
                 render_attempts()
     elif status == "NO_FREE_MODEL_CONFIGURED":
         st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
@@ -1364,17 +1358,14 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         st.caption("Classification: AUTHENTICATION_ERROR")
     elif status == PUBLIC_NO_RESPONSE:
         st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم تصل استجابة سريعة من المزود.")
+        if summaries:
+            with st.expander("🧪 LIVE Cascade attempt telemetry", expanded=True):
+                render_attempts()
     else:
-        with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=diagnostic_only):
+        with st.expander(f"🔴 {result.get('label', result.get('name', 'Provider'))} — Official API failed", expanded=True):
             st.write("Official API request failed; raw provider payload is not shown in the UI.")
             st.write("Attempted models:", ", ".join(result.get("attempted_models", [])) or "none")
             if summaries:
-                last = summaries[-1]
-                final_class = str(last.get("classification") or "UNKNOWN").upper()
-                final_model = str(last.get("model") or "").strip()
-                final_code = last.get("status_code")
-                action = str(last.get("cascade_action") or ("CASCADE_CONTINUE" if last.get("retryable") else "CASCADE_STOP")).upper()
-                st.caption(f"Final classification: **{final_class}** · `{final_model}` · HTTP {final_code if final_code is not None else '—'} · **{action}**")
                 render_attempts()
             else:
                 classification = str(result.get("classification") or "").strip().upper() or _result_error_classification(result)
@@ -1438,7 +1429,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX120 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX121 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
@@ -1509,7 +1500,7 @@ def run_app() -> None:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
         fingerprint = _request_fingerprint(prompt, attachments)
-        # HOTFIX120: atomic reservation closes the race where two Streamlit
+        # HOTFIX121: atomic reservation closes the race where two Streamlit
         # reruns submit the same logical request before either can persist it.
         # The second submission is rejected before request_id allocation and
         # before _run_council(), so it cannot create a second provider run.

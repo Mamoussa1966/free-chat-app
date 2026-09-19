@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Application-facing runner for the HOTFIX120 Production Core Test Harness.
+"""Application-facing runner for the HOTFIX121 Production Core Test Harness.
 
 The Streamlit UI calls this module directly. No provider/LLM is asked to run
 pytest or to interpret test results.
@@ -11,7 +11,7 @@ from typing import Any
 import production_core_harness as harness
 
 
-VERSION = "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+VERSION = "V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 
 
 def run_production_core_tests() -> tuple[int, dict[str, Any]]:

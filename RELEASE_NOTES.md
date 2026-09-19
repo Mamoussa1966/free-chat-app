@@ -1,23 +1,23 @@
-# HOTFIX120.2 — PROVIDER RESPONSE PATH HARDENING
+# HOTFIX121.2 — PROVIDER RESPONSE PATH HARDENING
 
-Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
+Version: `V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
-Built from the complete HOTFIX120.2 artifact. No Secrets, `*_FREE_MODELS`, provider endpoints, or cascade model lists are changed.
+Built from the complete HOTFIX121.2 artifact. No Secrets, `*_FREE_MODELS`, provider endpoints, or cascade model lists are changed.
 
 Fixes:
-- Restores the missing `_render_live_cascade_telemetry()` runtime function introduced by HOTFIX120.2. Its absence raised a `NameError` after provider execution and converted otherwise successful official responses into worker failures.
+- Restores the missing `_render_live_cascade_telemetry()` runtime function introduced by HOTFIX121.2. Its absence raised a `NameError` after provider execution and converted otherwise successful official responses into worker failures.
 - Makes Gemini's optional provider-reported model field explicitly initialized, because the official `generateContent` response envelope does not require a top-level `model` field.
 - Keeps all cascade attempts inside the same Request ID / Round / Seat execution claim.
 - Adds persistent, safe live telemetry rendering as `MODEL → CLASSIFICATION → CASCADE ACTION` without creating any new request or retry path.
 - Regression suite: 335 tests passing.
 
-# HOTFIX120 — Production Chat Reliability
+# HOTFIX121 — Production Chat Reliability
 
-Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
+Version: `V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 Built directly from the complete previous release release artifact. No Secrets, `*_FREE_MODELS`, provider configuration, or Transactional Bridge prompt-isolation policy is changed.
 
-HOTFIX120 adds a round-scoped `SeatExecutionLedger` enforcing one execution claim per `request_id + round + seat`. Free Cascade attempts remain inside that single provider execution. The runtime also carries a deterministic execution identity for observability and post-request auditing. Existing Streamlit fingerprint protection remains in force before request allocation/provider execution.
+HOTFIX121 adds a round-scoped `SeatExecutionLedger` enforcing one execution claim per `request_id + round + seat`. Free Cascade attempts remain inside that single provider execution. The runtime also carries a deterministic execution identity for observability and post-request auditing. Existing Streamlit fingerprint protection remains in force before request allocation/provider execution.
 
 Reliability invariants covered by this release:
 - one logical Request per seat/round;
@@ -28,9 +28,9 @@ Reliability invariants covered by this release:
 - runtime execution identity is deterministic for the same request/round/seat;
 - previous release Transactional Bridge ordering and prompt non-leak remain unchanged.
 
-# HOTFIX120 — Production Readiness / Council Reliability Gate
+# HOTFIX121 — Production Readiness / Council Reliability Gate
 
-Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
+Version: `V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 ## Scope
 Built directly from the complete previous release artifact. No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade configuration, Gemini/DeepSeek configuration, or existing Transactional Bridge prompt-isolation policy is changed.
@@ -47,9 +47,9 @@ Built directly from the complete previous release artifact. No Secrets, `*_FREE_
 ## Compatibility
 The complete previous release file tree is preserved; no files are removed as part of this hotfix.
 
-# HOTFIX120 — Cascade Execution Identity Hardening
+# HOTFIX121 — Cascade Execution Identity Hardening
 
-Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
+Version: `V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 Built directly from the verified previous release release artifact while preserving the complete file tree and existing tests.
 
@@ -76,7 +76,7 @@ Built directly from the verified previous release release artifact while preserv
 - Production Core tests and the complete pytest suite are required to pass before packaging.
 
 
-# HOTFIX120 — Production Gate / Authoritative Cascade Position Reporting
+# HOTFIX121 — Production Gate / Authoritative Cascade Position Reporting
 
 - Built directly from previous release-PRODUCTION-HARDENED-FINAL-FIXED.
 - `cascade_position` and `executed_cascade_position` are recomputed from `attempted_models[]` and the actual `executed_model` after the provider HTTP call.
@@ -86,9 +86,9 @@ Built directly from the verified previous release release artifact while preserv
 - No Secrets, `*_FREE_MODELS`, provider credentials, Local Engine, Paid fallback, Dynamic Model Discovery, or existing bridge policy is changed.
 - Full pytest and Production Core Gate must pass before release packaging.
 
-# HOTFIX120 — Runtime Payload Attestation / Immutable Bridge Audit
+# HOTFIX121 — Runtime Payload Attestation / Immutable Bridge Audit
 
-Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
+Version: `V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 Built directly from the complete previous release artifact. The complete file tree is preserved.
 
@@ -102,9 +102,9 @@ Built directly from the complete previous release artifact. The complete file tr
 - No Secrets, `*_FREE_MODELS`, provider catalog, Local Engine, Paid fallback, or Dynamic Model Discovery behavior is changed.
 - Adds previous release runtime attestation regression tests.
 
-# HOTFIX120.2 — SINGLE-REQUEST DETERMINISM + LIVE CASCADE TELEMETRY HARDENING
+# HOTFIX121.2 — SINGLE-REQUEST DETERMINISM + LIVE CASCADE TELEMETRY HARDENING
 
-- Built directly on HOTFIX120.1; no Secrets or model-list changes.
+- Built directly on HOTFIX121.1; no Secrets or model-list changes.
 - One orchestrator execution is permitted per Request ID; a secondary path cannot create a second lifecycle.
 - One request/round execution scope is permitted; duplicate round execution is blocked before a second Bridge can be created.
 - SeatExecutionLedger remains exactly-once for each Request ID + Round + Seat.
