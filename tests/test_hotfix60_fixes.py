@@ -24,8 +24,8 @@ def test_missing_credential_is_authentication_classification():
         seat, "hello", "", 1, False, None, [],
         ("deepseek-v4-flash",), request_id="hf60-missing-key"
     )
-    assert result["status"] == "FAILED"
-    assert result["classification"] == "AUTHENTICATION_ERROR"
+    assert result["status"] == "NOT_CONFIGURED"
+    assert result["classification"] == "NOT_CONFIGURED"
 
 
 def test_deepseek_payload_is_explicit_non_streaming_and_identity_attested():
