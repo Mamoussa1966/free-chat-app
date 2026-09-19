@@ -1,6 +1,6 @@
 # HOTFIX120 — Production Chat Reliability
 
-Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
+Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 Built directly from the complete previous release release artifact. No Secrets, `*_FREE_MODELS`, provider configuration, or Transactional Bridge prompt-isolation policy is changed.
 
@@ -17,7 +17,7 @@ Reliability invariants covered by this release:
 
 # HOTFIX120 — Production Readiness / Council Reliability Gate
 
-Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
+Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 ## Scope
 Built directly from the complete previous release artifact. No Secrets, `*_FREE_MODELS`, provider configuration, Free Cascade configuration, Gemini/DeepSeek configuration, or existing Transactional Bridge prompt-isolation policy is changed.
@@ -36,7 +36,7 @@ The complete previous release file tree is preserved; no files are removed as pa
 
 # HOTFIX120 — Cascade Execution Identity Hardening
 
-Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
+Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 Built directly from the verified previous release release artifact while preserving the complete file tree and existing tests.
 
@@ -75,7 +75,7 @@ Built directly from the verified previous release release artifact while preserv
 
 # HOTFIX120 — Runtime Payload Attestation / Immutable Bridge Audit
 
-Version: `V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED`
+Version: `V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
 Built directly from the complete previous release artifact. The complete file tree is preserved.
 
@@ -88,3 +88,14 @@ Built directly from the complete previous release artifact. The complete file tr
 - Bridge value remains redacted from persistent/UI audit output.
 - No Secrets, `*_FREE_MODELS`, provider catalog, Local Engine, Paid fallback, or Dynamic Model Discovery behavior is changed.
 - Adds previous release runtime attestation regression tests.
+
+# HOTFIX120.2 — SINGLE-REQUEST DETERMINISM + LIVE CASCADE TELEMETRY HARDENING
+
+- Built directly on HOTFIX120.1; no Secrets or model-list changes.
+- One orchestrator execution is permitted per Request ID; a secondary path cannot create a second lifecycle.
+- One request/round execution scope is permitted; duplicate round execution is blocked before a second Bridge can be created.
+- SeatExecutionLedger remains exactly-once for each Request ID + Round + Seat.
+- All Free Cascade attempts remain inside the same Request ID and Round; no retry/cascade attempt allocates a new Request ID.
+- Transactional Bridge remains one Bridge ID per request/round scope.
+- Live UI telemetry exposes model → classification → cascade action as each provider result becomes available.
+- Added explicit regressions for one round/one seat/one request, ten cascade attempts sharing one Request ID, duplicate orchestrator prevention, and duplicate bridge scope prevention.

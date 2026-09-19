@@ -16,7 +16,7 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
-VERSION = "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
+VERSION = "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 FREE_CASCADE_MAX = 10
 
 
@@ -227,6 +227,27 @@ class SeatExecutionLedger:
 
     def snapshot(self) -> dict[str, str]:
         return dict(self._claims)
+
+
+class RequestRoundExecutionRegistry:
+    """Deterministic request/round gate: one bridge + one seat execution scope per key."""
+    def __init__(self, request_id: str):
+        self.request_id = str(request_id or "").strip()
+        if not self.request_id:
+            raise ValueError("request_id is required")
+        self._rounds: set[int] = set()
+
+    def claim_round(self, round_id: int) -> str:
+        rid = int(round_id)
+        if rid <= 0:
+            raise ValueError("positive round_id is required")
+        if rid in self._rounds:
+            raise RuntimeError(f"Duplicate request/round execution: {self.request_id}:{rid}")
+        self._rounds.add(rid)
+        return f"{self.request_id}:r{rid}"
+
+    def snapshot(self) -> set[int]:
+        return set(self._rounds)
 
 
 class RoundStateMachine:

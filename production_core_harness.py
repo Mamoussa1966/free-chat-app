@@ -257,7 +257,7 @@ def render(report: dict[str, Any]) -> str:
 
 def run() -> tuple[int, dict[str, Any]]:
     report = {
-        "version": "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED",
+        "version": "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
         "file_preservation": check_file_preservation(),
         "pytest": run_pytest(),
         "core_probes": run_core_probes(),

@@ -16,13 +16,15 @@ from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
-from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger
+from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 
 # HOTFIX120: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
 # reserve the fingerprint before generating request_id or making any provider call.
 _REQUEST_GATE_LOCK = threading.RLock()
 _ACTIVE_REQUEST_FINGERPRINTS: set[str] = set()
+_ORCHESTRATOR_REQUEST_LOCK = threading.RLock()
+_ACTIVE_ORCHESTRATOR_REQUESTS: set[str] = set()
 from production_core_test_runner import run_production_core_tests, render_report as render_production_core_report
 
 APP_VERSION = PROVIDER_VERSION
@@ -41,7 +43,7 @@ ERROR_DISPLAY_TTL_SECONDS = 60
 PUBLIC_NO_RESPONSE = "NO_RESPONSE"
 NO_RESPONSE_AFTER_CASCADE = "NO_RESPONSE_AFTER_CASCADE"
 BRIDGE_WRITE_PATTERN = re.compile(
-    r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*(.+?)\s*$"
+    r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*(?:=\s*)?(.+?)\s*$"
 )
 BRIDGE_READ_PATTERN = re.compile(
     r"(?im)^\s*BRIDGE_READ\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*$"
@@ -177,7 +179,7 @@ class SharedContextBridge:
         # projection.  Neither the bridge key (for example BRIDGE_RESULT) nor
         # its value is exposed to Gemini.  The application owns the target-side
         # READ and resolves it after the provider request has completed.
-        if self._values or any("BRIDGE AGENT OUTPUT" in entry for entry in self._entries):
+        if self._values or any("BRIDGE AGENT OUTPUT" in entry for entry in self._entries) or (self._committed and str(getattr(target_seat, "key", "") or "") == "gemini"):
             capability = (
                 "BRIDGE CONTEXT CAPABILITY (SANITIZED):\n"
                 "A committed transactional bridge state exists for this round.\n"
@@ -842,6 +844,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             runtime_attestation = result.pop("_runtime_payload_attestation", {}) if isinstance(result, dict) else {}
             bridge.record_provider_input(seat, actual_provider_prompt or provider_prompt)
             bridge.record_runtime_payload_attestation(seat, runtime_attestation)
+            _render_live_cascade_telemetry(result)
             result["execution_id"] = execution_id
             result["execution_claim"] = f"{request_id}:{round_no}:{seat.key}"
             results[seat.key] = result
@@ -937,8 +940,29 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
+    # HOTFIX120.2: one orchestrator invocation per Request ID. A secondary
+    # execution path must never create another lifecycle/round/bridge. A completed
+    # request is returned from its immutable in-chat result cache.
+    request_id = str(request_id or "").strip()
+    if not request_id:
+        raise ValueError("request_id is required")
+    _ensure_chat_identity_state(chat)
+    with _ORCHESTRATOR_REQUEST_LOCK:
+        for record in chat.get("request_records", []):
+            if not isinstance(record, dict) or str(record.get("request_id") or "") != request_id:
+                continue
+            if record.get("state") == "COMPLETED" and isinstance(record.get("results"), list):
+                return copy.deepcopy(record["results"])
+            if request_id in _ACTIVE_ORCHESTRATOR_REQUESTS or record.get("state") == "RUNNING":
+                raise RuntimeError(f"Duplicate orchestrator execution blocked: {request_id}")
+        _ACTIVE_ORCHESTRATOR_REQUESTS.add(request_id)
+        record = next((r for r in chat["request_records"] if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), None)
+        if record is not None:
+            record["state"] = "RUNNING"
+            record["execution_scope"] = request_id
     deadline = None
     lifecycle = RequestLifecycle.begin(request_id)
+    round_registry = RequestRoundExecutionRegistry(request_id)
     chat.setdefault("audit_events", [])
     chat["audit_events"] = [e for e in chat.get("audit_events", []) if e.get("request_id") != request_id]
     all_results: list[dict] = []
@@ -947,6 +971,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         lifecycle.record("REQUEST_START", round_id=0, status="RUNNING")
         lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds)})
         for round_no in range(1, total_rounds + 1):
+            round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
             lifecycle.record("PROVIDER_EXECUTION", round_id=round_no, status="STARTED")
             round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
@@ -1001,8 +1026,20 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
     except Exception:
         if lifecycle.state.value == "RUNNING":
             lifecycle.finish(success=False)
+        with _ORCHESTRATOR_REQUEST_LOCK:
+            record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), None)
+            if record is not None:
+                record["state"] = "FAILED"
+            _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
         raise
     chat["audit_events"] = lifecycle.audit_snapshot()[-500:]
+    with _ORCHESTRATOR_REQUEST_LOCK:
+        record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), None)
+        if record is not None:
+            record["state"] = "COMPLETED"
+            record["rounds_executed"] = total_rounds
+            record["results"] = copy.deepcopy(all_results)
+        _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
     return all_results
 
 
