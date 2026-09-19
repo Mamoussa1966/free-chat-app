@@ -1,6 +1,6 @@
-# HOTFIX130 — AUTHORITATIVE RESULT COUNTER / UI STATE CONSISTENCY
+# HOTFIX129 — RESULT COUNTER / UI SEMANTIC CONSISTENCY
 
-Version: `HOTFIX130`
+Version: `V23-HOTFIX129-RESULT-COUNTER-UI-SEMANTICS`
 
 Built directly from the complete HOTFIX128 artifact. This is a presentation-only hardening layer: authoritative runtime accounting is unchanged. The UI now reports state-specific counters and never collapses `DISPATCH_REJECTED` or `NOT_CONFIGURED` into a generic failure count.
 
@@ -145,3 +145,8 @@ Built directly from the complete previous release artifact. The complete file tr
 - Provider execution audit events are emitted only from runtime execution events.
 - Cascade attempts remain inside the same Request ID.
 - No secrets or raw provider payloads are persisted.
+
+
+# HOTFIX131
+
+Authoritative result / identity / bridge-prose isolation. Provider prose is never a source of structured execution state or Request ID, and bridge values are redacted from agent prose.
