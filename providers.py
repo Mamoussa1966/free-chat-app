@@ -995,6 +995,12 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 parts.append({"text": f"Attached binary file not extracted: {att['name']}"})
         data = _post(seat.endpoint.format(model=model), {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS}}, timeout, deadline, 0)
         text = _gemini_text(data)
+        # Gemini generateContent does not reliably return a top-level `model`
+        # field. The official endpoint path itself contains the exact requested
+        # model, so anchor execution identity to that explicit cascade candidate
+        # rather than converting a successful response into a false
+        # `Provider identity missing` failure.
+        provider_reported_model = str((data.get("model") if isinstance(data, dict) else "") or model).strip()
 
     elif seat.kind == "anthropic":
         content: list[dict] = [{"type": "text", "text": prompt}]
