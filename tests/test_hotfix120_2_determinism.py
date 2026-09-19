@@ -53,4 +53,4 @@ def test_hotfix120_2_secondary_orchestrator_path_is_blocked():
 
 
 def test_hotfix120_2_release_identity():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"

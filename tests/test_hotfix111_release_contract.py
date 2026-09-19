@@ -4,7 +4,7 @@ import re
 
 def test_hotfix111_version_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+    assert version == "V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
     assert Path("providers.py").read_text(encoding="utf-8").count(version) >= 1
     assert "APP_VERSION = PROVIDER_VERSION" in Path("main.py").read_text(encoding="utf-8")
 
@@ -32,5 +32,5 @@ def test_hotfix111_free_only_contract_remains_explicit():
 
 def test_hotfix111_harness_reports_current_identity():
     harness = Path("production_core_harness.py").read_text(encoding="utf-8")
-    assert "HOTFIX120" in harness
-    assert '"version": "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"' in harness
+    assert "HOTFIX121" in harness
+    assert '"version": "V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"' in harness
