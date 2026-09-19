@@ -1,3 +1,11 @@
+# HOTFIX128 — RESULT STATUS SEMANTICS HARDENING
+
+- Narrow semantic hardening on top of HOTFIX127.
+- No-attempt results are never API_ERROR/PROVIDER_ERROR.
+- Zero configured Free models are NOT_CONFIGURED, not API_FAILURE.
+- Worker dispatch failures are DISPATCH_REJECTED and never provider execution events.
+- SUCCESS remains impossible without an actual attempted model/runtime event.
+
 # HOTFIX123.2 — PROVIDER RESPONSE PATH HARDENING
 
 Version: `V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`

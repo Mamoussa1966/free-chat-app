@@ -738,10 +738,10 @@ def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, 
     models = tuple((model_candidates or {}).get(seat.key) or ())
     return {
         "seat": seat.key, "name": seat.name, "label": seat.label,
-        "status": "FAILED", "mode": "internal",
-        "model": models[0] if models else "", "content": "",
-        "classification": "API_ERROR",
-        "error": f"class=provider_error; internal worker failure: {exc.__class__.__name__}",
+        "status": "DISPATCH_REJECTED", "mode": "internal",
+        "model": "", "content": "",
+        "classification": "DISPATCH_REJECTED",
+        "error": f"class=dispatch_rejected; internal worker failure before provider execution: {exc.__class__.__name__}",
         "attempt_summaries": [], "attempt_telemetry": [],
         "latency": 0.0, "attempted_models": [],
         "official_authenticated": False, "execution_started": False,
@@ -755,7 +755,7 @@ def _history_attempt_summaries(details: list[dict]) -> list[dict]:
     allowed = {
         "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
         "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST", "NETWORK_ERROR",
-        "TIMEOUT", "UNKNOWN",
+        "TIMEOUT", "UNKNOWN", "DISPATCH_REJECTED", "NOT_EXECUTED", "EXECUTION_STARTED", "PROVIDER_ERROR", "SUCCESS",
     }
     summaries: list[dict] = []
     for detail in details or []:
@@ -814,9 +814,37 @@ def _public_display_class(display_class: str) -> str:
     return str(display_class or "UNKNOWN")
 
 
+def _hotfix128_result_semantics(result: dict) -> dict:
+    """Normalize public result status without inventing provider execution.
+
+    HOTFIX128: configured/requested/executed/successful are distinct states.
+    A result with zero actual attempted models can never be classified as an
+    API/provider failure, and a seat with zero configured Free models is not a
+    failed API request.
+    """
+    out = dict(result or {})
+    attempted = [str(x).strip() for x in (out.get("attempted_models") or []) if str(x).strip()]
+    configured_marker = out.get("model_candidates_configured", None)
+    candidates_configured = bool(configured_marker) if configured_marker is not None else True
+    status = str(out.get("status") or "").upper()
+    if configured_marker is False or status == "NO_FREE_MODEL_CONFIGURED":
+        out["status"] = "NOT_CONFIGURED"
+        out["classification"] = "NOT_CONFIGURED"
+        out["attempted_models"] = []
+        return out
+    if not attempted:
+        if status not in {"DISPATCH_REJECTED", "REQUEST_CREATED"}:
+            out["status"] = "NOT_EXECUTED"
+        if status == "SUCCESS":
+            out["status"] = "NOT_EXECUTED"
+        if str(out.get("classification") or "").upper() in {"API_ERROR", "PROVIDER_ERROR", "UNKNOWN", "SUCCESS", ""}:
+            out["classification"] = "DISPATCH_REJECTED" if out["status"] == "DISPATCH_REJECTED" else "NOT_EXECUTED"
+    return out
+
+
 def _public_result(result: dict) -> dict:
     """Return the UI-safe result persisted in session state. Raw provider payloads stay transient."""
-    public = dict(result or {})
+    public = _hotfix128_result_semantics(result)
     details = list(public.get("attempt_diagnostics", []) or [])
     public["attempt_summaries"] = _history_attempt_summaries(details)
     public["attempt_telemetry"] = list(public.get("attempt_telemetry") or _safe_attempt_telemetry(details, public))
@@ -824,7 +852,15 @@ def _public_result(result: dict) -> dict:
         if str(telemetry.get("classification") or "").upper() == "TIMEOUT":
             telemetry["classification"] = PUBLIC_NO_RESPONSE
     classification = str(public.get("classification") or "").strip().upper()
-    if classification not in {"MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN"}:
+    allowed_classes = {"NOT_CONFIGURED", "REQUEST_CREATED", "DISPATCH_REJECTED", "NOT_EXECUTED", "EXECUTION_STARTED", "PROVIDER_ERROR", "TRANSIENT_PROVIDER_ERROR", "MODEL_UNAVAILABLE", "QUOTA_ERROR", "SUCCESS",
+                       "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "API_ERROR", "INVALID_REQUEST", "NETWORK_ERROR", "TIMEOUT", "UNKNOWN", "NO_FREE_MODEL_CONFIGURED"}
+    # HOTFIX128: no attempted model means no provider API error can be claimed.
+    if not [m for m in (public.get("attempted_models") or []) if str(m).strip()]:
+        if classification in {"API_ERROR", "PROVIDER_ERROR", "UNKNOWN"}:
+            classification = "NOT_EXECUTED" if public.get("status") != "DISPATCH_REJECTED" else "DISPATCH_REJECTED"
+    if not public.get("model_candidates_configured", True):
+        classification = "NOT_CONFIGURED"
+    if classification not in allowed_classes:
         classification = "UNKNOWN"
     if classification == "TIMEOUT":
         classification = PUBLIC_NO_RESPONSE
@@ -1623,11 +1659,18 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         if summaries:
             with st.expander("🧪 LIVE Cascade attempt telemetry", expanded=True):
                 render_attempts()
-    elif status == "NO_FREE_MODEL_CONFIGURED":
-        st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
     elif status == "AUTHENTICATION_OK_NO_FREE_MODEL":
         st.warning(f"🟡 {result['label']} — نقطة المصادقة قبلت المفتاح، لكن لا يوجد Free model مُكوّن.")
-        st.caption("Classification: AUTHENTICATION_ERROR")
+        st.caption("Classification: NOT_CONFIGURED")
+    elif status == "DISPATCH_REJECTED":
+        st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم يبدأ تنفيذ المزود؛ تم رفض/إيقاف dispatch قبل Provider Execution Contract.")
+        st.caption("Classification: DISPATCH_REJECTED · Provider error not proven")
+    elif status == "NOT_EXECUTED":
+        st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم يتم تنفيذ أي محاولة API.")
+        st.caption("Classification: NOT_EXECUTED · Provider error not proven")
+    elif status == "NO_FREE_MODEL_CONFIGURED":
+        st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
+        st.caption("Classification: NOT_CONFIGURED")
     elif status == PUBLIC_NO_RESPONSE:
         st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم تصل استجابة سريعة من المزود.")
         if summaries:

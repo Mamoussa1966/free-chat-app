@@ -1115,9 +1115,15 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         if match:
             safe_classification = _canonical_error_classification(match.group(1))
     if status == "NO_FREE_MODEL_CONFIGURED":
-        safe_classification = "MODEL_UNAVAILABLE"
+        safe_classification = "NOT_CONFIGURED"
+    elif status == "NOT_CONFIGURED":
+        safe_classification = "NOT_CONFIGURED"
+    elif status == "DISPATCH_REJECTED":
+        safe_classification = "DISPATCH_REJECTED"
+    elif status == "NOT_EXECUTED":
+        safe_classification = "NOT_EXECUTED"
     elif status == "FAILED" and not safe_classification:
-        safe_classification = "UNKNOWN"
+        safe_classification = "PROVIDER_ERROR"
     summaries = [
         {
             "attempt": d.get("attempt"),
@@ -1294,7 +1300,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     if not candidates:
         return _result(seat, "NO_FREE_MODEL_CONFIGURED", "", "", "class=no_free_models_configured; No explicitly configured Free API model.", started, attempted, request_id=request_id, round_no=round_no)
     if not credential:
-        return _result(seat, "FAILED", candidates[0], "", "class=not_configured; No official credential configured.", started, attempted, request_id=request_id, round_no=round_no)
+        return _result(seat, "NOT_CONFIGURED", "", "", "class=not_configured; No official credential configured.", started, attempted, request_id=request_id, round_no=round_no)
 
     last_error: Optional[ProviderError] = None
     attempt_diagnostics: list[dict] = []
