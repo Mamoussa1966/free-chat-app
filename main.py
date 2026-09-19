@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX133"
+HOTFIX_VERSION = "HOTFIX134"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -1803,6 +1803,73 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
                 st.caption(f"Final classification: **{classification}**")
 
 
+def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_audit: dict | None = None) -> dict:
+    """HOTFIX134: authoritative runtime check that agent prose cannot mutate control-plane results.
+
+    This is a presentation/integrity audit only. Structured identity/status/model fields are
+    taken from the application-owned result rows and lifecycle records; provider prose is
+    treated as untrusted text. The audit deliberately reports PASS only when the persisted
+    rows have one authoritative request identity and the prose boundary contains no control
+    records or application-owned bridge values.
+    """
+    rid = str(request_id or "").strip()
+    rows = [r for r in (results or []) if isinstance(r, dict)]
+    bridge_values: list[str] = []
+    if isinstance(bridge_audit, dict):
+        for key in ("SOURCE_VALUE", "TARGET_VALUE"):
+            value = str(bridge_audit.get(key) or "").strip()
+            if value and value != "[REDACTED]":
+                bridge_values.append(value)
+    # Also inspect application-owned bridge state where available, without ever rendering it.
+    for r in rows:
+        state = r.get("_bridge_application_state")
+        if isinstance(state, dict):
+            value = str(state.get("value") or state.get("BRIDGE_RESULT") or "").strip()
+            if value and value != "[REDACTED]":
+                bridge_values.append(value)
+    bridge_values = sorted(set(bridge_values))
+
+    request_ids_ok = bool(rid) and all(str(r.get("request_id") or "").strip() == rid for r in rows if r.get("request_id"))
+    content_control_pattern = re.compile(
+        r"(?im)^\s*(?:REQUEST_ID|Request ID|RequestID|REQUEST_STATUS|STATUS|Classification|Cascade Action|Executed Model|Free Cascade|BRIDGE_WRITE|BRIDGE_RESULT|BRIDGE_READ(?:_STATUS)?)\s*[:=]"
+    )
+    content_control_leak = False
+    bridge_value_leak = False
+    for r in rows:
+        content = str(r.get("content") or "")
+        if content_control_pattern.search(content):
+            content_control_leak = True
+        if any(v and v in content for v in bridge_values):
+            bridge_value_leak = True
+
+    # The structured result row is authoritative only if its identity agrees with the
+    # lifecycle request and every executed event carries the same request/round identity.
+    structured_identity_ok = bool(rid)
+    for r in rows:
+        if str(r.get("request_id") or "").strip() != rid:
+            structured_identity_ok = False
+        for ev in r.get("runtime_execution_events") or []:
+            if not isinstance(ev, dict) or ev.get("execution_started") is not True:
+                continue
+            if str(ev.get("request_id") or rid).strip() != rid:
+                structured_identity_ok = False
+            if int(ev.get("round", r.get("round", 0)) or 0) != int(r.get("round", 0) or 0):
+                structured_identity_ok = False
+
+    status_override = bool(content_control_leak)
+    row_injection = bool(content_control_leak)
+    bridge_redacted = bool(isinstance(bridge_audit, dict)) and not bridge_value_leak
+    return {
+        "AGENT_PROSE_REQUEST_ID_OVERRIDE": "PASS" if request_ids_ok and not content_control_leak else "FAIL",
+        "AGENT_PROSE_STATUS_OVERRIDE": "PASS" if not status_override else "FAIL",
+        "AGENT_PROSE_RESULT_ROW_INJECTION": "PASS" if not row_injection and structured_identity_ok else "FAIL",
+        "AUTHORITATIVE_RUNTIME_IDENTITY": "PASS" if structured_identity_ok else "FAIL",
+        "BRIDGE_CONTROL_RECORD_REDACTED": "PASS" if bridge_redacted else "FAIL",
+        "BRIDGE_VALUE_PROSE_LEAK": "FAIL" if bridge_value_leak else "PASS",
+        "CONTROL_PROSE_LEAK": "FAIL" if content_control_leak else "PASS",
+    }
+
+
 def _render_bridge_audit(results: list[dict]) -> None:
     audit = next((r.get("bridge_transaction_audit") for r in results if r.get("bridge_transaction_audit")), None)
     if not audit:
@@ -1852,6 +1919,19 @@ def _render_bridge_audit(results: list[dict]) -> None:
                 "COUNTER_SOURCE = REQUEST_RECORD / LIFECYCLE_AUDIT",
                 "SEAT_GENERATED_PROSE_USED_AS_COUNTER_SOURCE = NO",
             ]), language="text")
+
+    # HOTFIX134: expose explicit runtime-backed HOTFIX131 identity/prose checks.
+    prose_audit = _hotfix131_runtime_prose_audit(results, request_id, audit)
+    st.subheader("🔎 HOTFIX131 — Authoritative Identity / Bridge-Prose Isolation")
+    st.code("\n".join([
+        f"AGENT_PROSE_REQUEST_ID_OVERRIDE = {prose_audit['AGENT_PROSE_REQUEST_ID_OVERRIDE']}",
+        f"AGENT_PROSE_STATUS_OVERRIDE = {prose_audit['AGENT_PROSE_STATUS_OVERRIDE']}",
+        f"AGENT_PROSE_RESULT_ROW_INJECTION = {prose_audit['AGENT_PROSE_RESULT_ROW_INJECTION']}",
+        f"BRIDGE_CONTROL_RECORD_REDACTED = {prose_audit['BRIDGE_CONTROL_RECORD_REDACTED']}",
+        f"BRIDGE_VALUE_PROSE_LEAK = {prose_audit['BRIDGE_VALUE_PROSE_LEAK']}",
+        f"CONTROL_PROSE_LEAK = {prose_audit['CONTROL_PROSE_LEAK']}",
+        f"AUTHORITATIVE_RUNTIME_IDENTITY = {prose_audit['AUTHORITATIVE_RUNTIME_IDENTITY']}",
+    ]), language="text")
 
 def _ui_semantic_counters(results: list[dict]) -> dict:
     """HOTFIX129: state-specific UI counters; never collapse non-success states into `failed`.
