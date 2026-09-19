@@ -1,12 +1,18 @@
-# HOTFIX125.1 — REQUEST CONTINUATION + BRIDGE ISOLATION REGRESSION FIX
+# HOTFIX125.2 — REQUEST CONTINUATION + BRIDGE ISOLATION REGRESSION FIX
 
-Applied strictly on top of HOTFIX125.
+Limited patch on top of HOTFIX125.1.
 
-- Explicit continuation markers resolve to the existing authoritative Request ID.
-- Continuation never allocates a new Request ID, round, provider execution, or Bridge.
-- Completed Request results and synthesis are reused from the persisted application-owned request record.
-- Existing HOTFIX123.2 single-request, seat+round, cascade, and bridge controls are preserved.
-- No Secrets or model lists are changed.
-- Full V23 audit remains runtime-derived and does not treat NOT_RUN as PASS.
+## Runtime fixes
+- Canonical Request ID: continuation can only reuse a Request ID found in persisted `REQUEST_RECORD`; unknown continuation IDs are rejected before allocation, so no regeneration occurs.
+- Continuation is READ-ONLY: zero provider executions, zero cascade attempts, zero new rounds, zero new bridges.
+- Bridge control plane: user-supplied bridge control records are removed from the persisted/user/provider prompt path and stored only in application-owned bridge state.
+- Bridge state is persisted on the authoritative request record and is used for application-owned audit reconstruction.
+- Bridge transaction proof is evaluated from persisted application state and runtime audit fields, never agent prose.
+- `Run full V23 platform audit` now executes the production test harness every time the button is pressed; it does not reuse an old PASS report.
+- V23 audit explicitly gates bridge isolation when the runtime audit contains isolation fields.
 
-Regression target: HOTFIX125 continuation previously generated a second Request ID and a second Bridge audit, producing false bridge isolation failures.
+## Preservation
+- Official API only; no Local Engine; no Paid fallback; no automatic model selection.
+- No Secrets or `*_FREE_MODELS` changes.
+- Existing files are preserved; no baseline files are deleted.
+- HOTFIX123.2 request/cascade identity behavior remains regression-tested.

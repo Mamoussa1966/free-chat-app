@@ -35,7 +35,7 @@ EXPECTED_TEST_FILES = _current_test_files()
 # Every other baseline file must remain byte-identical. The Claude and Grok
 # regression modules are allowed in addition to the 20-module Golden baseline.
 ALLOWED_BASELINE_CHANGES = {
-    "main.py", "providers.py", "production_core.py", "production_core_harness.py", "production_core_test_runner.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
+    "main.py", "providers.py", "production_core.py", "production_core_harness.py", "production_core_test_runner.py", "production_platform.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
     ".streamlit/secrets.toml.example", "build_release.py",
     "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
     "tests/test_hotfix26_release_roundtrip.py",

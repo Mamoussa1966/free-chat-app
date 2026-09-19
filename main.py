@@ -71,6 +71,24 @@ def _extract_bridge_reads(content: str) -> list[str]:
     return reads
 
 
+def _extract_bridge_control_values(prompt: str) -> tuple[str, list[tuple[str, str]]]:
+    """Remove bridge control records from user-visible text and return them as application-owned inputs."""
+    text = str(prompt or "")
+    found: list[tuple[str, str]] = []
+    patterns = [
+        re.compile(r"(?im)^\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*([^\r\n]+?)\s*$"),
+        re.compile(r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*(?:=\s*)?([^\r\n]+?)\s*$"),
+    ]
+    for pattern in patterns:
+        for m in pattern.finditer(text):
+            key, value = m.group(1).strip(), m.group(2).strip()
+            if value and len(value) <= 2000 and (key, value) not in found:
+                found.append((key, value))
+    for pattern in patterns:
+        text = pattern.sub("[BRIDGE_CONTROL_RECORD_REDACTED]", text)
+    return text.strip(), found
+
+
 def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> dict:
     """Mandatory provider-output schema/identity gate before bridge handoff."""
     if not isinstance(result, dict):
@@ -248,8 +266,32 @@ class SharedContextBridge:
                 text = re.sub(rf"\b{re.escape(str(key))}\b", "[REDACTED_BRIDGE_KEY]", text)
         return text
 
+    def seed_application_state(self, key: str, value: str, source: str = "APPLICATION_TEST_CONTROL") -> None:
+        """Seed bridge state directly in the application control plane; never expose it to prompts."""
+        key, value = str(key or "").strip(), str(value or "").strip()
+        if not key or not value or len(value) > 2000:
+            return
+        self._write_sequence += 1
+        self._source_values[key] = value
+        self._values[key] = {
+            "value": value, "source_seat": 0, "source_provider": source,
+            "write_sequence": self._write_sequence,
+        }
+        self._record_trace(source_seat=0, source_provider=source, target_seat=0, key=key,
+                           write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
+
+    def application_owned_state(self) -> dict:
+        """Return persisted bridge control-plane state; values never enter provider prompts."""
+        return {
+            "schema": "bridge-application-state/v1",
+            "request_id": self.request_id, "round_id": self.round_no, "bridge_id": self.bridge_id,
+            "values": copy.deepcopy(self._values), "committed": bool(self._committed),
+            "barrier_open": bool(self._barrier_open), "trace": copy.deepcopy(self.trace),
+        }
+
+
     def append_user_declarations(self, user_prompt: str) -> None:
-        """Keep legacy declarations in internal context; prompt_snapshot redacts values."""
+        """Legacy compatibility helper; production orchestration no longer calls this method."""
         text = str(user_prompt or "")
         pattern = re.compile(r"(?im)^\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*([^\r\n]+?)\s*$")
         for match in pattern.finditer(text):
@@ -503,22 +545,20 @@ def _ensure_chat_identity_state(chat: dict) -> None:
     chat.setdefault("result_keys", [])
 
 
-def _extract_continuation_request_id(prompt: str, chat: dict) -> str:
-    """Resolve an explicit continuation request to an existing authoritative Request ID.
-
-    Continuation is control-plane metadata, not a new user Request. Only an explicit
-    marker is accepted, and it must resolve to an existing persisted request record.
-    """
+def _extract_requested_request_id(prompt: str) -> str:
     text = str(prompt or "")
-    match = re.search(
-        r"(?i)\b(?:CONTINUE|CONTINUATION|استكمال|استمر)\s*(?:REQUEST\s*ID|REQUEST_ID|مع\s*معرّف\s*الطلب)?\s*[:=]?\s*`?([0-9a-f]{16,64})`?",
-        text,
-    )
+    match = re.search(r"(?i)\bREQUEST\s*(?:ID|_ID)\s*[:=]?\s*`?([0-9a-f]{16,64})`?", text)
     if not match:
-        match = re.search(r"(?i)\bREQUEST\s*ID\s*[:=]\s*`?([0-9a-f]{16,64})`?", text)
-    if not match:
+        match = re.search(r"(?i)\bauthoritative\s+request\s+id\s*[:=]?\s*`?([0-9a-f]{16,64})`?", text)
+    return match.group(1).strip() if match else ""
+
+
+def _extract_continuation_request_id(prompt: str, chat: dict) -> str:
+    text = str(prompt or "")
+    has_continuation = bool(re.search(r"(?i)\b(?:continue|continuation|resume|استكمال|استمر|تابع)\b", text))
+    rid = _extract_requested_request_id(text)
+    if not has_continuation or not rid:
         return ""
-    rid = match.group(1).strip()
     return rid if _request_record(chat, rid) else ""
 
 
@@ -742,6 +782,7 @@ def _public_result(result: dict) -> dict:
     public["classification"] = classification
     public.pop("attempt_diagnostics", None)
     public.pop("error", None)
+    public.pop("_bridge_application_state", None)
     return public
 
 def _render_live_cascade_telemetry(result: dict) -> None:
@@ -824,7 +865,7 @@ def _provider_identity_matches(seat_key: str, executed_model: str, reported_mode
     return reported_model.lower() == executed_model.lower()
 
 
-def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str) -> list[dict]:
+def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str, bridge_controls: list[tuple[str, str]] | None = None) -> list[dict]:
     seats = get_seats()
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
@@ -836,7 +877,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
     # rather than relying on a model to echo the value in its answer.
-    bridge.append_user_declarations(user_prompt)
+    for key, value in (bridge_controls or []):
+        bridge.seed_application_state(key, value)
     results: dict[str, dict] = {}
     working_context = bridge.prompt_snapshot(None)
     # HOTFIX123: one logical seat execution claim per request/round. Free Cascade
@@ -928,6 +970,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
             if seat.key == "gemini":
                 result["bridge_transaction_audit"] = bridge.seal_runtime_audit(user_prompt=user_prompt)
+                result["_bridge_application_state"] = bridge.application_owned_state()
                 result["bridge_trace"] = bridge.transaction_trace()
             else:
                 result["bridge_trace"] = bridge.transaction_trace()
@@ -1053,7 +1096,7 @@ def _request_record(chat: dict, request_id: str) -> dict | None:
     return next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip() == rid), None)
 
 
-def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
+def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str, bridge_controls: list[tuple[str, str]] | None = None) -> list[dict]:
     # HOTFIX123.2: one orchestrator invocation per Request ID. A secondary
     # execution path must never create another lifecycle/round/bridge. A completed
     # request is returned from its immutable in-chat result cache.
@@ -1088,7 +1131,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
             lifecycle.record("PROVIDER_EXECUTION", round_id=round_no, status="STARTED")
-            round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id)
+            round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id, bridge_controls)
             seen_keys = set()
             for result in round_results:
                 result["request_id"] = request_id
@@ -1153,6 +1196,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             record["state"] = "COMPLETED"
             record["rounds_executed"] = total_rounds
             record["results"] = copy.deepcopy(all_results)
+            bridge_states = [copy.deepcopy(r.get("_bridge_application_state")) for r in round_results if isinstance(r, dict) and r.get("_bridge_application_state")]
+            record["application_owned_bridge_state"] = bridge_states[-1] if bridge_states else record.get("application_owned_bridge_state")
             # HOTFIX123: persist authoritative counters on the request record itself.
             # These counters are derived from lifecycle/audit data and persisted result
             # telemetry, never from provider-generated prose.
@@ -1639,17 +1684,33 @@ def run_app() -> None:
             return
         # HOTFIX125.1: an explicit continuation of an existing Request ID is
         # never a new Request and never re-enters the provider orchestrator.
+        requested_request_id = _extract_requested_request_id(prompt)
+        has_continuation = bool(re.search(r"(?i)\b(?:continue|continuation|resume|استكمال|استمر|تابع)\b", prompt))
         continuation_request_id = _extract_continuation_request_id(prompt, chat)
-        if continuation_request_id and not attachments:
+        if has_continuation and requested_request_id and not continuation_request_id:
+            st.error(f"Continuation rejected: Request ID {requested_request_id} is not present in persisted REQUEST_RECORD. No new Request ID will be generated.")
+            return
+        if continuation_request_id:
             existing = _request_record(chat, continuation_request_id)
-            if existing and isinstance(existing.get("results"), list):
-                st.session_state.last_results = copy.deepcopy(existing["results"])
-                st.session_state.last_synthesis = copy.deepcopy(existing.get("synthesis") or {})
-                _shared_context(chat, max_chars=30_000)
-                st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
-                st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
-                st.info(f"Continuation resolved to existing Request ID: {continuation_request_id} — no new Request, provider call, round, or Bridge created.")
+            if not existing:
+                st.error(f"Continuation rejected: Request ID {continuation_request_id} is not present in persisted REQUEST_RECORD. No new Request ID will be generated.")
                 return
+            if attachments:
+                st.error("Continuation is READ-ONLY and cannot accept new attachments.")
+                return
+            st.session_state.last_results = copy.deepcopy(existing.get("results") or [])
+            st.session_state.last_synthesis = copy.deepcopy(existing.get("synthesis") or {})
+            st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
+            st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
+            st.session_state.last_continuation_audit = {
+                "mode": "READ_ONLY", "request_id": continuation_request_id,
+                "provider_execution": 0, "cascade": 0, "new_round": 0, "new_bridge": 0,
+                "source": "PERSISTED_REQUEST_RECORD",
+            }
+            st.info(f"Continuation resolved to persisted Request ID: {continuation_request_id} — READ-ONLY; no new Request, provider call, round, cascade, or Bridge created.")
+            return
+        sanitized_prompt, bridge_controls = _extract_bridge_control_values(prompt)
+        prompt = sanitized_prompt
         fingerprint = _request_fingerprint(prompt, attachments)
         # HOTFIX123: atomic reservation closes the race where two Streamlit
         # reruns submit the same logical request before either can persist it.
@@ -1688,7 +1749,7 @@ def run_app() -> None:
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
         with st.spinner("المجلس ينفذ Free API Cascade بالتوازي…"):
-            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id)
+            results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id, bridge_controls)
         st.session_state.last_results = [_public_result(r) for r in results]
         _shared_context(chat, max_chars=30_000)
         st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
@@ -1717,10 +1778,9 @@ def run_app() -> None:
             _shared_context(chat, max_chars=30_000)
             st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
             st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
-            if not st.session_state.get("last_production_core_report"):
-                code, report = run_production_core_tests()
-                st.session_state.last_production_core_report = report
-                st.session_state.last_production_core_code = code
+            code, report = run_production_core_tests()
+            st.session_state.last_production_core_report = report
+            st.session_state.last_production_core_code = code
             st.session_state.last_v23_platform_audit = build_v23_platform_audit(
                 chat, rid, st.session_state.get("platform_context_meta"),
                 st.session_state.get("last_health_snapshot"),

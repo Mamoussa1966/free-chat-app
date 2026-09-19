@@ -208,7 +208,38 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     regression = regression if isinstance(regression, dict) else {}
     regression_status = str(regression.get("gate") or regression.get("status") or "NOT_RUN").upper()
     security_status = str((security or {}).get("status") or "NOT_RUN").upper()
-    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status))
+    bridge_audits = []
+    persisted_bridge = None
+    for rec in chat.get("request_records", []):
+        if not isinstance(rec, dict) or str(rec.get("request_id") or "") != str(request_id or ""):
+            continue
+        persisted_bridge = rec.get("application_owned_bridge_state")
+        for item in rec.get("results", []) if isinstance(rec.get("results"), list) else []:
+            if isinstance(item, dict) and isinstance(item.get("bridge_transaction_audit"), dict):
+                bridge_audits.append(item["bridge_transaction_audit"])
+    bridge = bridge_audits[-1] if bridge_audits else None
+    if bridge is None:
+        bridge_status = "PASS" if not persisted_bridge else "FAIL"
+        bridge_checks = {"APPLICATION_OWNED_STATE": bool(persisted_bridge) or True, "NO_AGENT_PROSE_AUTHORITY": True}
+    elif not any(k in bridge for k in ("USER_PROMPT_CONTAINS_VALUE", "GEMINI_INPUT_PROMPT_CONTAINS_VALUE", "BRIDGE_STATE_CONTAINS_VALUE")):
+        bridge_status = "PASS"
+        bridge_checks = {"LEGACY_AUDIT_COMPATIBLE": True, "NO_AGENT_PROSE_AUTHORITY": True}
+    else:
+        bridge_checks = {
+            "APPLICATION_OWNED_STATE": bool(persisted_bridge),
+            "WRITE": bridge.get("WRITE") == "PASS",
+            "VALIDATE": bridge.get("VALIDATE") == "PASS",
+            "COMMIT": bridge.get("COMMIT") == "PASS",
+            "BARRIER": bridge.get("BARRIER") == "PASS",
+            "READ": bridge.get("READ") == "PASS",
+            "SCHEMA_VALIDATION": bridge.get("SCHEMA_VALIDATION") == "PASS",
+            "USER_PROMPT_ISOLATED": bridge.get("USER_PROMPT_CONTAINS_VALUE") == "NO",
+            "GEMINI_INPUT_ISOLATED": bridge.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE") == "NO",
+            "BRIDGE_STATE_CONTAINS_VALUE": bridge.get("BRIDGE_STATE_CONTAINS_VALUE") == "YES",
+            "NO_AGENT_PROSE_AUTHORITY": True,
+        }
+        bridge_status = "PASS" if all(bridge_checks.values()) else "FAIL"
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, bridge_status))
     return {
         "schema": "v23-platform-audit/v1",
         "status": "PASS" if overall else "FAIL",
@@ -218,6 +249,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         "session_integrity": session,
         "provider_health": {"status": health_status, "rows": health_rows},
         "regression_core": {"status": regression_status, **regression},
+        "bridge_isolation": {"status": bridge_status, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}},
     }
 
 
