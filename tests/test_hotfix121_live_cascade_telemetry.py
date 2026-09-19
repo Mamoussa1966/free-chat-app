@@ -3,7 +3,7 @@ from pathlib import Path
 
 def test_hotfix121_version_identity():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+    assert version == "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 
 
 def test_hotfix121_ui_contains_required_live_fields():

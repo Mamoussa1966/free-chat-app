@@ -50,7 +50,7 @@ def test_hotfix113_actual_provider_prompt_is_captured_and_redacted():
 
 def test_hotfix113_release_identity_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+    assert version == "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
     assert main.APP_VERSION == version
 
 
