@@ -39,8 +39,8 @@ def test_all_public_error_classifications_are_stable():
         (429, "too many requests", "RATE_LIMITED"),
         (401, "invalid api key", "AUTHENTICATION_ERROR"),
         (403, "permission denied", "AUTHENTICATION_ERROR"),
-        (500, "internal server error", "API_ERROR"),
-        (400, "bad request", "API_ERROR"),
+        (500, "internal server error", "TRANSIENT_PROVIDER_ERROR"),
+        (400, "bad request", "INVALID_REQUEST"),
     ]
     for status, body, expected in cases:
         internal = providers._classify(status, body)

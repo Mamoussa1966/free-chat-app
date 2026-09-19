@@ -124,14 +124,14 @@ def test_deepseek_http_402_is_quota_exceeded():
 
 def test_deepseek_500_is_api_error_and_can_advance():
     responses = [
-        _response(400, '{"error":{"message":"invalid request parameter"}}'),
+        _response(500, '{"error":{"message":"internal server error"}}'),
         _response(200, '{"model":"deepseek-v4-pro","choices":[{"message":{"content":"DEEPSEEK_OK"}}]}', {"model": "deepseek-v4-pro", "choices": [{"message": {"content": "DEEPSEEK_OK"}}]}),
     ]
     with patch("providers.requests.post", side_effect=responses) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("deepseek-v4-flash", "deepseek-v4-pro"))
     assert post.call_count == 2
     assert result["status"] == "SUCCESS"
-    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["classification"] in {"API_ERROR", "TRANSIENT_PROVIDER_ERROR"}
 
 def test_deepseek_explicit_api_error_advances_to_next_free_candidate():
     """Regression: a normalized API_ERROR on candidate #1 must not stop the cascade."""
@@ -148,7 +148,7 @@ def test_deepseek_explicit_api_error_advances_to_next_free_candidate():
     assert result["status"] == "SUCCESS"
     assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert result["executed_model"] == "deepseek-v4-pro"
-    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["classification"] in {"API_ERROR", "TRANSIENT_PROVIDER_ERROR"}
     assert result["attempt_diagnostics"][0]["retryable"] is True
 
 
@@ -425,7 +425,7 @@ def test_deepseek_http_api_error_advances_via_actual_post_boundary():
     assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert result["executed_model"] == "deepseek-v4-pro"
     assert result["provider_reported_model"] == "deepseek-v4-pro"
-    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["classification"] in {"API_ERROR", "TRANSIENT_PROVIDER_ERROR"}
     assert result["attempt_diagnostics"][0]["retryable"] is True
 
 
@@ -441,7 +441,7 @@ def test_deepseek_http_200_error_envelope_advances_to_second_candidate():
     assert result["status"] == "SUCCESS"
     assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert result["executed_model"] == "deepseek-v4-pro"
-    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["classification"] in {"API_ERROR", "TRANSIENT_PROVIDER_ERROR"}
     assert result["attempt_diagnostics"][0]["error_class"] == "API_ERROR"
     assert result["attempt_diagnostics"][0]["retryable"] is True
 

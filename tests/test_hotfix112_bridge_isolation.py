@@ -50,7 +50,7 @@ def test_hotfix113_actual_provider_prompt_is_captured_and_redacted():
 
 def test_hotfix113_release_identity_is_canonical():
     version = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-    assert version == "V22.1-HOTFIX120-PRODUCTION-HARDENED"
+    assert version == "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
     assert main.APP_VERSION == version
 
 

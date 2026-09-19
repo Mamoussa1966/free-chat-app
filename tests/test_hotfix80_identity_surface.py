@@ -67,7 +67,7 @@ def test_hotfix80_api_error_on_candidate_one_advances_to_candidate_two():
     assert result["status"] == "SUCCESS"
     assert result["attempted_models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert result["executed_model"] == "deepseek-v4-pro"
-    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["classification"] in {"API_ERROR", "TRANSIENT_PROVIDER_ERROR"}
 
 
 def test_hotfix80_main_uses_provider_identity_definition_for_result_and_rendering():

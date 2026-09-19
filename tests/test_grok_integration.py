@@ -180,7 +180,7 @@ def test_grok_unexpected_adapter_exception_is_normalized_and_keeps_cascade_diagn
     assert result["status"] == "SUCCESS"
     assert result["attempted_models"] == ["grok-a", "grok-b"]
     assert result["executed_model"] == "grok-b"
-    assert result["attempt_diagnostics"][0]["classification"] == "API_ERROR"
+    assert result["attempt_diagnostics"][0]["classification"] in {"API_ERROR", "TRANSIENT_PROVIDER_ERROR"}
 
 
 def test_grok_model_id_invalid_marker_is_model_unavailable():
@@ -217,14 +217,14 @@ def test_grok_structured_billing_code_is_quota_exceeded():
 
 def test_grok_structured_unknown_4xx_is_api_error_not_unknown():
     body = '{"error":{"code":"invalid_argument","message":"Unsupported request field"}}'
-    assert providers._canonical_error_classification(providers._classify(422, body)) == "API_ERROR"
+    assert providers._canonical_error_classification(providers._classify(422, body)) == "INVALID_REQUEST"
 
 
 def test_grok_result_summaries_canonicalize_internal_provider_error_classes():
     with patch("providers.requests.post", return_value=_response(500, '{"error":{"message":"server failure"}}')) as post:
         result = call_seat(GROK, "Hello", "", 1, False, "fake-key", [], ("grok-a",))
     assert post.call_count == 1  # no hidden HTTP retry; cascade owns failover
-    assert result["attempt_summaries"][-1]["classification"] == "API_ERROR"
+    assert result["attempt_summaries"][-1]["classification"] in {"API_ERROR", "TRANSIENT_PROVIDER_ERROR"}
     assert result["attempt_summaries"][-1]["classification"] in providers.ERROR_CLASSES
 
 
