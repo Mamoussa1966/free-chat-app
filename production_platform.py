@@ -253,7 +253,25 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             "REQUEST_ID_IDENTITY_MATCH": identity_match,
         }
         bridge_status = "PASS" if all(bridge_checks.values()) else "FAIL"
-    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, bridge_status, continuation_status)) and identity_match
+    # HOTFIX126: an authoritative request may have at most one bridge identity.
+    # Never allow the last bridge audit to hide a second bridge created by a
+    # secondary execution path. Count every persisted result for this request.
+    persisted_bridge_ids = []
+    if persisted_record and isinstance(persisted_record.get("results"), list):
+        for item in persisted_record.get("results", []):
+            if not isinstance(item, dict):
+                continue
+            a = item.get("bridge_transaction_audit")
+            if isinstance(a, dict) and str(a.get("BRIDGE_ID") or "").strip():
+                persisted_bridge_ids.append(str(a.get("BRIDGE_ID")).strip())
+    unique_persisted_bridge_ids = sorted(set(persisted_bridge_ids))
+    bridge_identity_status = "PASS" if len(unique_persisted_bridge_ids) <= 1 else "FAIL"
+    if bridge_identity_status == "FAIL":
+        bridge_status = "FAIL"
+        bridge_checks["UNIQUE_BRIDGE_ID"] = False
+    else:
+        bridge_checks["UNIQUE_BRIDGE_ID"] = True
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, bridge_status, continuation_status)) and identity_match and bridge_identity_status == "PASS"
     return {
         "schema": "v23-platform-audit/v1",
         "status": "PASS" if overall else "FAIL",
@@ -263,7 +281,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         "session_integrity": session,
         "provider_health": {"status": health_status, "rows": health_rows},
         "regression_core": {"status": regression_status, **regression},
-        "bridge_isolation": {"status": bridge_status, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}},
+        "bridge_isolation": {"status": bridge_status, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}, "unique_persisted_bridge_ids": unique_persisted_bridge_ids},
         "continuation_runtime_gate": {"status": continuation_status, "audit": continuation_audit, "REQUEST_ID_IDENTITY_MATCH": identity_match},
     }
 

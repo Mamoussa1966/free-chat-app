@@ -584,14 +584,22 @@ def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | N
         r"(?is)(?:\bcontinue\b|\bcontinuation\b|\bcontinue_request\b|\bcontinuation_request_id\b|\bresume\b|\bcontinuing\b|\bcontinue\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)|\bno\s+new\s+(?:request|round|bridge)|\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)|استكمال|استمر|تابع|تكملة|استكمال\s+نفس|نفس\s+(?:الطلب|الـ?request)|لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)|بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)",
         text,
     ))
-    # Explicit machine/control wording is sufficient even if a UI translation removes
-    # the English word 'continuation'.  A Request ID alone is NOT sufficient.
-    is_continuation = continuation_marker
+    # HOTFIX126: an explicit persisted Request ID is itself authoritative when it
+    # points at an existing COMPLETED REQUEST_RECORD. This closes the runtime gap
+    # where the UI/test harness supplied the canonical ID but translated/trimmed
+    # the word "continuation", allowing the normal allocation path to run.
+    # A new Request ID is NEVER inferred from this rule.
+    persisted_record = _request_record(chat, requested_id) if requested_id else None
+    persisted_completed = bool(
+        isinstance(persisted_record, dict)
+        and str(persisted_record.get("state") or "").upper() == "COMPLETED"
+    )
+    is_continuation = bool(continuation_marker or persisted_completed)
     if not is_continuation:
         return "", None, False
     if not requested_id:
         return "", None, True
-    return requested_id, _request_record(chat, requested_id), True
+    return requested_id, persisted_record, True
 
 
 def _request_display_number(chat: dict, request_id: str) -> int | None:
