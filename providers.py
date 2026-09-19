@@ -15,7 +15,6 @@ import requests
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
 VERSION = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
-HOTFIX_RELEASE_VERSION = "V22.1-HOTFIX132-DISPATCH-GATE-PROVIDER-CONTRACT-RECONCILED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"
@@ -1130,7 +1129,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
             "attempt": d.get("attempt"),
             "model": str(d.get("model") or "").strip(),
             "status_code": d.get("status_code"),
-            "classification": _canonical_error_classification(str(d.get("classification") or "UNKNOWN")),
+            "classification": ("NO_RESPONSE" if _canonical_error_classification(str(d.get("classification") or "UNKNOWN")) == "TIMEOUT" else _canonical_error_classification(str(d.get("classification") or "UNKNOWN"))),
             "retryable": bool(d.get("retryable", False)),
             "latency": round(float(d.get("latency", 0.0) or 0.0), 3),
             "request_id": str(d.get("request_id") or request_id or ""),
@@ -1156,6 +1155,11 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
             "round": int(d.get("round", round_no) or round_no),
             "final_result": str(d.get("final_result") or "FAILED").upper(),
             "cascade_action": str(d.get("cascade_action") or ("CASCADE_CONTINUE" if d.get("retryable") else "CASCADE_STOP")).upper(),
+            # HOTFIX133: every attempt that reached the provider boundary is an
+            # authoritative runtime attempt, including failed cascade attempts.
+            # Do not infer this from final success state.
+            "execution_started": bool(d.get("execution_started") is True),
+            "attempt_id": str(d.get("attempt_id") or ""),
         }
         for d in (attempt_diagnostics or [])
     ]
@@ -1189,7 +1193,7 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
                 "attempt_id": str(item.get("attempt_id") or ""),
                 "request_id": str(item.get("request_id") or request_id or ""),
                 "round": int(item.get("round", round_no) or round_no),
-                "classification": _canonical_error_classification(str(item.get("classification") or "UNKNOWN")),
+                "classification": ("NO_RESPONSE" if _canonical_error_classification(str(item.get("classification") or "UNKNOWN")) == "TIMEOUT" else _canonical_error_classification(str(item.get("classification") or "UNKNOWN"))),
                 "cascade_action": str(item.get("cascade_action") or "").upper(),
                 "execution_time": float(item.get("execution_time", item.get("latency", 0.0)) or 0.0),
                 "status": "SUCCESS" if str(item.get("final_result") or "").upper() == "SUCCESS" else "FAILED",

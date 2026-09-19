@@ -147,6 +147,6 @@ Built directly from the complete previous release artifact. The complete file tr
 - No secrets or raw provider payloads are persisted.
 
 
-# HOTFIX132
+# HOTFIX131
 
 Authoritative result / identity / bridge-prose isolation. Provider prose is never a source of structured execution state or Request ID, and bridge values are redacted from agent prose.
