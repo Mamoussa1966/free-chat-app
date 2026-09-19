@@ -1,8 +1,8 @@
 # AI Council — Free Cascade
 
-V22.1-HOTFIX121.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE
+V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE
 
-HOTFIX121 adds an application-owned Production Chat Reliability layer + Production Core Test Runner. Use **🧪 Run Production Core Tests** in the sidebar; the application executes the local Test Harness and renders the real PASS/NO-GO result. AI providers are not asked to run pytest.
+HOTFIX123 adds an application-owned Production Chat Reliability layer + Production Core Test Runner. Use **🧪 Run Production Core Tests** in the sidebar; the application executes the local Test Harness and renders the real PASS/NO-GO result. AI providers are not asked to run pytest.
 
 Free API Cascade #1→#10. No Local Engine, no paid fallback, and no implicit model selection.
 
@@ -37,7 +37,7 @@ The provider prompt now explicitly distinguishes the application-owned transacti
 ## Production Core
 Request lifecycle, provider execution contract, strict Free Cascade #1→#10, timeout/retry policy, failure classification, actual-model attestation, round/shared-context state machines, transaction bridge guard, secret-safe audit events, and regression coverage.
 
-## HOTFIX121.2 contract
+## HOTFIX123.2 contract
 Single-request determinism is enforced at the orchestration boundary. A Request ID may not be re-orchestrated while active and a completed Request ID is returned from its immutable in-chat result cache. Each round has one execution scope and each seat can be claimed once within that scope. Free Cascade attempts remain internal to the provider call and reuse the same Request ID + Round. Transactional Bridge creation therefore occurs once per Request ID + Round.
 
 The live UI exposes authoritative telemetry in the form `model → classification → cascade action`; these values come from the provider attempt diagnostics rather than model-generated prose.

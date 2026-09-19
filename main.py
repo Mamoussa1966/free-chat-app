@@ -18,7 +18,7 @@ from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 
-# HOTFIX121: process-local idempotency gate for duplicate Streamlit submissions.
+# HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
 # reserve the fingerprint before generating request_id or making any provider call.
 _REQUEST_GATE_LOCK = threading.RLock()
@@ -175,7 +175,7 @@ class SharedContextBridge:
                 raw = raw.replace(value, "[REDACTED_BRIDGE_VALUE]")
         base = BRIDGE_WRITE_PATTERN.sub(lambda m: f"BRIDGE_WRITE: {m.group(1).strip()} = [REDACTED_BRIDGE_VALUE]", raw)
         base = re.sub(r"(?im)^(\s*Value:\s*).+$", r"\1[REDACTED_BRIDGE_VALUE]", base)
-        # HOTFIX121: the target prompt receives only a context-safe capability
+        # HOTFIX123: the target prompt receives only a context-safe capability
         # projection.  Neither the bridge key (for example BRIDGE_RESULT) nor
         # its value is exposed to Gemini.  The application owns the target-side
         # READ and resolves it after the provider request has completed.
@@ -440,7 +440,7 @@ class SharedContextBridge:
             return {"schema_validation": reason, "reads": [], "status": "INVALID"}
         reads = []
         requested_keys = _extract_bridge_reads(str(result.get("content") or ""))
-        # HOTFIX121: the transactional bridge is application-owned.  Once the
+        # HOTFIX123: the transactional bridge is application-owned.  Once the
         # commit barrier is open, the target seat is allowed one explicit
         # application-side READ of the committed key even if the provider did
         # not echo the BRIDGE_READ control record.  The value is resolved only
@@ -452,7 +452,7 @@ class SharedContextBridge:
             if "BRIDGE_RESULT" in self._values:
                 requested_keys = ["BRIDGE_RESULT"]
         for key in requested_keys:
-            # HOTFIX121: if the application already performed the canonical
+            # HOTFIX123: if the application already performed the canonical
             # post-barrier READ before the target HTTP request, reuse that exact
             # committed read record. Do not increment read_sequence twice when
             # Gemini later echoes BRIDGE_READ in its response.
@@ -813,7 +813,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     bridge.append_user_declarations(user_prompt)
     results: dict[str, dict] = {}
     working_context = bridge.prompt_snapshot(None)
-    # HOTFIX121: one logical seat execution claim per request/round. Free Cascade
+    # HOTFIX123: one logical seat execution claim per request/round. Free Cascade
     # attempts remain inside call_seat() and therefore cannot create a second
     # seat Request. This is the production boundary for Request Determinism.
     execution_ledger = SeatExecutionLedger(request_id, round_no)
@@ -831,11 +831,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     for seat in SEATS if False else bridge_order:
         execution_id = execution_ledger.claim(seat.key)
         try:
-            # HOTFIX121: execution ownership is immutable for this request/round/seat.
+            # HOTFIX123: execution ownership is immutable for this request/round/seat.
             # The provider may perform multiple Free Cascade attempts, but all
             # attempts belong to this one execution claim.
             execution_ledger.assert_claimed(seat.key, execution_id)
-            # HOTFIX121: resolve the committed target-side READ at the application
+            # HOTFIX123: resolve the committed target-side READ at the application
             # boundary, after COMMIT + BARRIER and before the target provider HTTP
             # request. The resolved value is retained only in bridge state/audit;
             # it is NEVER injected into the Gemini prompt or HTTP payload. This
@@ -920,7 +920,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             ),
         )
 
-    # HOTFIX121: diagnostic answers must not invent the executed cascade position.
+    # HOTFIX123: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
     # but the explicit bridge-proof request is a runtime diagnostic.
     # In that mode the application emits the authoritative execution/bridge facts
@@ -965,8 +965,70 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     return [results[seat.key] for seat in seats]
 
 
+def _authoritative_request_metrics(request_id: str, round_results: list[dict], audit_events: list[dict]) -> dict:
+    """Build request counters only from the orchestrator-owned request/audit record.
+
+    Seat-generated prose is never used as an authority for these counters. Provider
+    attempt telemetry is used only for attempt records already attached to the
+    request result; execution counts and identity counts are anchored to the
+    request/round audit and persisted result objects.
+    """
+    rid = str(request_id or "").strip()
+    results = [r for r in (round_results or []) if isinstance(r, dict)]
+    events = [e for e in (audit_events or []) if isinstance(e, dict) and str(e.get("request_id") or "") == rid]
+    result_request_ids = {str(r.get("request_id") or "").strip() for r in results if str(r.get("request_id") or "").strip()}
+    telemetry_request_ids: set[str] = set()
+    total_attempts = 0
+    attempts_by_provider: dict[str, int] = {}
+    for r in results:
+        provider = str(r.get("name") or r.get("seat") or "").strip()
+        details = r.get("attempt_diagnostics") or r.get("attempt_telemetry") or r.get("attempt_summaries") or []
+        valid_details = [d for d in details if isinstance(d, dict)]
+        total_attempts += len(valid_details)
+        attempts_by_provider[provider] = attempts_by_provider.get(provider, 0) + len(valid_details)
+        for d in valid_details:
+            x = str(d.get("request_id") or "").strip()
+            if x:
+                telemetry_request_ids.add(x)
+    audit_request_ids = {str(e.get("request_id") or "").strip() for e in events if str(e.get("request_id") or "").strip()}
+    all_request_ids = {rid} | result_request_ids | telemetry_request_ids | audit_request_ids
+    bridge_ids = set()
+    for r in results:
+        audit = r.get("bridge_transaction_audit")
+        if isinstance(audit, dict):
+            bid = str(audit.get("BRIDGE_ID") or "").strip()
+            if bid:
+                bridge_ids.add(bid)
+    provider_exec_events = [e for e in events if str(e.get("event_type") or "") == "PROVIDER_RESULT"]
+    deepseek_exec_events = [e for e in provider_exec_events if str(e.get("provider") or "").strip().lower() == "deepseek" and int(e.get("round_id") or 0) == 1]
+    # Fallback to the persisted per-seat result only if the lifecycle event is absent;
+    # this keeps legacy records readable while still avoiding seat-generated prose.
+    deepseek_result_count = sum(1 for r in results if str(r.get("seat") or "").strip().lower() == "deepseek" and int(r.get("round") or 0) == 1)
+    deepseek_round1_executions = len(deepseek_exec_events) if deepseek_exec_events else deepseek_result_count
+    rounds = sorted({int(e.get("round_id") or 0) for e in events if int(e.get("round_id") or 0) > 0})
+    return {
+        "request_id": rid,
+        "rounds": rounds,
+        "unique_request_ids": len(all_request_ids),
+        "request_ids": sorted(all_request_ids),
+        "unique_bridge_ids": len(bridge_ids),
+        "bridge_ids": sorted(bridge_ids),
+        "total_cascade_attempts": total_attempts,
+        "attempts_by_provider": attempts_by_provider,
+        "provider_execution_events": len(provider_exec_events),
+        "deepseek_round1_executions": deepseek_round1_executions,
+        "audit_event_count": len(events),
+    }
+
+
+def _request_record(chat: dict, request_id: str) -> dict | None:
+    _ensure_chat_identity_state(chat)
+    rid = str(request_id or "").strip()
+    return next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip() == rid), None)
+
+
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str) -> list[dict]:
-    # HOTFIX121.2: one orchestrator invocation per Request ID. A secondary
+    # HOTFIX123.2: one orchestrator invocation per Request ID. A secondary
     # execution path must never create another lifecycle/round/bridge. A completed
     # request is returned from its immutable in-chat result cache.
     request_id = str(request_id or "").strip()
@@ -1065,6 +1127,12 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             record["state"] = "COMPLETED"
             record["rounds_executed"] = total_rounds
             record["results"] = copy.deepcopy(all_results)
+            # HOTFIX123: persist authoritative counters on the request record itself.
+            # These counters are derived from lifecycle/audit data and persisted result
+            # telemetry, never from provider-generated prose.
+            record["request_metrics"] = _authoritative_request_metrics(
+                request_id, all_results, chat.get("audit_events", [])
+            )
         _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
     return all_results
 
@@ -1253,8 +1321,9 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                     st.error("⚠️ Provider identity mismatch: هوية النموذج التي أعادها المزود لا تطابق النموذج المنفذ.")
                     continue
             request_id = str(message.get("request_id") or "").strip()
-            request_no = _request_display_number(chat, request_id) if request_id else None
-            prefix = f"Request {request_no} · " if request_no is not None else ""
+            # HOTFIX123: the runtime Request ID is the sole request identity shown
+            # in seat cards. A human-friendly sequence number is not an identity.
+            prefix = f"Request ID = `{request_id}` · " if request_id else ""
             st.markdown(f"**{prefix}Round {message.get('round', '?')} · 🟢 Official API · `{executed_model or displayed_model}`**")
             if attempted_models:
                 st.caption("Cascade attempts: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(attempted_models)))
@@ -1401,6 +1470,26 @@ def _render_bridge_audit(results: list[dict]) -> None:
         f"BRIDGE_STATE_CONTAINS_VALUE = {audit.get('BRIDGE_STATE_CONTAINS_VALUE', 'NO')}",
     ]
     st.code("\n".join(lines), language="text")
+    request_id = str(audit.get("request_id") or "").strip()
+    if request_id:
+        # HOTFIX123: render counters from the persisted request record, not the
+        # DeepSeek/Gemini response text.
+        chat = _active_chat()
+        record = _request_record(chat, request_id)
+        metrics = (record or {}).get("request_metrics") or {}
+        if metrics:
+            st.subheader("📊 Authoritative Request Audit")
+            st.code("\n".join([
+                f"REQUEST_ID = {metrics.get('request_id', request_id)}",
+                f"ROUND_IDS = {metrics.get('rounds', [])}",
+                f"UNIQUE_REQUEST_IDS = {metrics.get('unique_request_ids', 0)}",
+                f"UNIQUE_BRIDGE_IDS = {metrics.get('unique_bridge_ids', 0)}",
+                f"TOTAL_CASCADE_ATTEMPTS = {metrics.get('total_cascade_attempts', 0)}",
+                f"DEEPSEEK_SEAT_7_ROUND_1_EXECUTIONS = {metrics.get('deepseek_round1_executions', 0)}",
+                f"PROVIDER_EXECUTION_EVENTS = {metrics.get('provider_execution_events', 0)}",
+                "COUNTER_SOURCE = REQUEST_RECORD / LIFECYCLE_AUDIT",
+                "SEAT_GENERATED_PROSE_USED_AS_COUNTER_SOURCE = NO",
+            ]), language="text")
 
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
     official = sum(r.get("status") == "SUCCESS" for r in results)
@@ -1429,7 +1518,7 @@ def _render_production_core_validation() -> None:
         st.success("🟢 PRODUCTION CORE GATE: PASS")
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
-    st.subheader("🧪 HOTFIX121 — Production Core Test Harness")
+    st.subheader("🧪 HOTFIX123 — Production Core Test Harness")
     st.code(render_production_core_report(report), language="text")
 
 
@@ -1500,7 +1589,7 @@ def run_app() -> None:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
         fingerprint = _request_fingerprint(prompt, attachments)
-        # HOTFIX121: atomic reservation closes the race where two Streamlit
+        # HOTFIX123: atomic reservation closes the race where two Streamlit
         # reruns submit the same logical request before either can persist it.
         # The second submission is rejected before request_id allocation and
         # before _run_council(), so it cannot create a second provider run.
@@ -1520,7 +1609,7 @@ def run_app() -> None:
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
         chat["request_ids"].append(fingerprint)
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
-        chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now()})
+        chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID"})
         # The fingerprint is now durably present in the active chat identity
         # ledger; release the process gate so unrelated requests may proceed.
         with _REQUEST_GATE_LOCK:
