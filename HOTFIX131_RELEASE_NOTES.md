@@ -1,4 +1,4 @@
-# HOTFIX131 — AUTHORITATIVE RESULT / IDENTITY / BRIDGE-PROSE ISOLATION
+# HOTFIX132 — AUTHORITATIVE RESULT / IDENTITY / BRIDGE-PROSE ISOLATION
 
 - Provider prose is untrusted presentation data and cannot define Request ID, status, classification, model, attempt, cascade action, or result rows.
 - Structured result identity remains application/lifecycle-owned.
