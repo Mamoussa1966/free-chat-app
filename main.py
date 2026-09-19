@@ -503,6 +503,25 @@ def _ensure_chat_identity_state(chat: dict) -> None:
     chat.setdefault("result_keys", [])
 
 
+def _extract_continuation_request_id(prompt: str, chat: dict) -> str:
+    """Resolve an explicit continuation request to an existing authoritative Request ID.
+
+    Continuation is control-plane metadata, not a new user Request. Only an explicit
+    marker is accepted, and it must resolve to an existing persisted request record.
+    """
+    text = str(prompt or "")
+    match = re.search(
+        r"(?i)\b(?:CONTINUE|CONTINUATION|استكمال|استمر)\s*(?:REQUEST\s*ID|REQUEST_ID|مع\s*معرّف\s*الطلب)?\s*[:=]?\s*`?([0-9a-f]{16,64})`?",
+        text,
+    )
+    if not match:
+        match = re.search(r"(?i)\bREQUEST\s*ID\s*[:=]\s*`?([0-9a-f]{16,64})`?", text)
+    if not match:
+        return ""
+    rid = match.group(1).strip()
+    return rid if _request_record(chat, rid) else ""
+
+
 def _request_display_number(chat: dict, request_id: str) -> int | None:
     _ensure_chat_identity_state(chat)
     for index, record in enumerate(chat.get("request_records", []), start=1):
@@ -1618,6 +1637,19 @@ def run_app() -> None:
         if len(prompt) > MAX_PROMPT_CHARS:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
+        # HOTFIX125.1: an explicit continuation of an existing Request ID is
+        # never a new Request and never re-enters the provider orchestrator.
+        continuation_request_id = _extract_continuation_request_id(prompt, chat)
+        if continuation_request_id and not attachments:
+            existing = _request_record(chat, continuation_request_id)
+            if existing and isinstance(existing.get("results"), list):
+                st.session_state.last_results = copy.deepcopy(existing["results"])
+                st.session_state.last_synthesis = copy.deepcopy(existing.get("synthesis") or {})
+                _shared_context(chat, max_chars=30_000)
+                st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
+                st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
+                st.info(f"Continuation resolved to existing Request ID: {continuation_request_id} — no new Request, provider call, round, or Bridge created.")
+                return
         fingerprint = _request_fingerprint(prompt, attachments)
         # HOTFIX123: atomic reservation closes the race where two Streamlit
         # reruns submit the same logical request before either can persist it.
