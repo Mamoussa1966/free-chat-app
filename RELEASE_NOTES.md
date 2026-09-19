@@ -112,3 +112,13 @@ Built directly from the complete previous release artifact. The complete file tr
 - Transactional Bridge remains one Bridge ID per request/round scope.
 - Live UI telemetry exposes model → classification → cascade action as each provider result becomes available.
 - Added explicit regressions for one round/one seat/one request, ten cascade attempts sharing one Request ID, duplicate orchestrator prevention, and duplicate bridge scope prevention.
+
+## V23.0.0 Release Candidate — bundled platform track
+- HOTFIX124: Production Chat UX / Session Integrity / Observability layer.
+- HOTFIX125: session-owned conversation/message persistence schema and safe export shape.
+- HOTFIX126: bounded context window + deterministic compaction metadata.
+- HOTFIX127: application-owned council result synthesis metadata; provider prose is never used as a counter source.
+- HOTFIX128: provider health snapshot using existing credentials/model configuration only; no model discovery or credential mutation.
+- HOTFIX129: secret/raw-payload/prompt-isolation audit surface.
+- HOTFIX130: regression validation remains additive to the inherited Production Core test runner.
+- V23 Release Candidate: all layers are additive above HOTFIX123.2; Secrets, explicit `*_FREE_MODELS`, Official API only, no Local Engine, and no Paid fallback are preserved.

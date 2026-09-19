@@ -17,6 +17,7 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
+from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
@@ -557,7 +558,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 
 def _init_state() -> None:
-    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": ""}
+    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -622,7 +623,13 @@ def _shared_context(chat: dict, exclude_message_id: str | None = None, max_chars
             text = str(item.get("content", "")).strip()
             if text:
                 lines.append(f"{item.get('seat', 'AI')} [OFFICIAL API] HISTORICAL OUTPUT:\n{text}")
-    return "\n\n".join(lines)[-max_chars:]
+    text, meta = compact_context([{"role": "context", "content": "\n\n".join(lines)}], max_chars=max_chars)
+    chat["platform_context_meta"] = meta
+    try:
+        st.session_state.platform_context_meta = meta
+    except Exception:
+        pass
+    return text
 
 
 def _worker_failure(seat, exc: Exception, model_candidates: dict | None = None, request_id: str = "", round_no: int = 0) -> dict:
@@ -1133,6 +1140,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             record["request_metrics"] = _authoritative_request_metrics(
                 request_id, all_results, chat.get("audit_events", [])
             )
+            record["synthesis"] = synthesize_council_results(all_results)
+            st.session_state.last_synthesis = copy.deepcopy(record["synthesis"])
         _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
     return all_results
 
@@ -1171,6 +1180,26 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 code, report = run_production_core_tests()
             st.session_state.last_production_core_report = report
             st.session_state.last_production_core_code = code
+        st.divider()
+        st.subheader("🚀 V23 Production Platform")
+        st.caption("HOTFIX124→HOTFIX130 + V23 Release Candidate: طبقات إضافية فوق Core HOTFIX123.2.")
+        if st.button("🩺 Platform Health", use_container_width=True):
+            st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
+        if st.session_state.get("last_health_snapshot"):
+            for row in st.session_state.last_health_snapshot:
+                st.caption(f"{row['provider']} · {row['status']} · Free models={row['free_models']}")
+        if st.button("🔐 Security Isolation Audit", use_container_width=True):
+            st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
+        audit = st.session_state.get("last_security_audit") or {}
+        if audit:
+            st.caption(f"Security audit: {audit.get('status', 'UNKNOWN')}")
+        if st.button("🧠 Context Compaction Audit", use_container_width=True):
+            ctx = _shared_context(_active_chat(), max_chars=30000)
+            st.session_state.platform_context_meta = st.session_state.get("platform_context_meta", {})
+            st.success(f"Context bounded: {st.session_state.platform_context_meta.get('chars', len(ctx))} chars")
+        if st.session_state.get("last_synthesis"):
+            syn = st.session_state.last_synthesis
+            st.caption(f"Synthesis: {syn.get('status')} · successful seats={syn.get('successful_seats', 0)}")
         st.divider()
         chat = _active_chat()
         st.subheader("💬 المحادثة الحالية")
@@ -1563,6 +1592,7 @@ def run_app() -> None:
     chat = _active_chat()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{APP_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    st.caption("V23 RC layers: Session Integrity · Conversation Persistence · Context Compaction · Council Synthesis · Provider Health · Security Audit · Regression Core")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
@@ -1638,7 +1668,16 @@ def run_app() -> None:
         st.divider()
         _render_bridge_audit(st.session_state.last_results)
         _render_diagnostics(st.session_state.last_results)
+        syn = st.session_state.get("last_synthesis") or {}
+        if syn:
+            st.subheader("🧠 Council Synthesis / Authoritative Result Set")
+            st.json(syn)
     _render_production_core_validation()
+    with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=False):
+        if st.button("Run full V23 platform audit", key="v23_platform_audit"):
+            st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
+        st.json(st.session_state.get("last_security_audit") or {"status": "NOT_RUN"})
+        st.json(st.session_state.get("platform_context_meta") or {"status": "NOT_RUN"})
 
 
 if __name__ == "__main__":
