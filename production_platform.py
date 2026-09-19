@@ -218,9 +218,22 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             if isinstance(item, dict) and isinstance(item.get("bridge_transaction_audit"), dict):
                 bridge_audits.append(item["bridge_transaction_audit"])
     bridge = bridge_audits[-1] if bridge_audits else None
+    # Runtime identity is a hard gate: a report cannot PASS if the actual persisted
+    # Request ID differs from the requested/audited ID.
+    persisted_record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id or "")), None)
+    actual_request_id = str((persisted_record or {}).get("request_id") or "").strip()
+    identity_match = bool(request_id and actual_request_id and actual_request_id == str(request_id).strip())
+    continuation_audit = {}
+    for event in reversed(chat.get("audit_events", [])):
+        if not isinstance(event, dict):
+            continue
+        if str(event.get("type") or "").upper() == "CONTINUATION_GATE" and str(event.get("requested_request_id") or "") == str(request_id or ""):
+            continuation_audit = dict(event)
+            break
+    continuation_status = "PASS" if (not continuation_audit or (continuation_audit.get("mode") == "READ_ONLY" and continuation_audit.get("provider_execution", 0) == 0 and continuation_audit.get("cascade", 0) == 0 and continuation_audit.get("new_round", 0) == 0 and continuation_audit.get("new_bridge", 0) == 0 and continuation_audit.get("actual_request_id") == request_id)) else "FAIL"
     if bridge is None:
-        bridge_status = "PASS" if not persisted_bridge else "FAIL"
-        bridge_checks = {"APPLICATION_OWNED_STATE": bool(persisted_bridge) or True, "NO_AGENT_PROSE_AUTHORITY": True}
+        bridge_status = "PASS" if (not persisted_bridge and identity_match) else "FAIL"
+        bridge_checks = {"APPLICATION_OWNED_STATE": bool(persisted_bridge) or True, "NO_AGENT_PROSE_AUTHORITY": True, "REQUEST_ID_IDENTITY_MATCH": identity_match}
     elif not any(k in bridge for k in ("USER_PROMPT_CONTAINS_VALUE", "GEMINI_INPUT_PROMPT_CONTAINS_VALUE", "BRIDGE_STATE_CONTAINS_VALUE")):
         bridge_status = "PASS"
         bridge_checks = {"LEGACY_AUDIT_COMPATIBLE": True, "NO_AGENT_PROSE_AUTHORITY": True}
@@ -237,9 +250,10 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             "GEMINI_INPUT_ISOLATED": bridge.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE") == "NO",
             "BRIDGE_STATE_CONTAINS_VALUE": bridge.get("BRIDGE_STATE_CONTAINS_VALUE") == "YES",
             "NO_AGENT_PROSE_AUTHORITY": True,
+            "REQUEST_ID_IDENTITY_MATCH": identity_match,
         }
         bridge_status = "PASS" if all(bridge_checks.values()) else "FAIL"
-    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, bridge_status))
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, bridge_status, continuation_status)) and identity_match
     return {
         "schema": "v23-platform-audit/v1",
         "status": "PASS" if overall else "FAIL",
@@ -250,6 +264,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         "provider_health": {"status": health_status, "rows": health_rows},
         "regression_core": {"status": regression_status, **regression},
         "bridge_isolation": {"status": bridge_status, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}},
+        "continuation_runtime_gate": {"status": continuation_status, "audit": continuation_audit, "REQUEST_ID_IDENTITY_MATCH": identity_match},
     }
 
 

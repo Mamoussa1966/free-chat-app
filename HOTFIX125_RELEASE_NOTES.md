@@ -1,4 +1,4 @@
-# HOTFIX125.2 — REQUEST CONTINUATION + BRIDGE ISOLATION REGRESSION FIX
+# HOTFIX125.3 — CONTINUATION RUNTIME GATE + BRIDGE ISOLATION HARDENING
 
 Limited patch on top of HOTFIX125.1.
 
@@ -16,3 +16,16 @@ Limited patch on top of HOTFIX125.1.
 - No Secrets or `*_FREE_MODELS` changes.
 - Existing files are preserved; no baseline files are deleted.
 - HOTFIX123.2 request/cascade identity behavior remains regression-tested.
+
+
+## HOTFIX125.3 hard gates
+- Continuation resolves the persisted REQUEST_RECORD before fingerprinting or Request-ID allocation.
+- Valid continuation is read-only; provider execution, cascade attempts, round creation, and bridge creation are hard-rejected.
+- Bridge audit is sourced from persisted application-owned state and runtime payload attestations, never agent prose.
+- BRIDGE_RESULT and its control value are removed before provider-layer construction; boundary assertions fail closed.
+- Runtime platform audit cannot PASS when requested Request ID differs from the actual persisted Request ID.
+- Full V23 audit invokes the real Production Core test harness; harness PASS is never inferred from agent text.
+- No Secrets or model lists changed; no baseline files deleted.
+
+## Preservation of HOTFIX125.1 contract
+- REQUEST CONTINUATION + BRIDGE ISOLATION REGRESSION FIX behavior remains covered by the existing regression suite.

@@ -29,6 +29,7 @@ _ACTIVE_ORCHESTRATOR_REQUESTS: set[str] = set()
 from production_core_test_runner import run_production_core_tests, render_report as render_production_core_report
 
 APP_VERSION = PROVIDER_VERSION
+HOTFIX_VERSION = "HOTFIX125.4"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -78,6 +79,8 @@ def _extract_bridge_control_values(prompt: str) -> tuple[str, list[tuple[str, st
     patterns = [
         re.compile(r"(?im)^\s*(BRIDGE_[A-Z0-9_]+)\s*=\s*([^\r\n]+?)\s*$"),
         re.compile(r"(?im)^\s*BRIDGE_WRITE\s*:\s*(BRIDGE_[A-Z0-9_]+)\s*(?:=\s*)?([^\r\n]+?)\s*$"),
+        re.compile(r"(?i)\b(BRIDGE_RESULT)\s*=\s*([^\r\n]+)") ,
+        re.compile(r"(?i)BRIDGE_WRITE\s*:\s*(BRIDGE_RESULT)\s*(?:=\s*)?([^\r\n]+)") ,
     ]
     for pattern in patterns:
         for m in pattern.finditer(text):
@@ -554,12 +557,41 @@ def _extract_requested_request_id(prompt: str) -> str:
 
 
 def _extract_continuation_request_id(prompt: str, chat: dict) -> str:
+    """Resolve continuation identity strictly from persisted application state.
+
+    This function is intentionally called before fingerprinting or Request-ID allocation.
+    It never creates, mutates, or substitutes a Request ID.
+    """
     text = str(prompt or "")
-    has_continuation = bool(re.search(r"(?i)\b(?:continue|continuation|resume|استكمال|استمر|تابع)\b", text))
+    has_continuation = bool(re.search(r"(?i)(?:\bcontinue\b|\bcontinuation\b|\bresume\b|استكمال|استمر|تابع)", text))
     rid = _extract_requested_request_id(text)
     if not has_continuation or not rid:
         return ""
-    return rid if _request_record(chat, rid) else ""
+    record = _request_record(chat, rid)
+    return rid if isinstance(record, dict) else ""
+
+
+def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | None, bool]:
+    """HOTFIX125.4: resolve continuation identity before *any* request allocation.
+
+    A prompt containing an explicit Request ID plus continuation language is treated as
+    a continuation control message.  The persisted REQUEST_RECORD is authoritative;
+    this function never allocates, substitutes, or regenerates an ID.
+    """
+    text = str(prompt or "")
+    requested_id = _extract_requested_request_id(text)
+    continuation_marker = bool(re.search(
+        r"(?is)(?:\bcontinue\b|\bcontinuation\b|\bresume\b|\bcontinue_request\b|continuation_request_id\s*[:=]|استكمال|استمر|تابع|نفس\s+(?:الطلب|الـ?request)|same\s+(?:request|runtime))",
+        text,
+    ))
+    # Explicit machine/control wording is sufficient even if a UI translation removes
+    # the English word 'continuation'.  A Request ID alone is NOT sufficient.
+    is_continuation = continuation_marker
+    if not is_continuation:
+        return "", None, False
+    if not requested_id:
+        return "", None, True
+    return requested_id, _request_record(chat, requested_id), True
 
 
 def _request_display_number(chat: dict, request_id: str) -> int | None:
@@ -865,7 +897,25 @@ def _provider_identity_matches(seat_key: str, executed_model: str, reported_mode
     return reported_model.lower() == executed_model.lower()
 
 
+def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls: list[tuple[str, str]] | None = None) -> None:
+    """Hard boundary: bridge control keys/values cannot enter provider inputs."""
+    combined = f"{prompt}\n{provider_prompt}"
+    if re.search(r"(?i)\bBRIDGE_RESULT\b", combined):
+        raise RuntimeError("BRIDGE_RESULT leaked into provider-layer prompt")
+    for key, value in (bridge_controls or []):
+        if str(key).strip() and re.search(rf"(?i)\b{re.escape(str(key).strip())}\b", combined):
+            raise RuntimeError("bridge key leaked into provider-layer prompt")
+        if str(value).strip() and str(value).strip() in combined:
+            raise RuntimeError("bridge value leaked into provider-layer prompt")
+
+
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str, bridge_controls: list[tuple[str, str]] | None = None) -> list[dict]:
+    # HOTFIX125.4: a continuation may never reach the round/provider layer.  The
+    # orchestrator gate normally catches this earlier; this invariant is defense-in-depth.
+    for msg in chat.get("messages", []):
+        if isinstance(msg, dict) and str(msg.get("request_id") or "") == str(request_id):
+            if str(msg.get("continuation_mode") or "").upper() == "READ_ONLY":
+                raise RuntimeError("HOTFIX125.4: provider/round execution forbidden for continuation")
     seats = get_seats()
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
@@ -915,8 +965,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
 
             provider_prompt = bridge.prompt_snapshot(seat)
             working_context = provider_prompt
-            bridge.record_provider_input(seat, provider_prompt)
             provider_user_prompt = bridge.sanitize_user_prompt(user_prompt, seat)
+            _assert_provider_boundary(provider_user_prompt, provider_prompt, bridge_controls)
+            bridge.record_provider_input(seat, provider_prompt)
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
@@ -1096,13 +1147,17 @@ def _request_record(chat: dict, request_id: str) -> dict | None:
     return next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip() == rid), None)
 
 
-def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str, bridge_controls: list[tuple[str, str]] | None = None) -> list[dict]:
+def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str, bridge_controls: list[tuple[str, str]] | None = None, continuation_request_id: str = "") -> list[dict]:
     # HOTFIX123.2: one orchestrator invocation per Request ID. A secondary
     # execution path must never create another lifecycle/round/bridge. A completed
     # request is returned from its immutable in-chat result cache.
     request_id = str(request_id or "").strip()
     if not request_id:
         raise ValueError("request_id is required")
+    if str(continuation_request_id or "").strip():
+        if str(request_id).strip() != str(continuation_request_id).strip():
+            raise RuntimeError("Continuation request identity mismatch: no new Request ID is permitted")
+        raise RuntimeError("Continuation is READ_ONLY: _run_council/provider execution is forbidden")
     _ensure_chat_identity_state(chat)
     with _ORCHESTRATOR_REQUEST_LOCK:
         for record in chat.get("request_records", []):
@@ -1682,32 +1737,39 @@ def run_app() -> None:
         if len(prompt) > MAX_PROMPT_CHARS:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
-        # HOTFIX125.1: an explicit continuation of an existing Request ID is
-        # never a new Request and never re-enters the provider orchestrator.
-        requested_request_id = _extract_requested_request_id(prompt)
-        has_continuation = bool(re.search(r"(?i)\b(?:continue|continuation|resume|استكمال|استمر|تابع)\b", prompt))
-        continuation_request_id = _extract_continuation_request_id(prompt, chat)
-        if has_continuation and requested_request_id and not continuation_request_id:
-            st.error(f"Continuation rejected: Request ID {requested_request_id} is not present in persisted REQUEST_RECORD. No new Request ID will be generated.")
-            return
-        if continuation_request_id:
-            existing = _request_record(chat, continuation_request_id)
-            if not existing:
-                st.error(f"Continuation rejected: Request ID {continuation_request_id} is not present in persisted REQUEST_RECORD. No new Request ID will be generated.")
+        # HOTFIX125.3 HARD RUNTIME GATE: load REQUEST_RECORD first.
+        # No fingerprint, Request-ID allocation, round, bridge, provider, or cascade
+        # path may execute for a valid continuation.
+        requested_request_id, continuation_record, is_continuation = _continuation_request_record(prompt, chat)
+        if is_continuation:
+            if not requested_request_id:
+                st.error("Continuation rejected: an existing Request ID is required. No Request ID will be generated.")
+                return
+            if not continuation_record:
+                st.error(f"Continuation rejected: Request ID {requested_request_id} is not present in persisted REQUEST_RECORD. No new Request ID will be generated.")
                 return
             if attachments:
                 st.error("Continuation is READ-ONLY and cannot accept new attachments.")
                 return
-            st.session_state.last_results = copy.deepcopy(existing.get("results") or [])
-            st.session_state.last_synthesis = copy.deepcopy(existing.get("synthesis") or {})
-            st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
-            st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
-            st.session_state.last_continuation_audit = {
-                "mode": "READ_ONLY", "request_id": continuation_request_id,
-                "provider_execution": 0, "cascade": 0, "new_round": 0, "new_bridge": 0,
-                "source": "PERSISTED_REQUEST_RECORD",
+            persisted_id = str(continuation_record.get("request_id") or "").strip()
+            if persisted_id != requested_request_id:
+                st.error("Continuation rejected: persisted REQUEST_RECORD identity mismatch.")
+                return
+            st.session_state.last_results = copy.deepcopy(continuation_record.get("results") or [])
+            st.session_state.last_synthesis = copy.deepcopy(continuation_record.get("synthesis") or {})
+            continuation_audit = {
+                "type": "CONTINUATION_GATE",
+                "mode": "READ_ONLY", "requested_request_id": requested_request_id,
+                "actual_request_id": persisted_id, "provider_execution": 0, "cascade": 0,
+                "new_round": 0, "new_bridge": 0, "source": "PERSISTED_REQUEST_RECORD",
+                "runtime_gate": "PASS",
             }
-            st.info(f"Continuation resolved to persisted Request ID: {continuation_request_id} — READ-ONLY; no new Request, provider call, round, cascade, or Bridge created.")
+            chat.setdefault("audit_events", []).append(continuation_audit)
+            # HOTFIX125.4: the gate result is application-owned runtime state.
+            # It is persisted before returning so Full Audit can consume it without
+            # relying on any provider/agent prose.
+            st.session_state.last_continuation_audit = copy.deepcopy(continuation_audit)
+            st.info(f"Continuation resolved to persisted Request ID: {persisted_id} — READ-ONLY; no new Request, provider call, round, cascade, or Bridge created.")
             return
         sanitized_prompt, bridge_controls = _extract_bridge_control_values(prompt)
         prompt = sanitized_prompt
