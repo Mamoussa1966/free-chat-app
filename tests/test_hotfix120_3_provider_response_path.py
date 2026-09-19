@@ -18,7 +18,7 @@ def test_gemini_official_response_envelope_has_no_unbound_model(monkeypatch):
     seat = next(s for s in providers.get_seats() if s.key == "gemini")
     result = providers.call_official(seat, "hello", "gemini-3.8-flash", "test-key")
     assert result["text"] == "Gemini OK"
-    assert result["provider_reported_model"] == ""
+    assert result["provider_reported_model"] == "gemini-3.8-flash"
 
 
 def test_live_cascade_telemetry_renderer_exists_and_does_not_execute_requests(monkeypatch):
