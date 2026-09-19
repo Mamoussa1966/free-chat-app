@@ -1,3 +1,9 @@
+# HOTFIX130 — AUTHORITATIVE RESULT COUNTER / UI STATE CONSISTENCY
+
+Version: `HOTFIX130`
+
+Built directly from the complete HOTFIX128 artifact. This is a presentation-only hardening layer: authoritative runtime accounting is unchanged. The UI now reports state-specific counters and never collapses `DISPATCH_REJECTED` or `NOT_CONFIGURED` into a generic failure count.
+
 # HOTFIX128 — RESULT STATUS SEMANTICS HARDENING
 
 - Narrow semantic hardening on top of HOTFIX127.

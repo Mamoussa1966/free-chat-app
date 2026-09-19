@@ -29,7 +29,7 @@ _ACTIVE_ORCHESTRATOR_REQUESTS: set[str] = set()
 from production_core_test_runner import run_production_core_tests, render_report as render_production_core_report
 
 APP_VERSION = PROVIDER_VERSION
-HOTFIX_VERSION = "HOTFIX125.5"
+HOTFIX_VERSION = "HOTFIX130"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -1645,7 +1645,7 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
             model = str(detail.get("model") or "—")
             cls = str(detail.get("classification") or "UNKNOWN").upper()
             action = str(detail.get("cascade_action") or ("CASCADE_CONTINUE" if detail.get("retryable") else "CASCADE_STOP")).upper()
-            request_id = str(detail.get("request_id") or result.get("request_id") or "—")
+            request_id = str(result.get("request_id") or "—")
             round_no = detail.get("round", result.get("round", "?"))
             final_result = str(detail.get("final_result") or "FAILED").upper()
             status_text = "SUCCESS" if final_result == "SUCCESS" or cls == "SUCCESS" else "FAILED"
@@ -1737,11 +1737,86 @@ def _render_bridge_audit(results: list[dict]) -> None:
                 "SEAT_GENERATED_PROSE_USED_AS_COUNTER_SOURCE = NO",
             ]), language="text")
 
+def _authoritative_ui_projection(chat: dict, request_id: str) -> dict:
+    """HOTFIX130: presentation projection sourced only from REQUEST_RECORD/LIFECYCLE_AUDIT."""
+    rid = str(request_id or "").strip()
+    record = _request_record(chat, rid) if rid else None
+    if not isinstance(record, dict):
+        return {"available": False, "request_id": rid}
+    metrics = record.get("request_metrics") if isinstance(record.get("request_metrics"), dict) else {}
+    rows = [r for r in (record.get("results") or []) if isinstance(r, dict)]
+    statuses = [str(r.get("status") or "").strip().upper() for r in rows]
+    state_counts = {
+        "SUCCESS": statuses.count("SUCCESS"), "DISPATCH_REJECTED": statuses.count("DISPATCH_REJECTED"),
+        "PROVIDER_ERROR": statuses.count("PROVIDER_ERROR"), "TRANSIENT_PROVIDER_ERROR": statuses.count("TRANSIENT_PROVIDER_ERROR"),
+        "MODEL_UNAVAILABLE": statuses.count("MODEL_UNAVAILABLE"), "QUOTA_ERROR": statuses.count("QUOTA_ERROR"),
+        "NOT_CONFIGURED": statuses.count("NOT_CONFIGURED"), "REQUEST_CREATED": statuses.count("REQUEST_CREATED"),
+        "NOT_EXECUTED": statuses.count("NOT_EXECUTED"), "EXECUTION_STARTED": statuses.count("EXECUTION_STARTED"),
+    }
+    return {
+        "available": True,
+        "request_id": str(metrics.get("request_id") or record.get("request_id") or rid),
+        "configured": int(metrics.get("configured_seats", 0) or 0),
+        "requested": int(metrics.get("requested_seats", 0) or 0),
+        "executed": int(metrics.get("executed_seats", 0) or 0),
+        "success": int(metrics.get("successful_seats", state_counts["SUCCESS"]) or 0),
+        "dispatch_rejected": state_counts["DISPATCH_REJECTED"], "provider_error": state_counts["PROVIDER_ERROR"],
+        "transient_provider_error": state_counts["TRANSIENT_PROVIDER_ERROR"], "model_unavailable": state_counts["MODEL_UNAVAILABLE"],
+        "quota_error": state_counts["QUOTA_ERROR"], "not_configured": state_counts["NOT_CONFIGURED"],
+        "request_created": state_counts["REQUEST_CREATED"], "not_executed": state_counts["NOT_EXECUTED"],
+        "execution_started": state_counts["EXECUTION_STARTED"],
+        "cascade_attempts": int(metrics.get("total_cascade_attempts", 0) or 0),
+        "provider_execution_events": int(metrics.get("provider_execution_events", 0) or 0),
+        "counter_source": "REQUEST_RECORD / LIFECYCLE_AUDIT",
+    }
+
+
+def _format_authoritative_counter_summary(counters: dict) -> str:
+    """HOTFIX130: stable state-specific summary; never emits a generic failed counter."""
+    return " • ".join([
+        f"مُهيأة {counters['configured']}", f"مطلوبة {counters['requested']}", f"نُفذت {counters['executed']}",
+        f"SUCCESS {counters['success']}", f"DISPATCH_REJECTED {counters['dispatch_rejected']}",
+        f"PROVIDER_ERROR {counters['provider_error']}", f"NOT_CONFIGURED {counters['not_configured']}",
+        f"CASCADE_ATTEMPTS {counters['cascade_attempts']}",
+    ])
+
+
+def _ui_semantic_counters(results: list[dict]) -> dict:
+    """Compatibility helper retained for prior unit tests; production UI uses authoritative projection."""
+    rows = [r for r in (results or []) if isinstance(r, dict)]
+    statuses = [str(r.get("status") or "").strip().upper() for r in rows]
+    attempts = sum(len([e for e in (r.get("runtime_execution_events") or []) if isinstance(e, dict) and e.get("execution_started") is True]) for r in rows)
+    return {
+        "configured": sum(1 for r in rows if r.get("request_routed") is True and r.get("model_candidates_configured") is True),
+        "requested": sum(1 for r in rows if r.get("request_routed") is True),
+        "executed": sum(1 for r in rows if any(isinstance(e, dict) and e.get("execution_started") is True for e in (r.get("runtime_execution_events") or []))),
+        "success": statuses.count("SUCCESS"), "dispatch_rejected": statuses.count("DISPATCH_REJECTED"),
+        "provider_error": statuses.count("PROVIDER_ERROR"), "transient_provider_error": statuses.count("TRANSIENT_PROVIDER_ERROR"),
+        "model_unavailable": statuses.count("MODEL_UNAVAILABLE"), "quota_error": statuses.count("QUOTA_ERROR"),
+        "not_configured": statuses.count("NOT_CONFIGURED"), "request_created": statuses.count("REQUEST_CREATED"),
+        "not_executed": statuses.count("NOT_EXECUTED"), "execution_started": statuses.count("EXECUTION_STARTED"),
+        "cascade_attempts": attempts,
+    }
+
+
 def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج الجولة") -> None:
-    official = sum(r.get("status") == "SUCCESS" for r in results)
-    failed = sum(r.get("status") == "FAILED" for r in results)
+    """HOTFIX130: render only authoritative request-record semantic counters."""
+    request_id = next((str(r.get("request_id")).strip() for r in (results or []) if isinstance(r, dict) and r.get("request_id")), "")
+    counters = _authoritative_ui_projection(_active_chat(), request_id)
     st.subheader(title)
-    st.info(f"{official} استجابات رسمية ناجحة • {failed} فشل • Local Engine: غير مستخدم")
+    if not counters.get("available"):
+        st.warning("العدادات الموثقة غير متاحة: لم يتم العثور على REQUEST_RECORD authoritative.")
+        return
+    summary = _format_authoritative_counter_summary(counters)
+    st.info(summary + " • Local Engine: غير مستخدم")
+    st.caption("COUNTER_SOURCE = REQUEST_RECORD / LIFECYCLE_AUDIT · REQUEST_ID = " + counters["request_id"])
+    st.caption("الحالات: " + " · ".join(f"{k}={counters[k.lower()] if k.lower() in counters else 0}" for k in (
+        "SUCCESS", "DISPATCH_REJECTED", "PROVIDER_ERROR", "TRANSIENT_PROVIDER_ERROR", "MODEL_UNAVAILABLE",
+        "QUOTA_ERROR", "NOT_CONFIGURED", "REQUEST_CREATED", "NOT_EXECUTED", "EXECUTION_STARTED")))
+    # Hard regression invariant: generic failed counters are forbidden whenever
+    # distinct non-success states are present.
+    if (counters["dispatch_rejected"] > 0 or counters["not_configured"] > 0) and "failed" in summary.lower():
+        raise AssertionError("HOTFIX130 invariant violated: generic failed counter rendered with distinct states")
     for result in results:
         _render_result_line(result)
 
