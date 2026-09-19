@@ -1,4 +1,4 @@
-# HOTFIX125.3 — CONTINUATION RUNTIME GATE + BRIDGE ISOLATION HARDENING
+# HOTFIX125.5 — FINAL CONTINUATION FAIL-CLOSED + AUDIT AUTHORITY HARDENING
 
 Limited patch on top of HOTFIX125.1.
 
@@ -29,3 +29,10 @@ Limited patch on top of HOTFIX125.1.
 
 ## Preservation of HOTFIX125.1 contract
 - REQUEST CONTINUATION + BRIDGE ISOLATION REGRESSION FIX behavior remains covered by the existing regression suite.
+
+
+## HOTFIX125.5
+- Continuation markers are fail-closed: they cannot fall through into normal Request-ID allocation.
+- Full V23 audit targets the requested continuation Request ID when a continuation gate exists, not the latest accidentally-created request.
+- Security audit consumes application-owned runtime bridge/continuation evidence and cannot remain PASS after a recorded leak or failed transaction.
+- Added focused regression tests for continuation detection, unknown-ID rejection, bridge-leak failure, and provider-execution blocking.

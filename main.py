@@ -29,7 +29,7 @@ _ACTIVE_ORCHESTRATOR_REQUESTS: set[str] = set()
 from production_core_test_runner import run_production_core_tests, render_report as render_production_core_report
 
 APP_VERSION = PROVIDER_VERSION
-HOTFIX_VERSION = "HOTFIX125.4"
+HOTFIX_VERSION = "HOTFIX125.5"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -581,7 +581,7 @@ def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | N
     text = str(prompt or "")
     requested_id = _extract_requested_request_id(text)
     continuation_marker = bool(re.search(
-        r"(?is)(?:\bcontinue\b|\bcontinuation\b|\bresume\b|\bcontinue_request\b|continuation_request_id\s*[:=]|استكمال|استمر|تابع|نفس\s+(?:الطلب|الـ?request)|same\s+(?:request|runtime))",
+        r"(?is)(?:\bcontinue\b|\bcontinuation\b|\bcontinue_request\b|\bcontinuation_request_id\b|\bresume\b|\bcontinuing\b|\bcontinue\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)|\bno\s+new\s+(?:request|round|bridge)|\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)|استكمال|استمر|تابع|تكملة|استكمال\s+نفس|نفس\s+(?:الطلب|الـ?request)|لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)|بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)",
         text,
     ))
     # Explicit machine/control wording is sufficient even if a UI translation removes
@@ -1742,11 +1742,26 @@ def run_app() -> None:
         # path may execute for a valid continuation.
         requested_request_id, continuation_record, is_continuation = _continuation_request_record(prompt, chat)
         if is_continuation:
+            # HARD FAIL-CLOSED: any continuation marker must be resolved before the
+            # normal-request path. It is forbidden to fall through into fingerprinting
+            # or uuid generation, even when the ID is malformed/unknown.
             if not requested_request_id:
                 st.error("Continuation rejected: an existing Request ID is required. No Request ID will be generated.")
+                st.session_state.last_continuation_audit = {
+                    "type": "CONTINUATION_GATE", "mode": "REJECTED",
+                    "requested_request_id": "", "actual_request_id": "",
+                    "provider_execution": 0, "cascade": 0, "new_round": 0, "new_bridge": 0,
+                    "source": "PRE_ALLOCATION_HARD_GATE", "runtime_gate": "FAIL",
+                }
                 return
             if not continuation_record:
                 st.error(f"Continuation rejected: Request ID {requested_request_id} is not present in persisted REQUEST_RECORD. No new Request ID will be generated.")
+                st.session_state.last_continuation_audit = {
+                    "type": "CONTINUATION_GATE", "mode": "REJECTED",
+                    "requested_request_id": requested_request_id, "actual_request_id": "",
+                    "provider_execution": 0, "cascade": 0, "new_round": 0, "new_bridge": 0,
+                    "source": "PERSISTED_REQUEST_RECORD_REQUIRED", "runtime_gate": "FAIL",
+                }
                 return
             if attachments:
                 st.error("Continuation is READ-ONLY and cannot accept new attachments.")
@@ -1835,7 +1850,8 @@ def run_app() -> None:
         if st.button("Run full V23 platform audit", key="v23_platform_audit"):
             chat = _active_chat()
             latest = chat.get("request_records", [])[-1] if chat.get("request_records") else {}
-            rid = str(latest.get("request_id") or "")
+            continuation_snapshot = st.session_state.get("last_continuation_audit") or {}
+            rid = str(continuation_snapshot.get("requested_request_id") or latest.get("request_id") or "")
             # Context audit is derived from the actual persisted conversation.
             _shared_context(chat, max_chars=30_000)
             st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)

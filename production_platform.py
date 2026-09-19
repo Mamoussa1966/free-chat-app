@@ -301,4 +301,24 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
             checks["NO_CREDENTIALS_IN_CHAT_STATE"] = False
         if "raw_provider_payload" in raw:
             checks["NO_RAW_PROVIDER_PAYLOADS_IN_HISTORY"] = False
+        # Application-owned runtime evidence overrides any stale/header PASS.
+        # A failed continuation gate or bridge isolation proof is a security failure.
+        for event in chat.get("audit_events", []):
+            if not isinstance(event, dict):
+                continue
+            if str(event.get("type") or "").upper() == "CONTINUATION_GATE" and str(event.get("runtime_gate") or "").upper() != "PASS":
+                checks["REQUEST_ID_AUTHORITY_PRESERVED"] = False
+        for record in chat.get("request_records", []):
+            if not isinstance(record, dict):
+                continue
+            for result in record.get("results", []) if isinstance(record.get("results"), list) else []:
+                audit = result.get("bridge_transaction_audit") if isinstance(result, dict) else None
+                if not isinstance(audit, dict):
+                    continue
+                if any(audit.get(k) == "YES" for k in ("USER_PROMPT_CONTAINS_VALUE", "GEMINI_INPUT_PROMPT_CONTAINS_VALUE")):
+                    checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
+                if audit.get("BRIDGE_STATE_CONTAINS_VALUE") != "YES":
+                    checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
+                if any(audit.get(k) != "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION")):
+                    checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
     return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks, "version": PLATFORM_VERSION}
