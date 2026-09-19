@@ -17,7 +17,7 @@ def test_hotfix116_duplicate_fingerprint_is_atomically_reserved():
 
 
 def test_hotfix116_release_identity_is_canonical():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 
 
 def test_hotfix116_gate_has_one_request_per_logical_fingerprint():

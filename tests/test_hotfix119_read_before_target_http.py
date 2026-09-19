@@ -27,4 +27,4 @@ def test_hotfix119_application_owned_read_is_resolved_before_target_http():
     assert audit["BRIDGE_STATE_CONTAINS_VALUE"] == "YES"
 
 def test_hotfix119_release_identity():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"

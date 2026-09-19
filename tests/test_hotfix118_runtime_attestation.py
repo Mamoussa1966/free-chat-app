@@ -49,4 +49,4 @@ def test_hotfix118_tampered_post_seal_audit_fails_gate():
 
 
 def test_hotfix118_release_identity():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120.1-GEMINI-LIFECYCLE-HARDENED"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX120.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
