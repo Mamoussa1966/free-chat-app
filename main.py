@@ -17,7 +17,7 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
-from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit
+from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX134"
+HOTFIX_VERSION = "HOTFIX135"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -691,7 +691,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 
 def _init_state() -> None:
-    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}}
+    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}, "last_v23_multi_request_regression": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -2230,6 +2230,19 @@ def run_app() -> None:
             st.json(report)
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
+
+        st.divider()
+        st.subheader("🧪 V23 Production Regression — Independent Requests")
+        st.caption("يفحص عدة REQUEST_RECORDs مستقلة: Request ID / Bridge ID / counters / Seat+Round / execution events.")
+        if st.button("Run multi-Request Production Regression", key="v23_multi_request_regression"):
+            chat = _active_chat()
+            regression = multi_request_regression_audit(chat)
+            st.session_state.last_v23_multi_request_regression = regression
+        regression = st.session_state.get("last_v23_multi_request_regression") or {}
+        if regression:
+            st.json(regression)
+        else:
+            st.info("يحتاج الاختبار إلى طلبين مستقلين مكتملين على الأقل؛ لا يتم عرض PASS قبل توفرهما.")
 
 
 if __name__ == "__main__":

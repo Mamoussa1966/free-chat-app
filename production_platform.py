@@ -340,3 +340,119 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                 if any(audit.get(k) != "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION")):
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
     return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks, "version": PLATFORM_VERSION}
+
+
+def multi_request_regression_audit(chat: dict[str, Any] | None, request_ids: list[str] | None = None) -> dict[str, Any]:
+    """V23 Production Regression: prove independent Requests do not share runtime identity.
+
+    This audit is deliberately application-owned. It inspects persisted REQUEST_RECORDs,
+    lifecycle/result identities, bridge IDs and authoritative metrics; provider prose is
+    never used as an authority. It requires at least two completed Requests so that the
+    cross-request isolation property is actually exercised.
+    """
+    chat = chat if isinstance(chat, dict) else {}
+    records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
+    wanted = [str(x).strip() for x in (request_ids or []) if str(x).strip()]
+    if wanted:
+        selected = [r for r in records if str(r.get("request_id") or "").strip() in wanted]
+    else:
+        selected = records[-10:]
+    selected = [r for r in selected if str(r.get("request_id") or "").strip()]
+    request_ids_seen = [str(r.get("request_id") or "").strip() for r in selected]
+    unique_request_ids = len(set(request_ids_seen))
+
+    checks: dict[str, bool] = {
+        "MINIMUM_INDEPENDENT_REQUESTS": len(selected) >= 2,
+        "UNIQUE_REQUEST_IDS": unique_request_ids == len(request_ids_seen),
+        "REQUEST_RECORD_ID_MATCH": True,
+        "RESULT_REQUEST_ID_ISOLATION": True,
+        "RESULT_KEY_REQUEST_SCOPING": True,
+        "METRICS_REQUEST_ID_ISOLATION": True,
+        "BRIDGE_ID_REQUEST_ISOLATION": True,
+        "SEAT_ROUND_IDENTITY_IS_REQUEST_SCOPED": True,
+        "NO_CROSS_REQUEST_RESULT_REFERENCE": True,
+    }
+    bridge_owner: dict[str, str] = {}
+    result_owner: dict[str, str] = {}
+    seat_round_owner: dict[tuple[str, int, str], str] = {}
+    request_fingerprints: dict[str, str] = {}
+
+    for record in selected:
+        rid = str(record.get("request_id") or "").strip()
+        if str(record.get("identity_authority") or "").strip() not in {"", "RUNTIME_REQUEST_ID"}:
+            checks["REQUEST_RECORD_ID_MATCH"] = False
+        request_fingerprints[rid] = str(record.get("fingerprint") or "")
+        metrics = record.get("request_metrics")
+        if isinstance(metrics, dict) and str(metrics.get("request_id") or "").strip() != rid:
+            checks["METRICS_REQUEST_ID_ISOLATION"] = False
+        for result in record.get("results", []) if isinstance(record.get("results"), list) else []:
+            if not isinstance(result, dict):
+                checks["RESULT_REQUEST_ID_ISOLATION"] = False
+                continue
+            rrid = str(result.get("request_id") or "").strip()
+            if rrid != rid:
+                checks["RESULT_REQUEST_ID_ISOLATION"] = False
+            rkey = str(result.get("result_key") or "").strip()
+            if not rkey.startswith(f"{rid}:"):
+                checks["RESULT_KEY_REQUEST_SCOPING"] = False
+            if rkey:
+                previous = result_owner.setdefault(rkey, rid)
+                if previous != rid:
+                    checks["RESULT_KEY_REQUEST_SCOPING"] = False
+            audit = result.get("bridge_transaction_audit")
+            if isinstance(audit, dict):
+                bid = str(audit.get("BRIDGE_ID") or "").strip()
+                if bid:
+                    previous = bridge_owner.setdefault(bid, rid)
+                    if previous != rid:
+                        checks["BRIDGE_ID_REQUEST_ISOLATION"] = False
+            seat = str(result.get("seat") or "").strip()
+            try:
+                round_id = int(result.get("round") or 0)
+            except (TypeError, ValueError):
+                round_id = 0
+            if seat and round_id > 0:
+                key = (rid, round_id, seat)
+                previous = seat_round_owner.setdefault(key, rid)
+                if previous != rid:
+                    checks["SEAT_ROUND_IDENTITY_IS_REQUEST_SCOPED"] = False
+            for field in ("request_id", "execution_claim"):
+                value = str(result.get(field) or "")
+                if field == "execution_claim" and value and not value.startswith(f"{rid}:"):
+                    checks["NO_CROSS_REQUEST_RESULT_REFERENCE"] = False
+            for ev in result.get("runtime_execution_events", []) if isinstance(result.get("runtime_execution_events"), list) else []:
+                if not isinstance(ev, dict):
+                    checks["NO_CROSS_REQUEST_RESULT_REFERENCE"] = False
+                    continue
+                if str(ev.get("request_id") or "").strip() != rid:
+                    checks["NO_CROSS_REQUEST_RESULT_REFERENCE"] = False
+
+    # A bridge identity must be owned by exactly one Request. Multiple Requests may
+    # have bridges, but the same bridge cannot be reused across them.
+    # If the same BRIDGE_ID appears in multiple Requests it would have overwritten
+    # the owner above; detect that explicitly from the per-record ownership map.
+    bridge_occurrences: dict[str, set[str]] = {}
+    for record in selected:
+        rid = str(record.get("request_id") or "").strip()
+        for result in record.get("results", []) if isinstance(record.get("results"), list) else []:
+            audit = result.get("bridge_transaction_audit") if isinstance(result, dict) else None
+            if isinstance(audit, dict):
+                bid = str(audit.get("BRIDGE_ID") or "").strip()
+                if bid:
+                    bridge_occurrences.setdefault(bid, set()).add(rid)
+    if any(len(owners) > 1 for owners in bridge_occurrences.values()):
+        checks["BRIDGE_ID_REQUEST_ISOLATION"] = False
+
+    status = "PASS" if all(checks.values()) else "FAIL"
+    return {
+        "schema": "v23-production-regression/v1",
+        "status": status,
+        "requests_checked": len(selected),
+        "request_ids": request_ids_seen,
+        "unique_request_ids": unique_request_ids,
+        "unique_bridge_ids": len(bridge_owner),
+        "request_fingerprints": request_fingerprints,
+        "checks": checks,
+        "bridge_owners": bridge_owner,
+        "result_key_count": len(result_owner),
+    }

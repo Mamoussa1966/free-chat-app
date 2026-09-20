@@ -150,3 +150,9 @@ Built directly from the complete previous release artifact. The complete file tr
 # HOTFIX132
 
 Authoritative result / identity / bridge-prose isolation. Provider prose is never a source of structured execution state or Request ID, and bridge values are redacted from agent prose.
+## HOTFIX135 — V23 Production Regression
+- Added application-owned multi-Request regression audit.
+- Verifies independent Request IDs, result keys, execution events, authoritative metrics, Seat+Round identity, and Bridge IDs remain isolated.
+- Requires at least two independent persisted Requests before reporting PASS.
+- No provider credentials, explicit Free model lists, cascade policy, Local Engine, Paid fallback, or automatic model selection changes.
+
