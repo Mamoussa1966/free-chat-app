@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX142"
+HOTFIX_VERSION = "HOTFIX143"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -1933,10 +1933,13 @@ def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_
     bridge_values = sorted(set(bridge_values))
 
     request_ids_ok = bool(rid) and all(str(r.get("request_id") or "").strip() == rid for r in rows if r.get("request_id"))
+    # HOTFIX143: match control-plane field names as standalone tokens only.
+    # Labels such as AGENT_PROSE_REQUEST_ID_OVERRIDE are themselves audit prose and
+    # must never be mistaken for an attempted runtime identity override.
     content_control_pattern = re.compile(
-        r"(?i)(?:REQUEST_ID|Request ID|RequestID|REQUEST_STATUS|STATUS|Classification|Cascade Action|Executed Model|Free Cascade|"
+        r"(?i)(?<![A-Z0-9_])(?:REQUEST_ID|Request ID|RequestID|REQUEST_STATUS|STATUS|Classification|Cascade Action|Executed Model|Free Cascade|"
         r"BRIDGE_WRITE|BRIDGE_RESULT|BRIDGE_READ(?:_STATUS)?|RESULT[_ ]?ROW|TOTAL_CASCADE_ATTEMPTS|PROVIDER_EXECUTION_EVENTS|ATTEMPT|"
-        r"USER_PROMPT_CONTAINS_VALUE|GEMINI_INPUT_PROMPT_CONTAINS_VALUE|BRIDGE_STATE_CONTAINS_VALUE)\s*[:=]"
+        r"USER_PROMPT_CONTAINS_VALUE|GEMINI_INPUT_PROMPT_CONTAINS_VALUE|BRIDGE_STATE_CONTAINS_VALUE)(?![A-Z0-9_])\s*[:=]"
     )
     content_control_leak = False
     bridge_value_leak = False
@@ -1972,6 +1975,10 @@ def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_
         "BRIDGE_CONTROL_RECORD_REDACTED": "PASS" if bridge_redacted else "FAIL",
         "BRIDGE_VALUE_PROSE_LEAK": "FAIL" if bridge_value_leak else "PASS",
         "CONTROL_PROSE_LEAK": "FAIL" if content_control_leak else "PASS",
+        # HOTFIX143: runtime identity is authoritative even when untrusted prose
+        # contains a control-plane-looking statement. A prose attempt is not a
+        # runtime mutation; only structured application-owned fields can fail this gate.
+        "PROSE_ISOLATION_AUTHORITATIVE_GATE": "PASS" if structured_identity_ok and request_ids_ok else "FAIL",
     }
 
 
@@ -2036,6 +2043,7 @@ def _render_bridge_audit(results: list[dict]) -> None:
         f"BRIDGE_VALUE_PROSE_LEAK = {prose_audit['BRIDGE_VALUE_PROSE_LEAK']}",
         f"CONTROL_PROSE_LEAK = {prose_audit['CONTROL_PROSE_LEAK']}",
         f"AUTHORITATIVE_RUNTIME_IDENTITY = {prose_audit['AUTHORITATIVE_RUNTIME_IDENTITY']}",
+        f"PROSE_ISOLATION_AUTHORITATIVE_GATE = {prose_audit['PROSE_ISOLATION_AUTHORITATIVE_GATE']}",
     ]), language="text")
 
 def _ui_semantic_counters(results: list[dict]) -> dict:

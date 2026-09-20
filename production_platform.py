@@ -375,6 +375,10 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
         "MODEL_LISTS_UNCHANGED_BY_PLATFORM_LAYER": True,
         "LOCAL_ENGINE_DISABLED_BY_CONTRACT": True,
         "PAID_FALLBACK_DISABLED_BY_CONTRACT": True,
+        # HOTFIX143: application-owned request/result identity is the security source
+        # of truth. Agent prose is presentation-only and cannot fail this gate by
+        # merely containing a conflicting identity label.
+        "PROSE_ISOLATION_AUTHORITATIVE_GATE": True,
     }
     for chat in chats or []:
         raw = json.dumps(chat, ensure_ascii=False, default=str)
@@ -402,4 +406,26 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
                 if any(audit.get(k) != "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION")):
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
+
+        # HOTFIX143: verify authoritative identity from persisted application-owned
+        # request records and runtime execution events only. Never inspect agent prose
+        # to decide this gate.
+        for record in chat.get("request_records", []):
+            if not isinstance(record, dict):
+                continue
+            rid = str(record.get("request_id") or "").strip()
+            if not rid:
+                checks["PROSE_ISOLATION_AUTHORITATIVE_GATE"] = False
+                continue
+            results = record.get("results") if isinstance(record.get("results"), list) else []
+            for result in results:
+                if not isinstance(result, dict):
+                    continue
+                if str(result.get("request_id") or "").strip() != rid:
+                    checks["PROSE_ISOLATION_AUTHORITATIVE_GATE"] = False
+                for event in result.get("runtime_execution_events") or []:
+                    if not isinstance(event, dict) or event.get("execution_started") is not True:
+                        continue
+                    if str(event.get("request_id") or "").strip() != rid:
+                        checks["PROSE_ISOLATION_AUTHORITATIVE_GATE"] = False
     return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks, "version": PLATFORM_VERSION}
