@@ -15,7 +15,7 @@ import requests
 from production_core import FreeCascadeController, ProviderExecutionContract, TimeoutRetryPolicy
 
 VERSION = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
-HOTFIX_RELEASE_VERSION = "V23.0-HOTFIX137-RESTORED-HOTFIX134-BASELINE"
+HOTFIX_RELEASE_VERSION = "V23.0-HOTFIX140-A-B-C-LIFECYCLE-HARDENED"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
 EXTRA_AGENTS_SETTING = "AI_COUNCIL_EXTRA_AGENTS"

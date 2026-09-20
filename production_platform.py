@@ -196,6 +196,69 @@ def session_integrity_audit(chat: dict[str, Any] | None, request_id: str = "") -
     }
 
 
+
+def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any]:
+    """HOTFIX140: verify three already-executed independent Request lifecycles.
+
+    This audit is intentionally observational: it never fabricates Requests, rounds,
+    Bridges, provider executions, or success. To PASS, the active conversation must
+    contain three distinct persisted Request Records created by three fresh
+    submissions (A/B/C), each with its own lifecycle identity and no duplicate
+    Seat+Round execution within that Request.
+    """
+    chat = chat if isinstance(chat, dict) else {}
+    records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
+    recent = records[-3:]
+    request_ids = [str(r.get("request_id") or "").strip() for r in recent]
+    unique_request_ids = len(set(x for x in request_ids if x))
+    bridge_ids: list[str] = []
+    seat_round_keys: list[tuple[str, int, str]] = []
+    per_request: list[dict[str, Any]] = []
+    for r in recent:
+        rid = str(r.get("request_id") or "").strip()
+        bridges_for_request: list[str] = []
+        results = r.get("results") if isinstance(r.get("results"), list) else []
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            seat = str(result.get("seat_key") or result.get("seat") or "").strip()
+            try:
+                rnd = int(result.get("round") or 0)
+            except (TypeError, ValueError):
+                rnd = 0
+            if seat and rnd > 0:
+                seat_round_keys.append((rid, rnd, seat))
+            audit = result.get("bridge_transaction_audit")
+            if isinstance(audit, dict) and audit.get("BRIDGE_ID"):
+                bid = str(audit["BRIDGE_ID"])
+                bridge_ids.append(bid)
+                bridges_for_request.append(bid)
+        per_request.append({
+            "request_id": rid,
+            "state": str(r.get("state") or ""),
+            "rounds": r.get("rounds_executed") or r.get("rounds") or 0,
+            "bridge_ids": sorted(set(bridges_for_request)),
+            "provider_execution_events": r.get("request_metrics", {}).get("provider_execution_events", 0) if isinstance(r.get("request_metrics"), dict) else 0,
+        })
+    duplicate_seat_round = len(seat_round_keys) - len(set(seat_round_keys))
+    nonempty = len(request_ids) == 3 and all(request_ids)
+    ok = nonempty and unique_request_ids == 3 and len(set(bridge_ids)) == len(bridge_ids) and duplicate_seat_round == 0
+    return {
+        "status": "PASS" if ok else "NOT_PROVEN",
+        "gate": "PASS" if ok else "NOT_PROVEN",
+        "required_request_count": 3,
+        "observed_request_records": len(records),
+        "audited_request_ids": request_ids,
+        "unique_request_ids": unique_request_ids,
+        "unique_bridge_ids": len(set(bridge_ids)),
+        "duplicate_seat_round_executions": max(0, duplicate_seat_round),
+        "per_request": per_request,
+        "evidence_source": "APPLICATION_OWNED_REQUEST_RECORDS_ONLY",
+        "provider_or_agent_prose_used_as_identity": False,
+        "note": "Run after three separate fresh chat submissions A, B, and C; one chat submission remains one Request lifecycle.",
+    }
+
+
 def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, context_meta: dict[str, Any] | None, health: list[dict[str, Any]] | None, security: dict[str, Any] | None, regression: dict[str, Any] | None) -> dict[str, Any]:
     """Assemble one application-owned V23 continuation report from runtime records."""
     chat = chat if isinstance(chat, dict) else {}
