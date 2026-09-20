@@ -375,7 +375,7 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
         "MODEL_LISTS_UNCHANGED_BY_PLATFORM_LAYER": True,
         "LOCAL_ENGINE_DISABLED_BY_CONTRACT": True,
         "PAID_FALLBACK_DISABLED_BY_CONTRACT": True,
-        # HOTFIX143: application-owned request/result identity is the security source
+        # HOTFIX144: application-owned request/result identity is the security source
         # of truth. Agent prose is presentation-only and cannot fail this gate by
         # merely containing a conflicting identity label.
         "PROSE_ISOLATION_AUTHORITATIVE_GATE": True,
@@ -407,7 +407,7 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                 if any(audit.get(k) != "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION")):
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
 
-        # HOTFIX143: verify authoritative identity from persisted application-owned
+        # HOTFIX144: verify authoritative identity from persisted application-owned
         # request records and runtime execution events only. Never inspect agent prose
         # to decide this gate.
         for record in chat.get("request_records", []):

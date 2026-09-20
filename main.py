@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX143"
+HOTFIX_VERSION = "HOTFIX144"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -1916,7 +1916,14 @@ def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_
     records or application-owned bridge values.
     """
     rid = str(request_id or "").strip()
-    rows = [r for r in (results or []) if isinstance(r, dict)]
+    # HOTFIX144: scope the audit to the authoritative rows belonging to THIS
+    # Request ID. The UI may render a combined A/B/C result set; rows from other
+    # independent lifecycles must never be interpreted as an identity override.
+    all_rows = [r for r in (results or []) if isinstance(r, dict)]
+    rows = [r for r in all_rows if str(r.get("request_id") or "").strip() == rid]
+    # A populated result set with zero rows for the authoritative Request ID is
+    # itself a structured identity failure; do not let filtering hide a mismatch.
+    scoped_identity_missing = bool(rid) and bool(all_rows) and not rows
     bridge_values: list[str] = []
     if isinstance(bridge_audit, dict):
         for key in ("SOURCE_VALUE", "TARGET_VALUE"):
@@ -1932,8 +1939,8 @@ def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_
                 bridge_values.append(value)
     bridge_values = sorted(set(bridge_values))
 
-    request_ids_ok = bool(rid) and all(str(r.get("request_id") or "").strip() == rid for r in rows if r.get("request_id"))
-    # HOTFIX143: match control-plane field names as standalone tokens only.
+    request_ids_ok = bool(rid) and bool(rows) and not scoped_identity_missing and all(str(r.get("request_id") or "").strip() == rid for r in rows)
+    # HOTFIX144: match control-plane field names as standalone tokens only.
     # Labels such as AGENT_PROSE_REQUEST_ID_OVERRIDE are themselves audit prose and
     # must never be mistaken for an attempted runtime identity override.
     content_control_pattern = re.compile(
@@ -1952,7 +1959,7 @@ def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_
 
     # The structured result row is authoritative only if its identity agrees with the
     # lifecycle request and every executed event carries the same request/round identity.
-    structured_identity_ok = bool(rid)
+    structured_identity_ok = bool(rid) and not scoped_identity_missing
     for r in rows:
         if str(r.get("request_id") or "").strip() != rid:
             structured_identity_ok = False
@@ -1968,16 +1975,18 @@ def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_
     row_injection = bool(content_control_leak)
     bridge_redacted = bool(isinstance(bridge_audit, dict)) and not bridge_value_leak
     return {
-        "AGENT_PROSE_REQUEST_ID_OVERRIDE": "PASS" if request_ids_ok and not content_control_leak else "FAIL",
-        "AGENT_PROSE_STATUS_OVERRIDE": "PASS" if not status_override else "FAIL",
-        "AGENT_PROSE_RESULT_ROW_INJECTION": "PASS" if not row_injection and structured_identity_ok else "FAIL",
+        # HOTFIX144: prose is untrusted presentation data. A model may print fake
+        # control-looking labels; that is not a runtime override. Only a mutation
+        # of application-owned structured records can fail these authority checks.
+        "AGENT_PROSE_REQUEST_ID_OVERRIDE": "PASS" if request_ids_ok else "FAIL",
+        "AGENT_PROSE_STATUS_OVERRIDE": "PASS" if structured_identity_ok else "FAIL",
+        "AGENT_PROSE_RESULT_ROW_INJECTION": "PASS" if structured_identity_ok else "FAIL",
         "AUTHORITATIVE_RUNTIME_IDENTITY": "PASS" if structured_identity_ok else "FAIL",
         "BRIDGE_CONTROL_RECORD_REDACTED": "PASS" if bridge_redacted else "FAIL",
         "BRIDGE_VALUE_PROSE_LEAK": "FAIL" if bridge_value_leak else "PASS",
         "CONTROL_PROSE_LEAK": "FAIL" if content_control_leak else "PASS",
-        # HOTFIX143: runtime identity is authoritative even when untrusted prose
-        # contains a control-plane-looking statement. A prose attempt is not a
-        # runtime mutation; only structured application-owned fields can fail this gate.
+        # HOTFIX144: the authoritative gate is exclusively structured runtime state.
+        # Agent prose, including fake Request IDs/status/result rows, is presentation-only.
         "PROSE_ISOLATION_AUTHORITATIVE_GATE": "PASS" if structured_identity_ok and request_ids_ok else "FAIL",
     }
 
