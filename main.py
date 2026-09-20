@@ -18,6 +18,7 @@ from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
+from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
@@ -31,6 +32,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
 HOTFIX_VERSION = "HOTFIX144"
+PLATFORM_RELEASE_VERSION = "V24.0-HOTFIX145-CONVERSATION-RUNTIME-PROFESSIONAL-CHAT-FOUNDATION"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -604,7 +606,7 @@ def _now() -> str:
 
 
 def _new_chat() -> dict:
-    return {
+    chat = {
         "id": uuid.uuid4().hex,
         "title": "محادثة جديدة",
         "created_at": _now(),
@@ -614,6 +616,8 @@ def _new_chat() -> dict:
         "history_identity_ledger": [],
         "result_keys": [],
     }
+    ensure_conversation_state(chat)
+    return chat
 
 
 def _ensure_chat_identity_state(chat: dict) -> None:
@@ -621,6 +625,7 @@ def _ensure_chat_identity_state(chat: dict) -> None:
     chat.setdefault("request_records", [])
     chat.setdefault("history_identity_ledger", [])
     chat.setdefault("result_keys", [])
+    ensure_conversation_state(chat)
 
 
 def _extract_requested_request_id(prompt: str) -> str:
@@ -813,6 +818,7 @@ def _shared_context(chat: dict, exclude_message_id: str | None = None, max_chars
                 lines.append(f"{item.get('seat', 'AI')} [OFFICIAL API] HISTORICAL OUTPUT:\n{text}")
     text, meta = compact_context([{"role": "context", "content": "\n\n".join(lines)}], max_chars=max_chars)
     chat["platform_context_meta"] = meta
+    update_context_meta(chat, meta, meta.get("digest", ""))
     try:
         st.session_state.platform_context_meta = meta
     except Exception:
@@ -1447,6 +1453,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         for round_no in range(1, total_rounds + 1):
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
+            runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no)
             lifecycle.record("PROVIDER_EXECUTION", round_id=round_no, status="STARTED")
             round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id, bridge_controls)
             seen_keys = set()
@@ -1485,6 +1492,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
             success_count = sum(1 for r in round_results if str(r.get("status") or "").upper() == "SUCCESS")
             lifecycle.finish_round(round_no, success_count, len(round_results))
+            finish_round(chat, runtime_round_id, "COMPLETED", len(round_results))
             lifecycle.record("RESPONSE_VALIDATION", round_id=round_no, status="PASS" if all(str(r.get("status") or "").upper() != "SUCCESS" or bool(r.get("content")) for r in round_results) else "FAIL")
             for r in round_results:
                 runtime_events = r.get("runtime_execution_events") or []
@@ -1511,6 +1519,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
         raise
     chat["audit_events"] = lifecycle.audit_snapshot()[-500:]
+    chat["conversation_runtime_audit"] = conversation_audit(chat)
     with _ORCHESTRATOR_REQUEST_LOCK:
         record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), None)
         if record is not None:
@@ -1526,6 +1535,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                 request_id, all_results, chat.get("audit_events", [])
             )
             record["synthesis"] = synthesize_council_results(all_results)
+            record["synthesis"]["conversation_id"] = chat.get("conversation_id")
+            record["synthesis"]["session_id"] = chat.get("session_id")
+            record["synthesis"]["provenance_count"] = sum(len(provenance_for_result(chat, current_user_message_id, int(r.get("round") or 1), r)) for r in all_results if isinstance(r, dict))
             st.session_state.last_synthesis = copy.deepcopy(record["synthesis"])
         _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
     return all_results
@@ -2193,7 +2205,7 @@ def run_app() -> None:
     chat = _active_chat()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
-    st.caption("V23 RC layers: Session Integrity · Conversation Persistence · Context Compaction · Council Synthesis · Provider Health · Security Audit · Regression Core")
+    st.caption("V24 HOTFIX145: Conversation Runtime · Session Identity · Message/Round Ledger · Result Provenance · Live Cascade Telemetry · Synthesis · Evaluation Hooks")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
@@ -2293,13 +2305,17 @@ def run_app() -> None:
         chat["request_ids"].append(fingerprint)
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
         chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID"})
+        record0 = next(r for r in chat["request_records"] if r.get("request_id") == request_id)
+        attach_request_identity(record0, chat, user_message_id, request_id)
         # The fingerprint is now durably present in the active chat identity
         # ledger; release the process gate so unrelated requests may proceed.
         with _REQUEST_GATE_LOCK:
             _ACTIVE_REQUEST_FINGERPRINTS.discard(fingerprint)
         attachment_context = "\n".join(f"- {a.get('name')} ({a.get('mime')}, {a.get('size', 0)} bytes, sha256={a.get('sha256', '')})" for a in attachments)[:6000]
         request_no = _request_display_number(chat, request_id)
-        chat["messages"].append({"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()})
+        user_message = {"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()}
+        user_message = register_message(chat, user_message)
+        chat["messages"].append(user_message)
         if voice_audio is not None:
             chat["messages"][-1].update({"voice": True, "voice_audio_key": user_message_id, "voice_mime": voice_mime})
             st.session_state.voice_audio_store[user_message_id] = voice_audio
@@ -2341,6 +2357,13 @@ def run_app() -> None:
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1
         st.rerun()
+    runtime_audit = conversation_audit(chat)
+    with st.expander("🧭 Conversation Runtime / Provenance", expanded=False):
+        st.json(runtime_audit)
+        syn = st.session_state.get("last_synthesis") or {}
+        if syn:
+            st.caption(f"Synthesis source: {syn.get('successful_providers', [])} · provenance={syn.get('provenance_count', 0)}")
+
     if st.session_state.last_diagnostics:
         st.divider()
         _render_provider_diagnostics(st.session_state.last_diagnostics)
