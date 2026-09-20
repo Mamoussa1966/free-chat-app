@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX138"
+HOTFIX_VERSION = "HOTFIX139"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -591,69 +591,62 @@ def _extract_requested_request_id(prompt: str) -> str:
 
 
 def _extract_continuation_request_id(prompt: str, chat: dict) -> str:
-    """Resolve continuation identity strictly from persisted application state.
-
-    This function is intentionally called before fingerprinting or Request-ID allocation.
-    It never creates, mutates, or substitutes a Request ID.
-    """
-    text = str(prompt or "")
-    has_continuation = bool(re.search(r"(?i)(?:\bcontinue\b|\bcontinuation\b|\bresume\b|استكمال|استمر|تابع)", text))
-    rid = _extract_requested_request_id(text)
-    if not has_continuation or not rid:
+    """Resolve only an explicit first-line continuation command from persisted state."""
+    rid, mode = _continuation_control_prefix(prompt)
+    if mode != "EXPLICIT_CONTROL" or not rid:
         return ""
     record = _request_record(chat, rid)
     return rid if isinstance(record, dict) else ""
 
 
-def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | None, bool]:
-    """HOTFIX125.4: resolve continuation identity before *any* request allocation.
+def _continuation_control_prefix(prompt: str) -> tuple[str, str]:
+    """HOTFIX139: detect continuation only from the first non-empty control line.
 
-    A prompt containing an explicit Request ID plus continuation language is treated as
-    a continuation control message.  The persisted REQUEST_RECORD is authoritative;
-    this function never allocates, substitutes, or regenerates an ID.
+    The body of a prompt is never scanned for lifecycle keywords. A regression
+    specification may freely discuss continuation, Request A/B/C, bridge controls,
+    or "no new request" without changing a fresh submission into READ_ONLY mode.
     """
-    text = str(prompt or "")
-    requested_id = _extract_requested_request_id(text)
-    # HOTFIX138: continuation intent must be explicit.  The previous gate used
-    # broad single-word markers (for example ``continuation`` / ``استمر``), which
-    # could classify an ordinary new discussion as a continuation before Request
-    # allocation.  That produced a false fail-closed rejection on a fresh chat.
-    # A continuation is now recognized only by an explicit control phrase or by
-    # an already-persisted COMPLETED Request ID (handled below).
-    continuation_marker = bool(re.search(
-        r"(?is)(?:"
-        r"\bcontinue\s+(?:request|request\s+id|the\s+(?:same\s+)?request|the\s+(?:same\s+)?runtime)\b|"
-        r"\bcontinuation\s+(?:request|request\s+id|request_id)\b|"
-        r"\bcontinue_request\b|\bcontinuation_request_id\b|"
-        r"\bresume\s+(?:request|runtime|the\s+(?:same\s+)?request)\b|"
-        r"\bcontinuing\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)\b|"
-        r"\bno\s+new\s+(?:request|round|bridge)\b|"
-        r"\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)\b|"
-        r"استكمال\s+(?:الطلب|نفس\s+الطلب|Request)|"
-        r"استمر\s+(?:في\s+)?(?:نفس\s+الطلب|الطلب)|"
-        r"تابع\s+(?:في\s+)?(?:نفس\s+الطلب|الطلب)|"
-        r"تكملة\s+(?:الطلب|نفس\s+الطلب)|"
-        r"نفس\s+(?:الطلب|الـ?request)\s+(?:بدون|من\s+دون)\s+(?:طلب|Request)\s+جديد|"
-        r"لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد|"
-        r"بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد"
-        r")",
-        text,
-    ))
-    # HOTFIX126: an explicit persisted Request ID is itself authoritative when it
-    # points at an existing COMPLETED REQUEST_RECORD. This closes the runtime gap
-    # where the UI/test harness supplied the canonical ID but translated/trimmed
-    # the word "continuation", allowing the normal allocation path to run.
-    # A new Request ID is NEVER inferred from this rule.
-    persisted_record = _request_record(chat, requested_id) if requested_id else None
-    persisted_completed = bool(
-        isinstance(persisted_record, dict)
-        and str(persisted_record.get("state") or "").upper() == "COMPLETED"
-    )
-    is_continuation = bool(continuation_marker or persisted_completed)
-    if not is_continuation:
+    lines = [line.strip() for line in str(prompt or "").splitlines() if line.strip()]
+    first = lines[0] if lines else ""
+    if not first:
+        return "", ""
+
+    # Dedicated control forms. These are intentionally line-scoped.
+    rid_match = re.search(r"(?i)\b(?:CONTINUE_REQUEST_ID|CONTINUATION_REQUEST_ID)\s*[:=]\s*`?([0-9a-f]{16,64})`?\s*$", first)
+    if rid_match:
+        return rid_match.group(1).strip(), "EXPLICIT_CONTROL"
+
+    rid_match = re.search(r"(?i)^continue\s+(?:the\s+)?same\s+request(?:\s+with)?\s+REQUEST\s*(?:ID|_ID)\s*[:=]?\s*`?([0-9a-f]{16,64})`?", first)
+    if rid_match:
+        return rid_match.group(1).strip(), "EXPLICIT_CONTROL"
+
+    # Legacy-compatible explicit controls: REQUEST_ID plus continuation language
+    # must all occur on the first line. This preserves existing continuation tests
+    # while preventing arbitrary later prose from changing request mode.
+    rid_match = re.search(r"(?i)\bREQUEST\s*(?:ID|_ID)\s*[:=]\s*`?([0-9a-f]{16,64})`?", first)
+    if rid_match:
+        rid = rid_match.group(1).strip()
+        remainder = first[rid_match.end():]
+        if re.search(r"(?i)(?:\bcontinue\b|\bcontinuation\b|\bresume\b|\bcontinuing\b|\bno\s+new\s+(?:request|round|bridge)\b|\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)\b|استكمال|استمر|تابع|تكملة|لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)|بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)", first):
+            return rid, "EXPLICIT_CONTROL"
+        # A persisted COMPLETED Request ID on the control line remains authoritative.
+        return rid, "PERSISTED_ID_CANDIDATE"
+
+    if re.match(r"(?i)^(?:CONTINUE|CONTINUATION|RESUME)\b", first) or re.match(r"(?i)^(?:استكمال|استمر|تابع|تكملة)\b", first):
+        return "", "EXPLICIT_CONTROL_MISSING_ID"
+    return "", ""
+
+
+def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | None, bool]:
+    """HOTFIX139: resolve continuation before request allocation, from control syntax only."""
+    requested_id, control_mode = _continuation_control_prefix(prompt)
+    if not control_mode:
         return "", None, False
+    persisted_record = _request_record(chat, requested_id) if requested_id else None
     if not requested_id:
         return "", None, True
+    if control_mode == "PERSISTED_ID_CANDIDATE" and not isinstance(persisted_record, dict):
+        return "", None, False
     return requested_id, persisted_record, True
 
 
@@ -1204,7 +1197,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
             if seat.key == "gemini":
-                result["bridge_transaction_audit"] = bridge.seal_runtime_audit(user_prompt=user_prompt)
+                # HOTFIX139: audit the control-free, provider-boundary-safe user input.
+                # Bridge assignments are application-owned control data and must not
+                # be counted as a user-prompt leak after extraction/redaction.
+                audit_user_prompt = bridge.sanitize_user_prompt(user_prompt, seat)
+                result["bridge_transaction_audit"] = bridge.seal_runtime_audit(user_prompt=audit_user_prompt)
                 result["_bridge_application_state"] = bridge.application_owned_state()
                 result["bridge_trace"] = bridge.transaction_trace()
             else:
