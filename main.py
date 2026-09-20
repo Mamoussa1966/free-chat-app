@@ -19,6 +19,15 @@ from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _ca
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
+from conversation_store import ensure_store, authoritative_snapshot, touch
+from conversation_migrations import migrate_chat
+from message_ledger import record_message
+from provenance_engine import record_result as record_v24_provenance
+from timeline_runtime import event as timeline_event
+from memory_layers import update_memory
+from export_engine import export_conversation
+from conversation_v25_runtime import ensure_v25_store, reconcile_request, authoritative_audit
+
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
@@ -32,7 +41,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
 HOTFIX_VERSION = "HOTFIX144"
-PLATFORM_RELEASE_VERSION = "V24.0-HOTFIX145-CONVERSATION-RUNTIME-PROFESSIONAL-CHAT-FOUNDATION"
+PLATFORM_RELEASE_VERSION = "V25.0-CONVERSATION-LEDGER-MESSAGE-RUNTIME"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -617,6 +626,8 @@ def _new_chat() -> dict:
         "result_keys": [],
     }
     ensure_conversation_state(chat)
+    ensure_store(chat)
+    migrate_chat(chat)
     return chat
 
 
@@ -626,6 +637,8 @@ def _ensure_chat_identity_state(chat: dict) -> None:
     chat.setdefault("history_identity_ledger", [])
     chat.setdefault("result_keys", [])
     ensure_conversation_state(chat)
+    ensure_store(chat)
+    migrate_chat(chat)
 
 
 def _extract_requested_request_id(prompt: str) -> str:
@@ -1689,6 +1702,20 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.rerun()
         st.divider()
         st.divider()
+        st.subheader("🧭 V24 Conversation Platform")
+        ensure_store(chat)
+        st.caption(f"Conversation: `{str(chat.get('conversation_id') or "")[:18]}…` · Session: `{str(chat.get('session_id') or "")[:18]}…`")
+        if st.button("🔍 لماذا هذه الإجابة؟", use_container_width=True): st.session_state.v24_show_provenance = not st.session_state.get("v24_show_provenance", False)
+        if st.button("🕒 Timeline", use_container_width=True): st.session_state.v24_show_timeline = not st.session_state.get("v24_show_timeline", False)
+        if st.button("📦 Export Conversation", use_container_width=True): st.session_state.v24_export = export_conversation(chat)
+        if st.button("🗄️ Archive Conversation", use_container_width=True): chat["archived"] = True; touch(chat); st.success("تمت أرشفة المحادثة.")
+        if st.session_state.get("v24_show_provenance"):
+            st.json({"conversation_id":chat.get("conversation_id"),"session_id":chat.get("session_id"),"results":chat.get("result_ledger_v24", [])[-30:],"provenance":chat.get("provenance_ledger_v24", [])[-50:]})
+        if st.session_state.get("v24_show_timeline"):
+            for ev in chat.get("timeline_ledger_v24", [])[-50:]: st.caption(f"{ev.get('timestamp')} · {ev.get('event_type')} · {ev.get('provider','')} · {ev.get('status','')}")
+        if st.session_state.get("v24_export"):
+            st.download_button("⬇️ تنزيل سجل المحادثة", st.session_state.v24_export, file_name="conversation_export.json", mime="application/json", use_container_width=True)
+        st.divider()
         st.subheader("🔌 الاعتمادات والنماذج")
         for seat in seats:
             models = tuple(model_candidates.get(seat.key) or ())
@@ -2205,7 +2232,7 @@ def run_app() -> None:
     chat = _active_chat()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
-    st.caption("V24 HOTFIX145: Conversation Runtime · Session Identity · Message/Round Ledger · Result Provenance · Live Cascade Telemetry · Synthesis · Evaluation Hooks")
+    st.caption("V25.0: Conversation Ledger · Message Runtime · Authoritative Two-Message Audit · HOTFIX145 Core Preserved")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
@@ -2307,6 +2334,10 @@ def run_app() -> None:
         chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID"})
         record0 = next(r for r in chat["request_records"] if r.get("request_id") == request_id)
         attach_request_identity(record0, chat, user_message_id, request_id)
+        ensure_store(chat)
+        touch(chat)
+        chat["request_ledger_v24"].append({"request_id": request_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "message_id": user_message_id, "round_id": "", "provider": "", "seat": "", "model": "", "status": "REQUEST_CREATED"})
+        timeline_event(chat, request_id, user_message_id, "REQUEST_CREATED", status="REQUEST_CREATED")
         # The fingerprint is now durably present in the active chat identity
         # ledger; release the process gate so unrelated requests may proceed.
         with _REQUEST_GATE_LOCK:
@@ -2316,6 +2347,9 @@ def run_app() -> None:
         user_message = {"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()}
         user_message = register_message(chat, user_message)
         chat["messages"].append(user_message)
+        record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"))
+        update_memory(chat, user_message_id, prompt, (chat.get("conversation_context") or {}).get("digest", ""))
+        timeline_event(chat, request_id, user_message_id, "MESSAGE_CREATED", role="user")
         if voice_audio is not None:
             chat["messages"][-1].update({"voice": True, "voice_audio_key": user_message_id, "voice_mime": voice_mime})
             st.session_state.voice_audio_store[user_message_id] = voice_audio
@@ -2351,6 +2385,30 @@ def run_app() -> None:
             else:
                 results = _run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id, bridge_controls)
         st.session_state.last_results = [_public_result(r) for r in results]
+        # V24 authoritative ledgers derive only from application-owned runtime results.
+        ensure_store(chat); touch(chat)
+        for rr in list(results or []):
+            if not isinstance(rr, dict): continue
+            rid=str(rr.get("request_id") or request_id)
+            round_no=int(rr.get("round") or 1)
+            round_id=f"{chat.get('conversation_id')}:{rid}:r{round_no}"
+            record_v24_provenance(chat, rr, user_message_id, round_id)
+            chat["result_ledger_v24"].append({"result_id": f"res_{uuid.uuid4().hex}", "request_id": rid, "message_id": user_message_id, "provider": str(rr.get("name") or ""), "seat": str(rr.get("seat") or ""), "model": str(rr.get("executed_model") or rr.get("model") or ""), "status": str(rr.get("status") or ""), "provenance_count": len([p for p in chat.get("provenance_ledger_v24",[]) if p.get("request_id")==rid])})
+            b=rr.get("bridge_transaction_audit") or {}
+            bid=str(b.get("bridge_id") or "")
+            if bid:
+                chat["bridge_ledger_v24"].append({"bridge_id":bid,"request_id":rid,"round_id":round_id,"status":str(b.get("status") or "PASS")})
+            timeline_event(chat, rid, user_message_id, "PROVIDER_RESULT", provider=str(rr.get("name") or ""), seat=str(rr.get("seat") or ""), model=str(rr.get("executed_model") or rr.get("model") or ""), status=str(rr.get("status") or ""))
+        chat["result_ledger_v24"]=chat["result_ledger_v24"][-2000:]
+        chat["bridge_ledger_v24"]=chat["bridge_ledger_v24"][-1000:]
+        # V25: reconcile the complete authoritative per-message ledger only after
+        # provider execution and synthesis are finished. This updates the same
+        # request row on reruns instead of creating duplicate request/round rows.
+        ensure_v25_store(chat)
+        reconcile_request(chat, request_id, user_message_id, list(results or []), st.session_state.get("last_synthesis") or {})
+        authoritative_audit(chat)
+        timeline_event(chat, request_id, user_message_id, "SYNTHESIS", status=str((st.session_state.get("last_synthesis") or {}).get("status") or "UNKNOWN"))
+        touch(chat)
         _shared_context(chat, max_chars=30_000)
         st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
         st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
@@ -2358,6 +2416,10 @@ def run_app() -> None:
         st.session_state.voice_nonce += 1
         st.rerun()
     runtime_audit = conversation_audit(chat)
+    v25_audit = authoritative_audit(chat)
+    with st.expander("🧭 V25 Conversation Ledger / Authoritative Runtime", expanded=False):
+        st.json(v25_audit)
+        st.caption("مصدر الحقيقة: Application-Owned Runtime Records فقط؛ Agent prose غير مستخدم للهوية أو العدادات.")
     with st.expander("🧭 Conversation Runtime / Provenance", expanded=False):
         st.json(runtime_audit)
         syn = st.session_state.get("last_synthesis") or {}
