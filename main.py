@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX137"
+HOTFIX_VERSION = "HOTFIX138"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -614,8 +614,29 @@ def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | N
     """
     text = str(prompt or "")
     requested_id = _extract_requested_request_id(text)
+    # HOTFIX138: continuation intent must be explicit.  The previous gate used
+    # broad single-word markers (for example ``continuation`` / ``استمر``), which
+    # could classify an ordinary new discussion as a continuation before Request
+    # allocation.  That produced a false fail-closed rejection on a fresh chat.
+    # A continuation is now recognized only by an explicit control phrase or by
+    # an already-persisted COMPLETED Request ID (handled below).
     continuation_marker = bool(re.search(
-        r"(?is)(?:\bcontinue\b|\bcontinuation\b|\bcontinue_request\b|\bcontinuation_request_id\b|\bresume\b|\bcontinuing\b|\bcontinue\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)|\bno\s+new\s+(?:request|round|bridge)|\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)|استكمال|استمر|تابع|تكملة|استكمال\s+نفس|نفس\s+(?:الطلب|الـ?request)|لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)|بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)",
+        r"(?is)(?:"
+        r"\bcontinue\s+(?:request|request\s+id|the\s+(?:same\s+)?request|the\s+(?:same\s+)?runtime)\b|"
+        r"\bcontinuation\s+(?:request|request\s+id|request_id)\b|"
+        r"\bcontinue_request\b|\bcontinuation_request_id\b|"
+        r"\bresume\s+(?:request|runtime|the\s+(?:same\s+)?request)\b|"
+        r"\bcontinuing\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)\b|"
+        r"\bno\s+new\s+(?:request|round|bridge)\b|"
+        r"\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)\b|"
+        r"استكمال\s+(?:الطلب|نفس\s+الطلب|Request)|"
+        r"استمر\s+(?:في\s+)?(?:نفس\s+الطلب|الطلب)|"
+        r"تابع\s+(?:في\s+)?(?:نفس\s+الطلب|الطلب)|"
+        r"تكملة\s+(?:الطلب|نفس\s+الطلب)|"
+        r"نفس\s+(?:الطلب|الـ?request)\s+(?:بدون|من\s+دون)\s+(?:طلب|Request)\s+جديد|"
+        r"لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد|"
+        r"بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد"
+        r")",
         text,
     ))
     # HOTFIX126: an explicit persisted Request ID is itself authoritative when it
