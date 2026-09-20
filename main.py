@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX135"
+HOTFIX_VERSION = "HOTFIX137"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -614,10 +614,27 @@ def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | N
     """
     text = str(prompt or "")
     requested_id = _extract_requested_request_id(text)
-    continuation_marker = bool(re.search(
-        r"(?is)(?:\bcontinue\b|\bcontinuation\b|\bcontinue_request\b|\bcontinuation_request_id\b|\bresume\b|\bcontinuing\b|\bcontinue\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)|\bno\s+new\s+(?:request|round|bridge)|\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)|استكمال|استمر|تابع|تكملة|استكمال\s+نفس|نفس\s+(?:الطلب|الـ?request)|لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)|بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)",
+    # HOTFIX137: continuation intent must be explicit.  Merely mentioning the
+    # words "continuation" / "continue" inside a diagnostic or regression prompt
+    # (especially in a negated instruction such as "do not use Continuation") must
+    # NOT convert a brand-new chat submission into a continuation.
+    explicit_continuation = bool(re.search(
+        r"(?is)(?:\bcontinue\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)\b|"
+        r"\bresume\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)\b|"
+        r"\bcontinue_request\b|\bcontinuation_request_id\b|"
+        r"\bno\s+new\s+(?:request|round|bridge)\b|"
+        r"\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)\b|"
+        r"استكمال\s+(?:نفس|الطلب)|استمر\s+(?:في|بنفس)|تابع\s+(?:نفس|الطلب)|"
+        r"تكملة\s+(?:نفس|الطلب)|نفس\s+(?:الطلب|الـ?request)\s+بدون\s+جديد|"
+        r"لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)|"
+        r"بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)",
         text,
     ))
+    # An explicit Request ID remains sufficient to identify continuation intent,
+    # because the persisted record is then the authoritative target.
+    continuation_marker = bool(explicit_continuation or (requested_id and re.search(
+        r"(?i)\b(?:continue|continuation|resume|continuing)\b", text
+    )))
     # HOTFIX126: an explicit persisted Request ID is itself authoritative when it
     # points at an existing COMPLETED REQUEST_RECORD. This closes the runtime gap
     # where the UI/test harness supplied the canonical ID but translated/trimmed
