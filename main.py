@@ -30,7 +30,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
-HOTFIX_VERSION = "HOTFIX141"
+HOTFIX_VERSION = "HOTFIX142"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -85,9 +85,29 @@ def _sanitize_agent_prose(content: str, authoritative_request_id: str = "", brid
     ]
     for pattern in control_patterns:
         text = pattern.sub("[AGENT_CONTROL_PROSE_SUPPRESSED]", text)
-    # Do not allow a prose block to masquerade as an authoritative structured table.
-    if authoritative_request_id:
-        text = re.sub(r"(?im)^(\s*[-|]?\s*REQUEST[_ ]?ID\s*[-|:].*)$", "[AGENT_CONTROL_PROSE_SUPPRESSED]", text)
+    # HOTFIX142: control-plane metadata may be embedded inside a line/table/JSON-like
+    # prose fragment instead of appearing at the beginning of the line. Suppress the
+    # entire affected prose line so presentation text cannot masquerade as runtime
+    # telemetry. This remains presentation-only; structured runtime fields are untouched.
+    control_line_pattern = re.compile(
+        r"(?i)(?:REQUEST[_ ]?ID|REQUEST_STATUS|STATUS|CLASSIFICATION|CASCADE ACTION|EXECUTED MODEL|FREE CASCADE|"
+        r"BRIDGE_WRITE|BRIDGE_RESULT|BRIDGE_READ(?:_STATUS)?|RESULT ROW|RESULT_ROW|TOTAL_CASCADE_ATTEMPTS|PROVIDER_EXECUTION_EVENTS|ATTEMPT|"
+        r"USER_PROMPT_CONTAINS_VALUE|GEMINI_INPUT_PROMPT_CONTAINS_VALUE|BRIDGE_STATE_CONTAINS_VALUE)\s*[:=]"
+    )
+    control_table_token_pattern = re.compile(
+        r"(?i)(?:\bREQUEST[_ ]?ID\b|\bREQUEST_STATUS\b|\bSTATUS\b|\bCLASSIFICATION\b|"
+        r"\bCASCADE ACTION\b|\bEXECUTED MODEL\b|\bFREE CASCADE\b|\bBRIDGE_WRITE\b|"
+        r"\bBRIDGE_RESULT\b|\bBRIDGE_READ(?:_STATUS)?\b|\bRESULT[_ ]?ROW\b|"
+        r"\bTOTAL_CASCADE_ATTEMPTS\b|\bPROVIDER_EXECUTION_EVENTS\b|"
+        r"\bUSER_PROMPT_CONTAINS_VALUE\b|\bGEMINI_INPUT_PROMPT_CONTAINS_VALUE\b|\bBRIDGE_STATE_CONTAINS_VALUE\b)"
+    )
+    sanitized_lines = []
+    for line in text.splitlines():
+        if control_line_pattern.search(line) or ("|" in line and control_table_token_pattern.search(line)):
+            sanitized_lines.append("[AGENT_CONTROL_PROSE_SUPPRESSED]")
+        else:
+            sanitized_lines.append(line)
+    text = "\n".join(sanitized_lines)
     return text.strip()
 
 
@@ -1914,7 +1934,9 @@ def _hotfix131_runtime_prose_audit(results: list[dict], request_id: str, bridge_
 
     request_ids_ok = bool(rid) and all(str(r.get("request_id") or "").strip() == rid for r in rows if r.get("request_id"))
     content_control_pattern = re.compile(
-        r"(?im)^\s*(?:REQUEST_ID|Request ID|RequestID|REQUEST_STATUS|STATUS|Classification|Cascade Action|Executed Model|Free Cascade|BRIDGE_WRITE|BRIDGE_RESULT|BRIDGE_READ(?:_STATUS)?)\s*[:=]"
+        r"(?i)(?:REQUEST_ID|Request ID|RequestID|REQUEST_STATUS|STATUS|Classification|Cascade Action|Executed Model|Free Cascade|"
+        r"BRIDGE_WRITE|BRIDGE_RESULT|BRIDGE_READ(?:_STATUS)?|RESULT[_ ]?ROW|TOTAL_CASCADE_ATTEMPTS|PROVIDER_EXECUTION_EVENTS|ATTEMPT|"
+        r"USER_PROMPT_CONTAINS_VALUE|GEMINI_INPUT_PROMPT_CONTAINS_VALUE|BRIDGE_STATE_CONTAINS_VALUE)\s*[:=]"
     )
     content_control_leak = False
     bridge_value_leak = False
