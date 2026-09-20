@@ -255,7 +255,7 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
         "per_request": per_request,
         "evidence_source": "APPLICATION_OWNED_REQUEST_RECORDS_ONLY",
         "provider_or_agent_prose_used_as_identity": False,
-        "note": "Run after three separate fresh chat submissions A, B, and C; one chat submission remains one Request lifecycle.",
+        "note": "HOTFIX141 supports an explicit one-message A/B/C harness; otherwise one normal chat submission remains one Request lifecycle.",
     }
 
 
