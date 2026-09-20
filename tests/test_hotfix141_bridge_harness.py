@@ -11,8 +11,8 @@ def read(name):
 def test_hotfix141_release_identity_and_scope():
     providers = read("providers.py")
     main = read("main.py")
-    assert 'V23.0-HOTFIX141-BRIDGE-CONTROL-ABC-HARNESS' in providers
-    assert 'HOTFIX_VERSION = "HOTFIX141"' in main
+    assert 'V23.0-HOTFIX142-PROSE-ISOLATION-HARDENED' in providers
+    assert 'HOTFIX_VERSION = "HOTFIX142"' in main
     assert 'HOTFIX141_HARNESS=ABC' in main
 
 
