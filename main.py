@@ -17,7 +17,7 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
-from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
+from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
 # A rerun can arrive before the first request has persisted its fingerprint;
@@ -614,27 +614,10 @@ def _continuation_request_record(prompt: str, chat: dict) -> tuple[str, dict | N
     """
     text = str(prompt or "")
     requested_id = _extract_requested_request_id(text)
-    # HOTFIX137: continuation intent must be explicit.  Merely mentioning the
-    # words "continuation" / "continue" inside a diagnostic or regression prompt
-    # (especially in a negated instruction such as "do not use Continuation") must
-    # NOT convert a brand-new chat submission into a continuation.
-    explicit_continuation = bool(re.search(
-        r"(?is)(?:\bcontinue\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)\b|"
-        r"\bresume\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)\b|"
-        r"\bcontinue_request\b|\bcontinuation_request_id\b|"
-        r"\bno\s+new\s+(?:request|round|bridge)\b|"
-        r"\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)\b|"
-        r"استكمال\s+(?:نفس|الطلب)|استمر\s+(?:في|بنفس)|تابع\s+(?:نفس|الطلب)|"
-        r"تكملة\s+(?:نفس|الطلب)|نفس\s+(?:الطلب|الـ?request)\s+بدون\s+جديد|"
-        r"لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)|"
-        r"بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)",
+    continuation_marker = bool(re.search(
+        r"(?is)(?:\bcontinue\b|\bcontinuation\b|\bcontinue_request\b|\bcontinuation_request_id\b|\bresume\b|\bcontinuing\b|\bcontinue\s+(?:the\s+)?(?:same\s+)?(?:request|runtime)|\bno\s+new\s+(?:request|round|bridge)|\bdo\s+not\s+(?:create|generate)\s+(?:a\s+)?(?:new\s+)?(?:request|round|bridge)|استكمال|استمر|تابع|تكملة|استكمال\s+نفس|نفس\s+(?:الطلب|الـ?request)|لا\s+(?:تنشئ|تُنشئ|تولد|تُولد)\s+(?:طلب|Request|جولة|Round|Bridge)|بدون\s+(?:طلب|Request|جولة|Round|Bridge)\s+جديد)",
         text,
     ))
-    # An explicit Request ID remains sufficient to identify continuation intent,
-    # because the persisted record is then the authoritative target.
-    continuation_marker = bool(explicit_continuation or (requested_id and re.search(
-        r"(?i)\b(?:continue|continuation|resume|continuing)\b", text
-    )))
     # HOTFIX126: an explicit persisted Request ID is itself authoritative when it
     # points at an existing COMPLETED REQUEST_RECORD. This closes the runtime gap
     # where the UI/test harness supplied the canonical ID but translated/trimmed
@@ -708,7 +691,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 
 def _init_state() -> None:
-    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}, "last_v23_multi_request_regression": {}}
+    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -2247,19 +2230,6 @@ def run_app() -> None:
             st.json(report)
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
-
-        st.divider()
-        st.subheader("🧪 V23 Production Regression — Independent Requests")
-        st.caption("يفحص عدة REQUEST_RECORDs مستقلة: Request ID / Bridge ID / counters / Seat+Round / execution events.")
-        if st.button("Run multi-Request Production Regression", key="v23_multi_request_regression"):
-            chat = _active_chat()
-            regression = multi_request_regression_audit(chat)
-            st.session_state.last_v23_multi_request_regression = regression
-        regression = st.session_state.get("last_v23_multi_request_regression") or {}
-        if regression:
-            st.json(regression)
-        else:
-            st.info("يحتاج الاختبار إلى طلبين مستقلين مكتملين على الأقل؛ لا يتم عرض PASS قبل توفرهما.")
 
 
 if __name__ == "__main__":
