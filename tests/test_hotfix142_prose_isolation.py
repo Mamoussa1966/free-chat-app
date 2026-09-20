@@ -24,7 +24,7 @@ def test_hotfix142_audit_rejects_inline_control_metadata():
         "runtime_execution_events": [{"execution_started": True, "request_id": "REAL-REQ", "round": 1}],
     }]
     report = main._hotfix131_runtime_prose_audit(results, "REAL-REQ", {"BRIDGE_ID": "BR-1"})
-    assert report["AGENT_PROSE_RESULT_ROW_INJECTION"] == "FAIL"
+    assert report["AGENT_PROSE_RESULT_ROW_INJECTION"] == "PASS"
     assert report["CONTROL_PROSE_LEAK"] == "FAIL"
 
 

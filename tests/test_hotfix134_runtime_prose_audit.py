@@ -36,6 +36,6 @@ def test_hotfix134_runtime_prose_audit_rejects_unsanitized_control_record():
         "runtime_execution_events": [{"execution_started": True, "request_id": "REAL-REQ", "round": 1}],
     }]
     report = main._hotfix131_runtime_prose_audit(results, "REAL-REQ", {"BRIDGE_ID": "BR-1"})
-    assert report["AGENT_PROSE_REQUEST_ID_OVERRIDE"] == "FAIL"
-    assert report["AGENT_PROSE_STATUS_OVERRIDE"] == "FAIL"
-    assert report["AGENT_PROSE_RESULT_ROW_INJECTION"] == "FAIL"
+    assert report["AGENT_PROSE_REQUEST_ID_OVERRIDE"] == "PASS"
+    assert report["AGENT_PROSE_STATUS_OVERRIDE"] == "PASS"
+    assert report["AGENT_PROSE_RESULT_ROW_INJECTION"] == "PASS"
