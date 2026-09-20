@@ -26,7 +26,7 @@ from provenance_engine import record_result as record_v24_provenance
 from timeline_runtime import event as timeline_event
 from memory_layers import update_memory
 from export_engine import export_conversation
-from conversation_v25_runtime import ensure_v25_store, reconcile_request, authoritative_audit
+from conversation_v25_runtime import ensure_v25_store, reconcile_request, authoritative_audit, sync_v26_message_record
 
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
@@ -2334,6 +2334,8 @@ def run_app() -> None:
         chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID"})
         record0 = next(r for r in chat["request_records"] if r.get("request_id") == request_id)
         attach_request_identity(record0, chat, user_message_id, request_id)
+        # V26: durably bind the newly allocated Message ID to its Request before provider execution.
+        sync_v26_message_record(chat, user_message_id, request_id, "user", record0.get("created_at"))
         ensure_store(chat)
         touch(chat)
         chat["request_ledger_v24"].append({"request_id": request_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "message_id": user_message_id, "round_id": "", "provider": "", "seat": "", "model": "", "status": "REQUEST_CREATED"})
@@ -2347,7 +2349,7 @@ def run_app() -> None:
         user_message = {"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()}
         user_message = register_message(chat, user_message)
         chat["messages"].append(user_message)
-        record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"), request_id=request_id)
+        record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"))
         update_memory(chat, user_message_id, prompt, (chat.get("conversation_context") or {}).get("digest", ""))
         timeline_event(chat, request_id, user_message_id, "MESSAGE_CREATED", role="user")
         if voice_audio is not None:
@@ -2405,15 +2407,6 @@ def run_app() -> None:
         # provider execution and synthesis are finished. This updates the same
         # request row on reruns instead of creating duplicate request/round rows.
         ensure_v25_store(chat)
-        # The round ID is authoritative only after HOTFIX145.begin_round() has
-        # persisted the real RoundRecord. Link the already-created MessageRecord to
-        # that exact round; never synthesize a second round/message identity.
-        authoritative_round = next((r for r in reversed(chat.get("round_ledger", []))
-                                    if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id)
-                                    and str(r.get("message_id") or "") == str(user_message_id)), None)
-        if authoritative_round is not None:
-            record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"),
-                           request_id=request_id, round_id=str(authoritative_round.get("round_id") or ""))
         reconcile_request(chat, request_id, user_message_id, list(results or []), st.session_state.get("last_synthesis") or {})
         authoritative_audit(chat)
         timeline_event(chat, request_id, user_message_id, "SYNTHESIS", status=str((st.session_state.get("last_synthesis") or {}).get("status") or "UNKNOWN"))

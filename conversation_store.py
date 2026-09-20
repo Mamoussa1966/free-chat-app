@@ -27,6 +27,8 @@ def ensure_store(chat: dict) -> dict:
     chat.setdefault("round_ledger_v25", [])
     chat.setdefault("message_synthesis_ledger_v25", [])
     chat.setdefault("v25_authoritative_audit", {})
+    chat.setdefault("message_ledger_v26", [])
+    chat.setdefault("v26_authoritative_audit", {})
     return chat
 
 def touch(chat: dict) -> None:

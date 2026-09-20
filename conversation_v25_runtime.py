@@ -12,6 +12,7 @@ from copy import deepcopy
 from conversation_store import ensure_store, touch, now
 
 V25_SCHEMA = "v25-conversation-ledger-message-runtime/v2"
+V26_SCHEMA = "v26-message-runtime-authoritative-mapping/v1"
 
 
 def _s(value) -> str:
@@ -25,6 +26,8 @@ def ensure_v25_store(chat: dict) -> dict:
     chat.setdefault("round_ledger_v25", [])
     chat.setdefault("message_synthesis_ledger_v25", [])
     chat.setdefault("v25_authoritative_audit", {})
+    chat.setdefault("message_ledger_v26", [])
+    chat.setdefault("v26_authoritative_audit", {})
     return chat
 
 
@@ -38,6 +41,51 @@ def _actual_round_rows(chat: dict, request_id: str, message_id: str) -> list[dic
             rows.append(row)
     return rows
 
+
+
+def sync_v26_message_record(chat: dict, message_id: str, request_id: str, role: str = "user", created_at: str = "") -> dict:
+    """Persist an application-owned message record without inventing identity.
+
+    The runtime already allocates message_id/request_id before provider execution.
+    V26 makes that identity durable in a dedicated ledger and links it to the
+    existing REQUEST_RECORD. No provider prose is consulted.
+    """
+    ensure_v25_store(chat)
+    mid, rid = _s(message_id), _s(request_id)
+    if not mid or not rid:
+        raise ValueError("V26 message/request identity is required")
+    record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and _s(r.get("request_id")) == rid), None)
+    if record is None:
+        raise ValueError("V26 cannot map a message to a missing REQUEST_RECORD")
+    if _s(record.get("message_id")) != mid:
+        raise ValueError("V26 REQUEST_RECORD/message identity mismatch")
+    rows = chat.setdefault("message_ledger_v26", [])
+    row = next((r for r in rows if _s(r.get("message_id")) == mid), None)
+    payload = {"schema": V26_SCHEMA, "message_id": mid, "request_id": rid,
+               "conversation_id": _s(chat.get("conversation_id")), "session_id": _s(chat.get("session_id")),
+               "role": _s(role).lower() or "user",
+               "created_at": created_at or _s(record.get("created_at")),
+               "authoritative_source": "APPLICATION_OWNED_REQUEST_RECORD"}
+    if row is None: rows.append(payload)
+    else: row.update(payload)
+    chat["message_ledger_v26"] = rows[-1000:]
+    touch(chat)
+    return payload
+
+
+def reconcile_v26_message_ledger(chat: dict) -> list[dict]:
+    """Reconcile only identities already present in application-owned request records.
+
+    This is recovery of durable identity, not synthetic message creation.
+    """
+    ensure_v25_store(chat)
+    for record in chat.get("request_records", []):
+        if not isinstance(record, dict):
+            continue
+        mid, rid = _s(record.get("message_id")), _s(record.get("request_id"))
+        if mid and rid:
+            sync_v26_message_record(chat, mid, rid, "user", _s(record.get("created_at")))
+    return [x for x in chat.get("message_ledger_v26", []) if isinstance(x, dict)]
 
 def reconcile_request(chat: dict, request_id: str, message_id: str, results: list[dict], synthesis: dict | None = None) -> dict:
     ensure_v25_store(chat)
@@ -130,8 +178,8 @@ def reconcile_request(chat: dict, request_id: str, message_id: str, results: lis
         "status": _s(syn.get("status")) or "NOT_PROVEN",
         "successful_seats": int(syn.get("successful_seats") or 0),
         "successful_providers": deepcopy(syn.get("successful_providers") or []),
-        "source_request_ids": deepcopy(syn.get("source_request_ids")) if syn.get("source_request_ids") is not None else "NOT_PROVEN",
-        "source_rounds": deepcopy(syn.get("source_rounds")) if syn.get("source_rounds") is not None else "NOT_PROVEN",
+        "source_request_ids": deepcopy(syn.get("source_request_ids") or [rid]),
+        "source_rounds": deepcopy(syn.get("source_rounds") or round_nos),
         "composition": _s(syn.get("composition")) or "NOT_PROVEN",
         "provenance_count": int(syn.get("provenance_count") or len(prov_rows)),
         "authoritative_source": "APPLICATION_OWNED_RESULT_SET",
@@ -178,7 +226,8 @@ def _structural_secret_scan(chat: dict) -> tuple[bool, bool, bool]:
 
 def authoritative_audit(chat: dict) -> dict:
     ensure_v25_store(chat)
-    messages = [x for x in chat.get("message_ledger_v24", []) if isinstance(x, dict) and _s(x.get("role")).lower() == "user"]
+    reconcile_v26_message_ledger(chat)
+    messages = [x for x in chat.get("message_ledger_v26", []) if isinstance(x, dict) and _s(x.get("role")).lower() == "user"]
     requests = [x for x in chat.get("request_ledger_v25", []) if isinstance(x, dict)]
     rounds = [x for x in chat.get("round_ledger_v25", []) if isinstance(x, dict)]
     results = [x for x in chat.get("result_ledger_v24", []) if isinstance(x, dict)]
@@ -186,7 +235,7 @@ def authoritative_audit(chat: dict) -> dict:
     bridges = [x for x in chat.get("bridge_ledger_v24", []) if isinstance(x, dict)]
     synth = [x for x in chat.get("message_synthesis_ledger_v25", []) if isinstance(x, dict)]
 
-    latest = messages[-2:]
+    latest = sorted(messages, key=lambda x: (_s(x.get("created_at")), _s(x.get("message_id"))))[-2:]
     mids = [_s(x.get("message_id")) for x in latest]
     conv_ids = {_s(x.get("conversation_id")) for x in latest if _s(x.get("conversation_id"))}
     sess_ids = {_s(x.get("session_id")) for x in latest if _s(x.get("session_id"))}
@@ -233,8 +282,12 @@ def authoritative_audit(chat: dict) -> dict:
         "message_2_id": m2 or "NOT_PROVEN",
         "request_1_id": r1 or "NOT_PROVEN",
         "request_2_id": r2 or "NOT_PROVEN",
+        "message_1_request_mapping": (r1 == _s(next((x.get("request_id") for x in req_by_msg.get(m1, [])), ""))) if enough else "NOT_PROVEN",
+        "message_2_request_mapping": (r2 == _s(next((x.get("request_id") for x in req_by_msg.get(m2, [])), ""))) if enough else "NOT_PROVEN",
         "round_1_ids": round_ids_by_msg.get(m1) or "NOT_PROVEN",
         "round_2_ids": round_ids_by_msg.get(m2) or "NOT_PROVEN",
+        "round_1_message_mapping": (all(_s(x.get("message_id")) == m1 for x in round_by_msg.get(m1, [])) and bool(round_by_msg.get(m1))) if enough else "NOT_PROVEN",
+        "round_2_message_mapping": (all(_s(x.get("message_id")) == m2 for x in round_by_msg.get(m2, [])) and bool(round_by_msg.get(m2))) if enough else "NOT_PROVEN",
         "conversation_id_stable": (len(conv_ids) == 1 and enough) if enough else "NOT_PROVEN",
         "session_id_stable": (len(sess_ids) == 1 and enough) if enough else "NOT_PROVEN",
         "message_ids_unique": (len(set(mids)) == 2) if enough else "NOT_PROVEN",
@@ -263,7 +316,7 @@ def authoritative_audit(chat: dict) -> dict:
         "local_engine": "NOT_USED",
         "paid_fallback": "NOT_USED",
     }
-    structural_pass = all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation"))
+    structural_pass = all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation", "message_1_request_mapping", "message_2_request_mapping", "round_1_message_mapping", "round_2_message_mapping"))
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
     audit["overall_authoritative_status"] = "PASS" if audit["conversation_runtime_audit"] == "PASS" and enough else "NOT_PROVEN"
     chat["v25_authoritative_audit"] = deepcopy(audit)
