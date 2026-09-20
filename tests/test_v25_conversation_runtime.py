@@ -18,8 +18,8 @@ def test_two_messages_are_isolated_and_stable():
         {"message_id":"m2","conversation_id":"conv-fixed","session_id":"sess-fixed","role":"user","user_input":"two"},
     ]
     chat["request_records"]=[
-        {"request_id":"r1","state":"COMPLETED","synthesis":{"status":"READY","successful_seats":1,"successful_providers":["Gemini"],"source_request_ids":["r1"],"source_rounds":[1],"composition":"APPLICATION_OWNED_RESULT_SET","provenance_count":2}},
-        {"request_id":"r2","state":"COMPLETED","synthesis":{"status":"READY","successful_seats":1,"successful_providers":["Gemini"],"source_request_ids":["r2"],"source_rounds":[1],"composition":"APPLICATION_OWNED_RESULT_SET","provenance_count":1}},
+        {"request_id":"r1","message_id":"m1","state":"COMPLETED","synthesis":{"status":"READY","successful_seats":1,"successful_providers":["Gemini"],"source_request_ids":["r1"],"source_rounds":[1],"composition":"APPLICATION_OWNED_RESULT_SET","provenance_count":2}},
+        {"request_id":"r2","message_id":"m2","state":"COMPLETED","synthesis":{"status":"READY","successful_seats":1,"successful_providers":["Gemini"],"source_request_ids":["r2"],"source_rounds":[1],"composition":"APPLICATION_OWNED_RESULT_SET","provenance_count":1}},
     ]
     from provenance_engine import record_result
     from conversation_store import append_once
@@ -47,7 +47,7 @@ def test_single_message_is_not_false_pass():
     chat={"id":"chat-test","conversation_id":"conv-fixed","session_id":"sess-fixed","request_records":[]}
     ensure_store(chat); ensure_v25_store(chat)
     chat["message_ledger_v24"]=[{"message_id":"m1","conversation_id":"conv-fixed","session_id":"sess-fixed","role":"user","user_input":"one"}]
-    chat["request_records"]=[{"request_id":"r1","state":"COMPLETED","synthesis":{}}]
+    chat["request_records"]=[{"request_id":"r1","message_id":"m1","state":"COMPLETED","synthesis":{}}]
     reconcile_request(chat,"r1","m1",[result("r1",1) ],{})
     audit=authoritative_audit(chat)
     assert audit["message_2_id"] == "NOT_PROVEN"
