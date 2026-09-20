@@ -74,9 +74,10 @@ def sync_v26_message_record(chat: dict, message_id: str, request_id: str, role: 
 
 
 def reconcile_v26_message_ledger(chat: dict) -> list[dict]:
-    """Reconcile only identities already present in application-owned request records.
+    """Reconcile durable message/request identity from all application ledgers.
 
-    This is recovery of durable identity, not synthetic message creation.
+    V26.1 deliberately separates *identity recovery* from *historical request
+    reconciliation*. It never parses provider prose and never invents IDs.
     """
     ensure_v25_store(chat)
     for record in chat.get("request_records", []):
@@ -85,7 +86,42 @@ def reconcile_v26_message_ledger(chat: dict) -> list[dict]:
         mid, rid = _s(record.get("message_id")), _s(record.get("request_id"))
         if mid and rid:
             sync_v26_message_record(chat, mid, rid, "user", _s(record.get("created_at")))
+    # HOTFIX145 already owns the authoritative message ledger. Recover any
+    # message/request binding that is present there and also has a persisted
+    # REQUEST_RECORD. This is historical reconciliation, not synthetic creation.
+    for msg in chat.get("message_ledger", []):
+        if not isinstance(msg, dict):
+            continue
+        mid, rid = _s(msg.get("message_id") or msg.get("id")), _s(msg.get("request_id"))
+        if not mid or not rid:
+            continue
+        record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and _s(r.get("request_id")) == rid), None)
+        if record is not None and _s(record.get("message_id")) == mid:
+            sync_v26_message_record(chat, mid, rid, _s(msg.get("role")) or "user", _s(msg.get("created_at")))
     return [x for x in chat.get("message_ledger_v26", []) if isinstance(x, dict)]
+
+
+def reconcile_v26_historical_requests(chat: dict) -> None:
+    """Materialize V25 request/round ledger rows for every persisted request.
+
+    The previous V26 audit only reconciled the *current* request at submission
+    time. That made older valid REQUEST_RECORDs invisible to the authoritative
+    two-message audit. V26.1 fixes that by replaying reconciliation from
+    application-owned result/provenance/round ledgers for every persisted
+    request record. No provider prose is consulted and no identity is minted.
+    """
+    ensure_v25_store(chat)
+    all_results = [x for x in chat.get("result_ledger_v24", []) if isinstance(x, dict)]
+    synth_rows = [x for x in chat.get("message_synthesis_ledger_v25", []) if isinstance(x, dict)]
+    for record in list(chat.get("request_records", [])):
+        if not isinstance(record, dict):
+            continue
+        rid, mid = _s(record.get("request_id")), _s(record.get("message_id"))
+        if not rid or not mid:
+            continue
+        rows = [x for x in all_results if _s(x.get("request_id")) == rid and _s(x.get("message_id")) == mid]
+        syn = next((x for x in synth_rows if _s(x.get("request_id")) == rid and _s(x.get("message_id")) == mid), None)
+        reconcile_request(chat, rid, mid, rows, syn or record.get("synthesis") or {})
 
 def reconcile_request(chat: dict, request_id: str, message_id: str, results: list[dict], synthesis: dict | None = None) -> dict:
     ensure_v25_store(chat)
@@ -227,6 +263,7 @@ def _structural_secret_scan(chat: dict) -> tuple[bool, bool, bool]:
 def authoritative_audit(chat: dict) -> dict:
     ensure_v25_store(chat)
     reconcile_v26_message_ledger(chat)
+    reconcile_v26_historical_requests(chat)
     messages = [x for x in chat.get("message_ledger_v26", []) if isinstance(x, dict) and _s(x.get("role")).lower() == "user"]
     requests = [x for x in chat.get("request_ledger_v25", []) if isinstance(x, dict)]
     rounds = [x for x in chat.get("round_ledger_v25", []) if isinstance(x, dict)]
@@ -241,6 +278,8 @@ def authoritative_audit(chat: dict) -> dict:
     sess_ids = {_s(x.get("session_id")) for x in latest if _s(x.get("session_id"))}
     req_by_msg = {mid: [x for x in requests if _s(x.get("message_id")) == mid] for mid in mids}
     req_ids = [_s(req_by_msg[mid][-1].get("request_id")) for mid in mids if req_by_msg[mid]]
+    historical_request_records = [x for x in chat.get("request_records", []) if isinstance(x, dict) and _s(x.get("request_id"))]
+    persisted_request_ids = [_s(x.get("request_id")) for x in historical_request_records]
     round_by_msg = {mid: [x for x in rounds if _s(x.get("message_id")) == mid] for mid in mids}
     round_ids_by_msg = {mid: [_s(x.get("round_id")) for x in round_by_msg[mid] if _s(x.get("round_id"))] for mid in mids}
 
@@ -282,6 +321,8 @@ def authoritative_audit(chat: dict) -> dict:
         "message_2_id": m2 or "NOT_PROVEN",
         "request_1_id": r1 or "NOT_PROVEN",
         "request_2_id": r2 or "NOT_PROVEN",
+        "historical_persisted_request_count": len(historical_request_records),
+        "historical_persisted_request_ids": persisted_request_ids[-20:] if persisted_request_ids else "NOT_PROVEN",
         "message_1_request_mapping": (r1 == _s(next((x.get("request_id") for x in req_by_msg.get(m1, [])), ""))) if enough else "NOT_PROVEN",
         "message_2_request_mapping": (r2 == _s(next((x.get("request_id") for x in req_by_msg.get(m2, [])), ""))) if enough else "NOT_PROVEN",
         "round_1_ids": round_ids_by_msg.get(m1) or "NOT_PROVEN",
