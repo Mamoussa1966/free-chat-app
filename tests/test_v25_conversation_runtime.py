@@ -1,5 +1,6 @@
 from conversation_v25_runtime import ensure_v25_store, reconcile_request, authoritative_audit
 from conversation_store import ensure_store
+from conversation_runtime import begin_round, finish_round
 
 
 def result(rid, round_no, seat="gemini", model="gemini-3.5-flash", attempts=2):
@@ -23,6 +24,8 @@ def test_two_messages_are_isolated_and_stable():
     from provenance_engine import record_result
     from conversation_store import append_once
     for rid,mid in [("r1","m1"),("r2","m2")]:
+        actual_round_id = begin_round(chat, mid, rid, 1)
+        finish_round(chat, actual_round_id, "COMPLETED", 1)
         rr=result(rid,1,attempts=2 if rid=="r1" else 1)
         reconcile_request(chat,rid,mid,[rr],chat["request_records"][0 if rid=="r1" else 1]["synthesis"])
         record_result(chat,rr,mid,f"conv-fixed:{rid}:r1")
