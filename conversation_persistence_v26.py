@@ -126,7 +126,7 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
         canonical[key][:] = canonical[key][-limit:]
     # Re-bind the alias after any list mutation.
     _chat_bucket(chat)
-    # V26.3.7: commit the complete canonical ConversationRecord at every identity
+    # V26.3.8: commit the complete canonical ConversationRecord at every identity
     # lifecycle boundary. This is the real persistence path, not an audit repair.
     commit_canonical_record(chat, session_state)
     # Session state is a mirror only. It is useful across Streamlit reruns, but

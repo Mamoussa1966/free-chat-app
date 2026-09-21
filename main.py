@@ -21,7 +21,7 @@ from production_platform import PLATFORM_VERSION, compact_context, synthesize_co
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record
-from conversation_store import ensure_store, authoritative_snapshot, touch
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, assert_canonical_lifecycle_ready
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -1461,6 +1461,29 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         if record is not None:
             record["state"] = "RUNNING"
             record["execution_scope"] = request_id
+    # V26.3.8: every real orchestrator entry point converges into the canonical
+    # ConversationRecord before creating/dispatching its first provider round.
+    if record is None:
+        # Direct/test orchestrator entry points may arrive with an already-owned
+        # Request ID but without the outer chat-input envelope. In that case the
+        # orchestrator itself is the lifecycle creator; it binds the supplied ID
+        # and Message ID into the canonical store before dispatch.
+        record = {
+            "request_id": request_id, "conversation_id": chat.get("conversation_id"),
+            "session_id": chat.get("session_id"), "message_id": current_user_message_id,
+            "created_at": _now(), "state": "RUNNING",
+            "identity_authority": "RUNTIME_REQUEST_ID",
+        }
+        chat.setdefault("request_records", []).append(record)
+    canonical_upsert_request(chat, record, st.session_state)
+    canonical_upsert_message(chat, {
+        "message_id": current_user_message_id,
+        "conversation_id": chat.get("conversation_id"),
+        "session_id": chat.get("session_id"),
+        "role": "user",
+        "request_id": request_id,
+        "created_at": record.get("created_at") or _now(),
+    }, st.session_state)
     deadline = None
     lifecycle = RequestLifecycle.begin(request_id)
     round_registry = RequestRoundExecutionRegistry(request_id)
@@ -1477,7 +1500,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no)
             round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
             if round_row:
+                canonical_upsert_round(chat, round_row, st.session_state)
                 persist_identity(chat, st.session_state, round_row=round_row)
+            # V26.3.8 hard gate: provider dispatch cannot begin until the canonical
+            # ConversationRecord contains the exact Message→Request→Round chain.
+            assert_canonical_lifecycle_ready(chat, current_user_message_id, request_id, runtime_round_id)
             lifecycle.record("PROVIDER_EXECUTION", round_id=round_no, status="STARTED")
             round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id, bridge_controls)
             seen_keys = set()
@@ -2348,11 +2375,14 @@ def run_app() -> None:
         chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID"})
         record0 = next(r for r in chat["request_records"] if r.get("request_id") == request_id)
         attach_request_identity(record0, chat, user_message_id, request_id)
-        # V26.3: persist the Message→Request identity before any provider execution.
+        # V26.3.8: RequestRecord is inserted into the canonical ConversationRecord
+        # immediately after identity allocation, before any provider dispatch.
+        canonical_upsert_request(chat, record0, st.session_state)
+        # V26.3.8: MessageRecord is inserted into the same canonical record before dispatch.
         # This is an application-owned append-only session ledger used for hydration;
         # it is never derived from agent prose and never mints replacement IDs.
         persist_identity(chat, st.session_state, message={"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": record0.get("created_at")}, request=record0)
-        # V26.3.7: explicit lifecycle COMMIT before provider execution.
+        # V26.3.8: explicit lifecycle COMMIT before provider execution.
         commit_canonical_record(chat, st.session_state)
         # V26: durably bind the newly allocated Message ID to its Request before provider execution.
         sync_v26_message_record(chat, user_message_id, request_id, "user", record0.get("created_at"))
@@ -2369,6 +2399,7 @@ def run_app() -> None:
         user_message = {"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()}
         user_message = register_message(chat, user_message)
         chat["messages"].append(user_message)
+        canonical_upsert_message(chat, {"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": user_message.get("created_at")}, st.session_state)
         persist_identity(chat, st.session_state, message={"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": user_message.get("created_at")})
         record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"))
         update_memory(chat, user_message_id, prompt, (chat.get("conversation_context") or {}).get("digest", ""))

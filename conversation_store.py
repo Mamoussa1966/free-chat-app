@@ -74,7 +74,7 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
             root = {}
             session_state["v26_3_canonical_conversation_store"] = root
         root[cid] = copy.deepcopy({
-            "schema": "v26.3.7-canonical-conversation-store/v6",
+            "schema": "v26.3.8-canonical-conversation-store/v7",
             "conversation_id": cid,
             "session_id": str(chat.get("session_id") or ""),
             "record": copy.deepcopy(rec),
@@ -124,9 +124,88 @@ def _chat_rebind_alias(chat: dict) -> None:
     cid = str(chat.get("conversation_id") or "").strip()
     if cid:
         row = root.setdefault(cid, {})
-        row.update({"schema": "v26.3.7-canonical-conversation-store/v6", "conversation_id": cid,
+        row.update({"schema": "v26.3.8-canonical-conversation-store/v7", "conversation_id": cid,
                     "messages": rec["messages"], "requests": rec["requests"], "rounds": rec["rounds"]})
     chat["v26_3_conversation_persistence"] = root
+
+
+def canonical_upsert_message(chat: dict, message: dict, session_state=None) -> dict:
+    """Create/update a MessageRecord in the canonical ConversationRecord before dispatch."""
+    rec = _canonical_record(chat)
+    mid = str(message.get("message_id") or message.get("id") or "").strip()
+    if not mid:
+        raise ValueError("canonical MessageRecord requires message_id")
+    row = dict(message)
+    row["message_id"] = mid
+    existing = next((x for x in rec["messages"] if isinstance(x, dict) and str(x.get("message_id") or "") == mid), None)
+    if existing is None:
+        rec["messages"].append(copy.deepcopy(row))
+        existing = rec["messages"][-1]
+    else:
+        for k, v in row.items():
+            if v not in (None, "", [], {}):
+                existing[k] = copy.deepcopy(v)
+    commit_canonical_record(chat, session_state)
+    return existing
+
+
+def canonical_upsert_request(chat: dict, request: dict, session_state=None) -> dict:
+    """Create/update a RequestRecord in the canonical ConversationRecord before dispatch."""
+    rec = _canonical_record(chat)
+    rid = str(request.get("request_id") or "").strip()
+    if not rid:
+        raise ValueError("canonical RequestRecord requires request_id")
+    row = dict(request)
+    row["request_id"] = rid
+    existing = next((x for x in rec["requests"] if isinstance(x, dict) and str(x.get("request_id") or "") == rid), None)
+    if existing is None:
+        rec["requests"].append(copy.deepcopy(row))
+        existing = rec["requests"][-1]
+    else:
+        for k, v in row.items():
+            if v not in (None, "", [], {}):
+                existing[k] = copy.deepcopy(v)
+    commit_canonical_record(chat, session_state)
+    return existing
+
+
+def canonical_upsert_round(chat: dict, round_row: dict, session_state=None) -> dict:
+    """Create/update a RoundRecord in the canonical ConversationRecord before provider dispatch."""
+    rec = _canonical_record(chat)
+    oid = str(round_row.get("round_id") or "").strip()
+    if not oid:
+        raise ValueError("canonical RoundRecord requires round_id")
+    row = dict(round_row)
+    row["round_id"] = oid
+    existing = next((x for x in rec["rounds"] if isinstance(x, dict) and str(x.get("round_id") or "") == oid), None)
+    if existing is None:
+        rec["rounds"].append(copy.deepcopy(row))
+        existing = rec["rounds"][-1]
+    else:
+        for k, v in row.items():
+            if v not in (None, "", [], {}):
+                existing[k] = copy.deepcopy(v)
+    commit_canonical_record(chat, session_state)
+    return existing
+
+
+def assert_canonical_lifecycle_ready(chat: dict, message_id: str, request_id: str, round_id: str) -> None:
+    """Fail closed unless Message→Request→Round is already canonical and committed."""
+    rec = _canonical_record(chat)
+    mid, rid, oid = str(message_id or "").strip(), str(request_id or "").strip(), str(round_id or "").strip()
+    if not mid or not rid or not oid:
+        raise RuntimeError("CANONICAL_LIFECYCLE_NOT_READY: incomplete identity")
+    msg = next((x for x in rec["messages"] if isinstance(x, dict) and str(x.get("message_id") or "") == mid), None)
+    req = next((x for x in rec["requests"] if isinstance(x, dict) and str(x.get("request_id") or "") == rid), None)
+    rnd = next((x for x in rec["rounds"] if isinstance(x, dict) and str(x.get("round_id") or "") == oid), None)
+    if not msg or not req or not rnd:
+        raise RuntimeError("CANONICAL_LIFECYCLE_NOT_READY: Message/Request/Round missing")
+    if str(msg.get("request_id") or "") != rid or str(req.get("message_id") or "") != mid:
+        raise RuntimeError("CANONICAL_LIFECYCLE_NOT_READY: Message↔Request mapping mismatch")
+    if str(rnd.get("request_id") or "") != rid or str(rnd.get("message_id") or "") != mid:
+        raise RuntimeError("CANONICAL_LIFECYCLE_NOT_READY: Request↔Round mapping mismatch")
+    if str(msg.get("conversation_id") or "") != str(chat.get("conversation_id") or "") or str(req.get("conversation_id") or "") != str(chat.get("conversation_id") or "") or str(rnd.get("conversation_id") or "") != str(chat.get("conversation_id") or ""):
+        raise RuntimeError("CANONICAL_LIFECYCLE_NOT_READY: conversation binding mismatch")
 
 def append_once(rows: list, row: dict, identity_keys: tuple[str, ...]) -> None:
     ident = tuple(str(row.get(k, "")) for k in identity_keys)

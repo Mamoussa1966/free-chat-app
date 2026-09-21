@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import hashlib
 import re
 from typing import Any
-from conversation_store import commit_canonical_record
+from conversation_store import commit_canonical_record, canonical_upsert_message, canonical_upsert_round
 
 CONVERSATION_RUNTIME_VERSION = "V24.0-HOTFIX145-CONVERSATION-RUNTIME"
 SCHEMA = "ai-council-conversation-runtime/v1"
@@ -104,8 +104,13 @@ def register_message(chat: dict[str, Any], message: dict[str, Any]) -> dict[str,
         "created_at": item["created_at"],
     })
     chat["message_ledger"] = chat["message_ledger"][-400:]
-    # V26.3.7 lifecycle boundary: Message identity is committed immediately.
-    commit_canonical_record(chat)
+    # V26.3.8: the same MessageRecord enters the canonical ConversationRecord
+    # during creation, not later during audit/reconciliation.
+    canonical_upsert_message(chat, {
+        "message_id": mid, "conversation_id": chat["conversation_id"],
+        "session_id": chat["session_id"], "role": item.get("role"),
+        "request_id": item.get("request_id"), "created_at": item["created_at"],
+    })
     return item
 
 
@@ -127,8 +132,8 @@ def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no
     # not reconstructed later by the audit.
     record = chat.setdefault("conversation_record", {})
     record.setdefault("rounds", [])
-    if not any(isinstance(x, dict) and str(x.get("round_id") or "") == round_id for x in record["rounds"]):
-        record["rounds"].append(dict(row))
+    # V26.3.8: RoundRecord is committed to the canonical store at creation.
+    canonical_upsert_round(chat, row)
     return round_id
 
 
@@ -142,6 +147,7 @@ def finish_round(chat: dict[str, Any], round_id: str, status: str, result_count:
                 if isinstance(canonical, dict) and canonical.get("round_id") == round_id:
                     canonical.update({"status": row["status"], "result_count": row["result_count"], "finished_at": row["finished_at"]})
                     break
+            commit_canonical_record(chat)
             return
 
 
