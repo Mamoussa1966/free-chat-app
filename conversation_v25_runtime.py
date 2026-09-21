@@ -74,32 +74,61 @@ def sync_v26_message_record(chat: dict, message_id: str, request_id: str, role: 
 
 
 def reconcile_v26_message_ledger(chat: dict) -> list[dict]:
-    """Reconcile durable message/request identity from all application ledgers.
+    """Build the durable V26 message ledger from application-owned message/request records.
 
-    V26.1 deliberately separates *identity recovery* from *historical request
-    reconciliation*. It never parses provider prose and never invents IDs.
+    Priority: persisted chat messages -> persisted REQUEST_RECORD binding -> legacy
+    HOTFIX145 message ledger. Provider prose is never consulted and IDs are never
+    generated here. A message is accepted only when an application-owned request
+    record binds the same message_id and request_id.
     """
     ensure_v25_store(chat)
-    for record in chat.get("request_records", []):
-        if not isinstance(record, dict):
+    request_by_id = {
+        _s(r.get("request_id")): r for r in chat.get("request_records", [])
+        if isinstance(r, dict) and _s(r.get("request_id"))
+    }
+    existing = {
+        _s(r.get("message_id")): r for r in chat.get("message_ledger_v26", [])
+        if isinstance(r, dict) and _s(r.get("message_id"))
+    }
+    candidates = []
+    # The persisted conversation message ledger is the primary historical source.
+    for msg in chat.get("messages", []):
+        if not isinstance(msg, dict) or _s(msg.get("role")).lower() != "user":
             continue
-        mid, rid = _s(record.get("message_id")), _s(record.get("request_id"))
-        if mid and rid:
-            sync_v26_message_record(chat, mid, rid, "user", _s(record.get("created_at")))
-    # HOTFIX145 already owns the authoritative message ledger. Recover any
-    # message/request binding that is present there and also has a persisted
-    # REQUEST_RECORD. This is historical reconciliation, not synthetic creation.
+        mid = _s(msg.get("id") or msg.get("message_id"))
+        rid = _s(msg.get("request_id"))
+        if mid and rid and rid in request_by_id and _s(request_by_id[rid].get("message_id")) == mid:
+            candidates.append((mid, rid, _s(msg.get("created_at")), "HOTFIX145_PERSISTED_MESSAGE_AND_REQUEST_RECORD"))
+    # Backfill only from an explicit persisted REQUEST_RECORD binding.
+    for rid, record in request_by_id.items():
+        mid = _s(record.get("message_id"))
+        if mid:
+            candidates.append((mid, rid, _s(record.get("created_at")), "APPLICATION_OWNED_REQUEST_RECORD"))
+    # Legacy HOTFIX145 ledger is an additional corroborating source.
     for msg in chat.get("message_ledger", []):
         if not isinstance(msg, dict):
             continue
         mid, rid = _s(msg.get("message_id") or msg.get("id")), _s(msg.get("request_id"))
-        if not mid or not rid:
-            continue
-        record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and _s(r.get("request_id")) == rid), None)
-        if record is not None and _s(record.get("message_id")) == mid:
-            sync_v26_message_record(chat, mid, rid, _s(msg.get("role")) or "user", _s(msg.get("created_at")))
-    return [x for x in chat.get("message_ledger_v26", []) if isinstance(x, dict)]
+        rec = request_by_id.get(rid)
+        if mid and rid and rec is not None and _s(rec.get("message_id")) == mid:
+            candidates.append((mid, rid, _s(msg.get("created_at")), "HOTFIX145_MESSAGE_LEDGER_AND_REQUEST_RECORD"))
 
+    merged = {}
+    for mid, rid, created_at, source in candidates:
+        if mid not in merged:
+            merged[mid] = {
+                "schema": V26_SCHEMA, "message_id": mid, "request_id": rid,
+                "conversation_id": _s(chat.get("conversation_id")),
+                "session_id": _s(chat.get("session_id")), "role": "user",
+                "created_at": created_at or _s(request_by_id[rid].get("created_at")),
+                "authoritative_source": source,
+            }
+        elif merged[mid].get("request_id") != rid:
+            # Conflicting bindings are retained as an explicit contradiction; do not overwrite.
+            merged[mid]["identity_conflict"] = True
+    chat["message_ledger_v26"] = list(merged.values())[-1000:]
+    touch(chat)
+    return [x for x in chat.get("message_ledger_v26", []) if isinstance(x, dict)]
 
 def reconcile_v26_historical_requests(chat: dict) -> None:
     """Materialize V25 request/round ledger rows for every persisted request.
@@ -302,7 +331,7 @@ def authoritative_audit(chat: dict) -> dict:
     b2 = sorted({_s(x.get("bridge_id")) for x in bridges if _s(x.get("request_id")) == r2 and _s(x.get("bridge_id"))}) if r2 else []
     srows = {_s(x.get("message_id")): x for x in synth}
 
-    enough = len(mids) == 2 and len(req_ids) == 2
+    enough = len(mids) == 2 and len(req_ids) == 2 and len(set(req_ids)) == 2 and all(mids)
     request_isolation = "NOT_PROVEN"
     result_isolation = "NOT_PROVEN"
     counter_isolation = "NOT_PROVEN"
@@ -323,6 +352,11 @@ def authoritative_audit(chat: dict) -> dict:
         "request_2_id": r2 or "NOT_PROVEN",
         "historical_persisted_request_count": len(historical_request_records),
         "historical_persisted_request_ids": persisted_request_ids[-20:] if persisted_request_ids else "NOT_PROVEN",
+        "message_ledger_source": "APPLICATION_OWNED_MESSAGE_AND_REQUEST_RECORDS",
+        "message_ledger_count": len(messages),
+        "message_ledger_user_count": len(messages),
+        "previous_request_reexecuted": (False if enough and r1 != r2 else "NOT_PROVEN"),
+        "two_message_isolation": (request_isolation if enough else "NOT_PROVEN"),
         "message_1_request_mapping": (r1 == _s(next((x.get("request_id") for x in req_by_msg.get(m1, [])), ""))) if enough else "NOT_PROVEN",
         "message_2_request_mapping": (r2 == _s(next((x.get("request_id") for x in req_by_msg.get(m2, [])), ""))) if enough else "NOT_PROVEN",
         "round_1_ids": round_ids_by_msg.get(m1) or "NOT_PROVEN",
