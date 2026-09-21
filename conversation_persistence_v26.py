@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+from conversation_store import now
 
 SCHEMA = "v26.3.3-canonical-conversation-record-persistence/v4"
 MAX_MESSAGES = 1000
@@ -157,16 +158,73 @@ def authoritative_history(chat, session_state):
 
 
 def snapshot_chat_identity(chat, session_state):
+    """Persist the complete application-owned Conversation identity before audit.
+
+    V26.3.4 closes the gap exposed by the two-message runtime test: HOTFIX145's
+    canonical chat object contains the user-facing Message records even when a
+    narrower request ledger has already been reduced to the current Request.
+    Those records are application-owned (not provider prose), so they are valid
+    identity evidence. Existing request/round records are preferred; no IDs are
+    minted here. A request is copied from an existing application-owned record
+    only when its explicit request_id is already bound to a persisted Message.
+    """
     ensure_persistence_store(session_state)
     _chat_bucket(chat)
+
+    # 1) HOTFIX145 canonical message ledger.
     for row in chat.get("message_ledger", []):
-        if isinstance(row, dict):
+        if isinstance(row, dict) and _s(row.get("message_id")) and _s(row.get("request_id")):
             persist_identity(chat, session_state, message=row)
-    for row in chat.get("request_records", []):
-        if isinstance(row, dict):
-            persist_identity(chat, session_state, request=row)
+
+    # 2) Canonical user Message objects. This is the critical historical bridge:
+    # the UI/history may retain both Messages while request_records is current-only.
+    for row in chat.get("messages", []):
+        if not isinstance(row, dict) or str(row.get("role") or "").lower() != "user":
+            continue
+        mid = _s(row.get("id") or row.get("message_id"))
+        rid = _s(row.get("request_id"))
+        if not mid or not rid:
+            continue
+        persist_identity(chat, session_state, message={
+            "message_id": mid,
+            "conversation_id": _s(row.get("conversation_id")) or _s(chat.get("conversation_id")),
+            "session_id": _s(row.get("session_id")) or _s(chat.get("session_id")),
+            "role": "user",
+            "request_id": rid,
+            "created_at": row.get("created_at") or now(),
+        })
+
+    # 3) Request identity: prefer the real lifecycle/request record. If a historical
+    # user Message has an explicit request_id but request_records has been narrowed,
+    # use an already-existing application-owned V24 request ledger row as evidence.
+    request_rows = []
+    request_rows.extend([x for x in chat.get("request_records", []) if isinstance(x, dict)])
+    request_rows.extend([x for x in chat.get("request_ledger_v24", []) if isinstance(x, dict)])
+    seen = set()
+    for row in request_rows:
+        rid = _s(row.get("request_id"))
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        bound_mid = _s(row.get("message_id"))
+        if not bound_mid:
+            bound_mid = next((_s(m.get("message_id")) for m in chat.get("message_ledger", [])
+                              if isinstance(m, dict) and _s(m.get("request_id")) == rid), "")
+        if not bound_mid:
+            bound_mid = next((_s(m.get("id") or m.get("message_id")) for m in chat.get("messages", [])
+                              if isinstance(m, dict) and str(m.get("role") or "").lower() == "user" and _s(m.get("request_id")) == rid), "")
+        if not bound_mid:
+            continue
+        out = copy.deepcopy(row)
+        out["request_id"] = rid
+        out["message_id"] = bound_mid
+        out.setdefault("conversation_id", _s(chat.get("conversation_id")))
+        out.setdefault("session_id", _s(chat.get("session_id")))
+        persist_identity(chat, session_state, request=out)
+
+    # 4) Real HOTFIX145 Round records. Never synthesize a round_id.
     for row in chat.get("round_ledger", []):
-        if isinstance(row, dict):
+        if isinstance(row, dict) and _s(row.get("round_id")) and _s(row.get("request_id")) and _s(row.get("message_id")):
             persist_identity(chat, session_state, round_row=row)
 
 
