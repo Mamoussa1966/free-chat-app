@@ -19,13 +19,14 @@ def _v2631_history(chat):
     view. The historical gate must inspect the same object that survives conversation
     reruns/hydration.
     """
-    root = chat.get("v26_3_conversation_persistence")
     cid = _s(chat.get("conversation_id")) if isinstance(chat, dict) else ""
+    record = chat.get("conversation_record") if isinstance(chat, dict) else None
+    root = record.get("v26_3_conversation_persistence") if isinstance(record, dict) else None
     bucket = root.get(cid) if isinstance(root, dict) and cid else None
     if not isinstance(bucket, dict):
-        return {"source": "V26.3.2_CANONICAL_CONVERSATION_OBJECT_PERSISTENCE", "messages": [], "requests": [], "rounds": []}
+        return {"source": "V26.3.3_CANONICAL_CONVERSATION_RECORD_PERSISTENCE", "messages": [], "requests": [], "rounds": []}
     return {
-        "source": "V26.3.2_CANONICAL_CONVERSATION_OBJECT_PERSISTENCE",
+        "source": "V26.3.3_CANONICAL_CONVERSATION_RECORD_PERSISTENCE",
         "messages": deepcopy(bucket.get("messages", [])) if isinstance(bucket.get("messages"), list) else [],
         "requests": deepcopy(bucket.get("requests", [])) if isinstance(bucket.get("requests"), list) else [],
         "rounds": deepcopy(bucket.get("rounds", [])) if isinstance(bucket.get("rounds"), list) else [],
@@ -376,8 +377,8 @@ def authoritative_audit(chat: dict) -> dict:
         "request_2_id": r2 or "NOT_PROVEN",
         "historical_persisted_request_count": len(historical_request_records),
         "historical_persisted_request_ids": persisted_request_ids[-20:] if persisted_request_ids else "NOT_PROVEN",
-        "message_ledger_source": hist.get("source", "V26.3.2_CANONICAL_CONVERSATION_OBJECT_PERSISTENCE"),
-        "historical_source_authority": "V26.3.1_PERSISTENCE_IS_AUTHORITATIVE",
+        "message_ledger_source": hist.get("source", "V26.3.3_CANONICAL_CONVERSATION_RECORD_PERSISTENCE"),
+        "historical_source_authority": "V26.3.3_PERSISTENCE_IS_AUTHORITATIVE",
         "historical_source_refuses_narrower_current_ledgers": True,
         "historical_narrowing_conflict": historical_narrowing_conflict,
         "message_ledger_count": len(messages),

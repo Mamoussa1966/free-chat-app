@@ -1,7 +1,7 @@
 from __future__ import annotations
 import copy
 
-SCHEMA = "v26.3.2-authoritative-conversation-persistence/v3"
+SCHEMA = "v26.3.3-canonical-conversation-record-persistence/v4"
 MAX_MESSAGES = 1000
 MAX_REQUESTS = 1000
 MAX_ROUNDS = 2000
@@ -58,23 +58,36 @@ def _append_unique(rows, row, keys):
 
 
 def _chat_bucket(chat):
-    """Canonical per-conversation persistence embedded in the active chat object.
+    """Canonical durable-in-object persistence attached to conversation_record.
 
-    This is deliberately separate from Streamlit session_state: reruns/hydration may
-    reconstruct session_state, but the canonical Conversation object must carry its
-    historical Message→Request→Round chain with it.
+    `chat` is the application-owned canonical Conversation object held inside the
+    conversation collection.  The historical ledger MUST live inside that object,
+    not only in Streamlit session_state.  The legacy top-level field is retained as
+    a compatibility mirror, never as the authoritative source.
     """
     cid = _s(chat.get("conversation_id"))
     if not cid:
         return None
-    root = chat.setdefault("v26_3_conversation_persistence", {})
+    record = chat.setdefault("conversation_record", {})
+    if not isinstance(record, dict):
+        record = {}
+        chat["conversation_record"] = record
+    root = record.setdefault("v26_3_conversation_persistence", {})
     if not isinstance(root, dict):
         root = {}
-        chat["v26_3_conversation_persistence"] = root
+        record["v26_3_conversation_persistence"] = root
     row = root.setdefault(cid, {"schema": SCHEMA, "conversation_id": cid, "messages": [], "requests": [], "rounds": []})
+    if not isinstance(row, dict):
+        row = {"schema": SCHEMA, "conversation_id": cid, "messages": [], "requests": [], "rounds": []}
+        root[cid] = row
     for key in ("messages", "requests", "rounds"):
         if not isinstance(row.get(key), list):
             row[key] = []
+    # Keep the former location synchronized for compatibility, but it is never read
+    # as authoritative historical state.
+    legacy_root = chat.setdefault("v26_3_conversation_persistence", {})
+    if isinstance(legacy_root, dict):
+        legacy_root[cid] = row
     return row
 
 
@@ -110,16 +123,25 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
 
 
 
-def get_authoritative_bucket(chat, session_state):
-    """Return canonical historical persistence; session_state is fallback mirror only."""
-    canonical = _chat_bucket(chat)
-    if canonical is not None and (canonical.get("messages") or canonical.get("requests") or canonical.get("rounds")):
-        return canonical
-    mirror = _bucket(ensure_persistence_store(session_state), chat.get("conversation_id"))
-    if canonical is not None and mirror is not None:
-        _merge_bucket(canonical, mirror)
-        return canonical
-    return canonical or {"schema": SCHEMA, "conversation_id": "", "messages": [], "requests": [], "rounds": []}
+def get_authoritative_bucket(chat, session_state=None):
+    """Read the canonical Conversation object's durable historical ledger only.
+
+    session_state is intentionally NOT an authoritative fallback.  A missing
+    canonical record is therefore NOT_PROVEN rather than reconstructed from a
+    narrower/current source.
+    """
+    cid = _s(chat.get("conversation_id"))
+    if not cid:
+        return {"schema": SCHEMA, "conversation_id": "", "messages": [], "requests": [], "rounds": []}
+    record = chat.get("conversation_record") if isinstance(chat, dict) else None
+    root = record.get("v26_3_conversation_persistence") if isinstance(record, dict) else None
+    bucket = root.get(cid) if isinstance(root, dict) else None
+    if isinstance(bucket, dict):
+        for key in ("messages", "requests", "rounds"):
+            if not isinstance(bucket.get(key), list):
+                bucket[key] = []
+        return bucket
+    return {"schema": SCHEMA, "conversation_id": cid, "messages": [], "requests": [], "rounds": []}
 
 
 def authoritative_history(chat, session_state):
@@ -148,7 +170,7 @@ def snapshot_chat_identity(chat, session_state):
             persist_identity(chat, session_state, round_row=row)
 
 
-def hydrate_chat_identity(chat, session_state):
+def hydrate_chat_identity(chat, session_state=None):
     bucket = get_authoritative_bucket(chat, session_state)
     if bucket is None:
         return chat
