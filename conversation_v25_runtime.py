@@ -13,12 +13,23 @@ from conversation_store import ensure_store, touch, now
 
 
 def _v2631_history(chat):
-    try:
-        from conversation_persistence_v26 import authoritative_history
-        import streamlit as st
-        return authoritative_history(st.session_state, chat.get("conversation_id"))
-    except Exception:
-        return {"source":"V26.3.1_APPLICATION_OWNED_CONVERSATION_PERSISTENCE","messages":[],"requests":[],"rounds":[]}
+    """Read ONLY the canonical persistence embedded in the Conversation object.
+
+    This avoids a Streamlit/session-state lookup becoming an accidental current-run
+    view. The historical gate must inspect the same object that survives conversation
+    reruns/hydration.
+    """
+    root = chat.get("v26_3_conversation_persistence")
+    cid = _s(chat.get("conversation_id")) if isinstance(chat, dict) else ""
+    bucket = root.get(cid) if isinstance(root, dict) and cid else None
+    if not isinstance(bucket, dict):
+        return {"source": "V26.3.2_CANONICAL_CONVERSATION_OBJECT_PERSISTENCE", "messages": [], "requests": [], "rounds": []}
+    return {
+        "source": "V26.3.2_CANONICAL_CONVERSATION_OBJECT_PERSISTENCE",
+        "messages": deepcopy(bucket.get("messages", [])) if isinstance(bucket.get("messages"), list) else [],
+        "requests": deepcopy(bucket.get("requests", [])) if isinstance(bucket.get("requests"), list) else [],
+        "rounds": deepcopy(bucket.get("rounds", [])) if isinstance(bucket.get("rounds"), list) else [],
+    }
 
 V25_SCHEMA = "v25-conversation-ledger-message-runtime/v2"
 V26_SCHEMA = "v26-message-runtime-authoritative-mapping/v1"
@@ -319,6 +330,8 @@ def authoritative_audit(chat: dict) -> dict:
     req_by_msg = {mid: [x for x in requests if _s(x.get("message_id")) == mid] for mid in mids}
     req_ids = [_s(req_by_msg[mid][-1].get("request_id")) for mid in mids if req_by_msg[mid]]
     historical_request_records = [x for x in requests if _s(x.get("request_id"))]
+    narrower_request_count = len([x for x in chat.get("request_records", []) if isinstance(x, dict) and _s(x.get("request_id"))])
+    historical_narrowing_conflict = bool(len(historical_request_records) > narrower_request_count)
     persisted_request_ids = [_s(x.get("request_id")) for x in historical_request_records]
     round_by_msg = {mid: [x for x in rounds if _s(x.get("message_id")) == mid] for mid in mids}
     round_ids_by_msg = {mid: [_s(x.get("round_id")) for x in round_by_msg[mid] if _s(x.get("round_id"))] for mid in mids}
@@ -363,9 +376,10 @@ def authoritative_audit(chat: dict) -> dict:
         "request_2_id": r2 or "NOT_PROVEN",
         "historical_persisted_request_count": len(historical_request_records),
         "historical_persisted_request_ids": persisted_request_ids[-20:] if persisted_request_ids else "NOT_PROVEN",
-        "message_ledger_source": hist.get("source", "V26.3.1_APPLICATION_OWNED_CONVERSATION_PERSISTENCE"),
+        "message_ledger_source": hist.get("source", "V26.3.2_CANONICAL_CONVERSATION_OBJECT_PERSISTENCE"),
         "historical_source_authority": "V26.3.1_PERSISTENCE_IS_AUTHORITATIVE",
         "historical_source_refuses_narrower_current_ledgers": True,
+        "historical_narrowing_conflict": historical_narrowing_conflict,
         "message_ledger_count": len(messages),
         "message_ledger_user_count": len(messages),
         "previous_request_reexecuted": (False if enough and r1 != r2 else "NOT_PROVEN"),
