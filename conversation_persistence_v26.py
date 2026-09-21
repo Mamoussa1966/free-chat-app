@@ -2,7 +2,7 @@ from __future__ import annotations
 import copy
 from conversation_store import now
 
-SCHEMA = "v26.3.3-canonical-conversation-record-persistence/v4"
+SCHEMA = "v26.3.5-canonical-conversation-store-persistence/v5"
 MAX_MESSAGES = 1000
 MAX_REQUESTS = 1000
 MAX_ROUNDS = 2000
@@ -59,12 +59,12 @@ def _append_unique(rows, row, keys):
 
 
 def _chat_bucket(chat):
-    """Canonical durable-in-object persistence attached to conversation_record.
+    """Return the ONE canonical historical bucket owned by HOTFIX145 ConversationRecord.
 
-    `chat` is the application-owned canonical Conversation object held inside the
-    conversation collection.  The historical ledger MUST live inside that object,
-    not only in Streamlit session_state.  The legacy top-level field is retained as
-    a compatibility mirror, never as the authoritative source.
+    V26.3.4 kept a V26-only subtree under conversation_record and reconstructed
+    history later.  V26.3.5 removes that split-brain design: ConversationRecord
+    owns messages/requests/rounds directly; the V26 subtree is only a schema
+    alias pointing at those exact lists.
     """
     cid = _s(chat.get("conversation_id"))
     if not cid:
@@ -73,22 +73,27 @@ def _chat_bucket(chat):
     if not isinstance(record, dict):
         record = {}
         chat["conversation_record"] = record
+    record.setdefault("conversation_id", cid)
+    record.setdefault("session_id", _s(chat.get("session_id")))
+    record.setdefault("messages", [])
+    record.setdefault("requests", [])
+    record.setdefault("rounds", [])
+    for key in ("messages", "requests", "rounds"):
+        if not isinstance(record.get(key), list):
+            record[key] = []
+    # Legacy/V26 namespace is an exact alias to the canonical lists.
     root = record.setdefault("v26_3_conversation_persistence", {})
     if not isinstance(root, dict):
         root = {}
         record["v26_3_conversation_persistence"] = root
-    row = root.setdefault(cid, {"schema": SCHEMA, "conversation_id": cid, "messages": [], "requests": [], "rounds": []})
-    if not isinstance(row, dict):
-        row = {"schema": SCHEMA, "conversation_id": cid, "messages": [], "requests": [], "rounds": []}
-        root[cid] = row
-    for key in ("messages", "requests", "rounds"):
-        if not isinstance(row.get(key), list):
-            row[key] = []
-    # Keep the former location synchronized for compatibility, but it is never read
-    # as authoritative historical state.
-    legacy_root = chat.setdefault("v26_3_conversation_persistence", {})
-    if isinstance(legacy_root, dict):
-        legacy_root[cid] = row
+    row = root.setdefault(cid, {})
+    row["schema"] = SCHEMA
+    row["conversation_id"] = cid
+    row["messages"] = record["messages"]
+    row["requests"] = record["requests"]
+    row["rounds"] = record["rounds"]
+    # Keep old top-level field as a non-authoritative compatibility alias.
+    chat["v26_3_conversation_persistence"] = root
     return row
 
 
@@ -102,10 +107,11 @@ def _merge_bucket(dst, src):
 
 
 def persist_identity(chat, session_state, *, message=None, request=None, round_row=None):
-    """Append identity to BOTH canonical chat persistence and session mirror.
+    """Canonical lifecycle write: Message/Request/Round are saved immediately.
 
-    The chat-embedded ledger is authoritative. session_state is only a mirror for
-    compatibility/hydration; neither source mints IDs or consults provider prose.
+    No audit-time reconstruction is required. Existing identities are upserted
+    in-place; a conflicting binding is retained as identity_conflict rather than
+    replacing historical truth.
     """
     canonical = _chat_bucket(chat)
     if canonical is None:
@@ -117,32 +123,39 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
     if isinstance(round_row, dict):
         _append_unique(canonical["rounds"], round_row, ("round_id",))
     for key, limit in (("messages", MAX_MESSAGES), ("requests", MAX_REQUESTS), ("rounds", MAX_ROUNDS)):
-        canonical[key] = canonical[key][-limit:]
-
-    mirror = _bucket(ensure_persistence_store(session_state), chat.get("conversation_id"))
-    _merge_bucket(mirror, canonical)
-
+        canonical[key][:] = canonical[key][-limit:]
+    # Re-bind the alias after any list mutation.
+    _chat_bucket(chat)
+    # Session state is a mirror only. It is useful across Streamlit reruns, but
+    # it is never consulted by the authoritative audit.
+    if session_state is not None:
+        mirror = _bucket(ensure_persistence_store(session_state), chat.get("conversation_id"))
+        _merge_bucket(mirror, canonical)
 
 
 def get_authoritative_bucket(chat, session_state=None):
-    """Read the canonical Conversation object's durable historical ledger only.
-
-    session_state is intentionally NOT an authoritative fallback.  A missing
-    canonical record is therefore NOT_PROVEN rather than reconstructed from a
-    narrower/current source.
-    """
+    """Read the HOTFIX145 ConversationRecord directly; never current-only ledgers."""
     cid = _s(chat.get("conversation_id"))
     if not cid:
         return {"schema": SCHEMA, "conversation_id": "", "messages": [], "requests": [], "rounds": []}
     record = chat.get("conversation_record") if isinstance(chat, dict) else None
-    root = record.get("v26_3_conversation_persistence") if isinstance(record, dict) else None
-    bucket = root.get(cid) if isinstance(root, dict) else None
-    if isinstance(bucket, dict):
-        for key in ("messages", "requests", "rounds"):
-            if not isinstance(bucket.get(key), list):
-                bucket[key] = []
-        return bucket
-    return {"schema": SCHEMA, "conversation_id": cid, "messages": [], "requests": [], "rounds": []}
+    if not isinstance(record, dict):
+        return {"schema": SCHEMA, "conversation_id": cid, "messages": [], "requests": [], "rounds": []}
+    # Canonical direct lists. If an older V26.3.x bucket exists but direct lists
+    # are empty, import it once into the canonical object (migration, not audit).
+    direct = {k: record.get(k) for k in ("messages", "requests", "rounds")}
+    root = record.get("v26_3_conversation_persistence")
+    legacy = root.get(cid) if isinstance(root, dict) else None
+    for key in ("messages", "requests", "rounds"):
+        if not isinstance(direct.get(key), list):
+            record[key] = []
+    if isinstance(legacy, dict):
+        for key, ident in (("messages", "message_id"), ("requests", "request_id"), ("rounds", "round_id")):
+            if not record[key] and isinstance(legacy.get(key), list):
+                for item in legacy[key]:
+                    if isinstance(item, dict):
+                        _append_unique(record[key], item, (ident,))
+    return _chat_bucket(chat)
 
 
 def authoritative_history(chat, session_state):

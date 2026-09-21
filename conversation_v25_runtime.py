@@ -13,23 +13,20 @@ from conversation_store import ensure_store, touch, now
 
 
 def _v2631_history(chat):
-    """Read ONLY the canonical persistence embedded in the Conversation object.
+    """Read the HOTFIX145 ConversationRecord historical collections directly.
 
-    This avoids a Streamlit/session-state lookup becoming an accidental current-run
-    view. The historical gate must inspect the same object that survives conversation
-    reruns/hydration.
+    V26.3.5 deliberately does not read the current request ledger, provider
+    prose, or a V26-only shadow store. The canonical ConversationRecord owns
+    Message/Request/Round history and survives the normal chat object rerun.
     """
-    cid = _s(chat.get("conversation_id")) if isinstance(chat, dict) else ""
     record = chat.get("conversation_record") if isinstance(chat, dict) else None
-    root = record.get("v26_3_conversation_persistence") if isinstance(record, dict) else None
-    bucket = root.get(cid) if isinstance(root, dict) and cid else None
-    if not isinstance(bucket, dict):
-        return {"source": "V26.3.3_CANONICAL_CONVERSATION_RECORD_PERSISTENCE", "messages": [], "requests": [], "rounds": []}
+    if not isinstance(record, dict):
+        return {"source": "HOTFIX145_CONVERSATION_RECORD", "messages": [], "requests": [], "rounds": []}
     return {
-        "source": "V26.3.3_CANONICAL_CONVERSATION_RECORD_PERSISTENCE",
-        "messages": deepcopy(bucket.get("messages", [])) if isinstance(bucket.get("messages"), list) else [],
-        "requests": deepcopy(bucket.get("requests", [])) if isinstance(bucket.get("requests"), list) else [],
-        "rounds": deepcopy(bucket.get("rounds", [])) if isinstance(bucket.get("rounds"), list) else [],
+        "source": "HOTFIX145_CONVERSATION_RECORD",
+        "messages": deepcopy(record.get("messages", [])) if isinstance(record.get("messages"), list) else [],
+        "requests": deepcopy(record.get("requests", [])) if isinstance(record.get("requests"), list) else [],
+        "rounds": deepcopy(record.get("rounds", [])) if isinstance(record.get("rounds"), list) else [],
     }
 
 V25_SCHEMA = "v25-conversation-ledger-message-runtime/v2"
@@ -42,6 +39,24 @@ def _s(value) -> str:
 
 def ensure_v25_store(chat: dict) -> dict:
     ensure_store(chat)
+    # Compatibility migration for pre-V26.3.5 application-owned ledgers.
+    # Production V26.3.5 writes directly through persist_identity(); this path
+    # only upgrades an older in-memory ConversationRecord before any audit/use.
+    record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    from conversation_persistence_v26 import persist_identity
+    # Idempotent compatibility migration: import any legacy application-owned
+    # identity that is not yet present in the canonical ConversationRecord.
+    # This is a lifecycle upgrade, not a current-request audit fallback.
+    if True:
+        for row in chat.get("message_ledger_v24", []):
+            if isinstance(row, dict) and _s(row.get("message_id")):
+                persist_identity(chat, None, message=row)
+        for row in chat.get("request_records", []):
+            if isinstance(row, dict) and _s(row.get("request_id")) and _s(row.get("message_id")):
+                persist_identity(chat, None, request=row)
+        for row in chat.get("round_ledger", []):
+            if isinstance(row, dict) and _s(row.get("round_id")):
+                persist_identity(chat, None, round_row=row)
     chat.setdefault("v25_schema", V25_SCHEMA)
     chat.setdefault("request_ledger_v25", [])
     chat.setdefault("round_ledger_v25", [])
@@ -377,12 +392,20 @@ def authoritative_audit(chat: dict) -> dict:
         "request_2_id": r2 or "NOT_PROVEN",
         "historical_persisted_request_count": len(historical_request_records),
         "historical_persisted_request_ids": persisted_request_ids[-20:] if persisted_request_ids else "NOT_PROVEN",
-        "message_ledger_source": hist.get("source", "V26.3.3_CANONICAL_CONVERSATION_RECORD_PERSISTENCE"),
-        "historical_source_authority": "V26.3.3_PERSISTENCE_IS_AUTHORITATIVE",
+        "message_ledger_source": hist.get("source", "HOTFIX145_CONVERSATION_RECORD"),
+        "historical_source_authority": "HOTFIX145_CONVERSATION_RECORD_IS_AUTHORITATIVE",
         "historical_source_refuses_narrower_current_ledgers": True,
         "historical_narrowing_conflict": historical_narrowing_conflict,
         "message_ledger_count": len(messages),
         "message_ledger_user_count": len(messages),
+        "historical_message_count": len(messages),
+        "historical_request_count": len(historical_request_records),
+        "historical_round_count": len(rounds),
+        "HISTORICAL_MESSAGE_COUNT": len(messages),
+        "HISTORICAL_REQUEST_COUNT": len(historical_request_records),
+        "HISTORICAL_ROUND_COUNT": len(rounds),
+        "HISTORICAL_SOURCE": hist.get("source", "HOTFIX145_CONVERSATION_RECORD"),
+        "AUTHORITATIVE_SOURCE": "APPLICATION_OWNED_RUNTIME_STATE / HOTFIX145_CONVERSATION_RECORD",
         "previous_request_reexecuted": (False if enough and r1 != r2 else "NOT_PROVEN"),
         "two_message_isolation": (request_isolation if enough else "NOT_PROVEN"),
         "message_1_request_mapping": (r1 == _s(next((x.get("request_id") for x in req_by_msg.get(m1, [])), ""))) if enough else "NOT_PROVEN",

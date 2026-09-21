@@ -109,7 +109,7 @@ def register_message(chat: dict[str, Any], message: dict[str, Any]) -> dict[str,
 def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no: int) -> str:
     ensure_conversation_state(chat)
     round_id = f"{chat['conversation_id']}:{request_id}:r{int(round_no)}"
-    chat["round_ledger"].append({
+    row = {
         "round_id": round_id,
         "conversation_id": chat["conversation_id"],
         "session_id": chat["session_id"],
@@ -118,7 +118,14 @@ def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no
         "round": int(round_no),
         "status": "STARTED",
         "created_at": utc_now(),
-    })
+    }
+    chat["round_ledger"].append(row)
+    # V26.3.5: the canonical ConversationRecord is updated at round creation,
+    # not reconstructed later by the audit.
+    record = chat.setdefault("conversation_record", {})
+    record.setdefault("rounds", [])
+    if not any(isinstance(x, dict) and str(x.get("round_id") or "") == round_id for x in record["rounds"]):
+        record["rounds"].append(dict(row))
     return round_id
 
 
@@ -127,6 +134,11 @@ def finish_round(chat: dict[str, Any], round_id: str, status: str, result_count:
     for row in reversed(chat["round_ledger"]):
         if row.get("round_id") == round_id:
             row.update({"status": sanitize(status, 40), "result_count": int(result_count), "finished_at": utc_now()})
+            record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+            for canonical in record.get("rounds", []) if isinstance(record.get("rounds"), list) else []:
+                if isinstance(canonical, dict) and canonical.get("round_id") == round_id:
+                    canonical.update({"status": row["status"], "result_count": row["result_count"], "finished_at": row["finished_at"]})
+                    break
             return
 
 

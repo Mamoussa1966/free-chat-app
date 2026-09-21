@@ -9,6 +9,16 @@ def now() -> str:
 def ensure_store(chat: dict) -> dict:
     chat.setdefault("conversation_store_schema", SCHEMA_VERSION)
     chat.setdefault("conversation_record", {})
+    # V26.3.5: HOTFIX145 ConversationRecord itself is the canonical historical
+    # container.  The V26 persistence bucket is a compatibility/schema view of
+    # the same lists, never a separate audit-only ledger.
+    rec = chat.get("conversation_record")
+    if not isinstance(rec, dict):
+        rec = {}
+        chat["conversation_record"] = rec
+    rec.setdefault("messages", [])
+    rec.setdefault("requests", [])
+    rec.setdefault("rounds", [])
     chat.setdefault("message_ledger_v24", [])
     chat.setdefault("round_ledger_v24", [])
     chat.setdefault("request_ledger_v24", [])
@@ -48,13 +58,20 @@ def append_once(rows: list, row: dict, identity_keys: tuple[str, ...]) -> None:
 
 def authoritative_snapshot(chat: dict) -> dict:
     ensure_store(chat)
+    rec = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
     return {
         "schema": SCHEMA_VERSION,
         "conversation_id": chat.get("conversation_id"),
         "session_id": chat.get("session_id"),
+        # Preserve HOTFIX145/V24 snapshot contract.
         "messages": copy.deepcopy(chat.get("message_ledger_v24", [])),
         "rounds": copy.deepcopy(chat.get("round_ledger_v24", [])),
         "requests": copy.deepcopy(chat.get("request_ledger_v24", [])),
+        "canonical_conversation_record": {
+            "messages": copy.deepcopy(rec.get("messages", [])),
+            "requests": copy.deepcopy(rec.get("requests", [])),
+            "rounds": copy.deepcopy(rec.get("rounds", [])),
+        },
         "bridges": copy.deepcopy(chat.get("bridge_ledger_v24", [])),
         "results": copy.deepcopy(chat.get("result_ledger_v24", [])),
         "provenance": copy.deepcopy(chat.get("provenance_ledger_v24", [])),
