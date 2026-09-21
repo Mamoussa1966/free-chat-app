@@ -1,6 +1,6 @@
 from __future__ import annotations
 import copy
-from conversation_store import now
+from conversation_store import now, commit_canonical_record, hydrate_canonical_record
 
 SCHEMA = "v26.3.5-canonical-conversation-store-persistence/v5"
 MAX_MESSAGES = 1000
@@ -126,6 +126,9 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
         canonical[key][:] = canonical[key][-limit:]
     # Re-bind the alias after any list mutation.
     _chat_bucket(chat)
+    # V26.3.7: commit the complete canonical ConversationRecord at every identity
+    # lifecycle boundary. This is the real persistence path, not an audit repair.
+    commit_canonical_record(chat, session_state)
     # Session state is a mirror only. It is useful across Streamlit reruns, but
     # it is never consulted by the authoritative audit.
     if session_state is not None:
@@ -134,7 +137,8 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
 
 
 def get_authoritative_bucket(chat, session_state=None):
-    """Read the HOTFIX145 ConversationRecord directly; never current-only ledgers."""
+    """Read the hydrated canonical ConversationRecord; never current-only ledgers."""
+    hydrate_canonical_record(chat, session_state)
     cid = _s(chat.get("conversation_id"))
     if not cid:
         return {"schema": SCHEMA, "conversation_id": "", "messages": [], "requests": [], "rounds": []}

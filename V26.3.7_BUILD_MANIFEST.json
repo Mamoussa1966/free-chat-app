@@ -1,0 +1,14 @@
+{
+  "version": "V26.3.7",
+  "base": "V26.3.5",
+  "file_count": 198,
+  "modified_or_added": [
+    "conversation_store.py",
+    "conversation_persistence_v26.py",
+    "conversation_runtime.py",
+    "main.py",
+    "tests/test_v26_3_7_lifecycle_persistence.py",
+    "V26.3.7_RELEASE_NOTES.md",
+    "VERSION.txt"
+  ]
+}

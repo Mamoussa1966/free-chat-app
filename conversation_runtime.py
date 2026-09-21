@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import hashlib
 import re
 from typing import Any
+from conversation_store import commit_canonical_record
 
 CONVERSATION_RUNTIME_VERSION = "V24.0-HOTFIX145-CONVERSATION-RUNTIME"
 SCHEMA = "ai-council-conversation-runtime/v1"
@@ -103,6 +104,8 @@ def register_message(chat: dict[str, Any], message: dict[str, Any]) -> dict[str,
         "created_at": item["created_at"],
     })
     chat["message_ledger"] = chat["message_ledger"][-400:]
+    # V26.3.7 lifecycle boundary: Message identity is committed immediately.
+    commit_canonical_record(chat)
     return item
 
 

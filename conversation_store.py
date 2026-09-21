@@ -47,6 +47,87 @@ def touch(chat: dict) -> None:
     rec = chat["conversation_record"]
     rec.update({"conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "created_at": rec.get("created_at") or chat.get("created_at") or now(), "updated_at": chat["updated_at_v24"]})
 
+def _canonical_record(chat: dict) -> dict:
+    """Return the single canonical ConversationRecord container."""
+    ensure_store(chat)
+    rec = chat["conversation_record"]
+    rec.setdefault("messages", [])
+    rec.setdefault("requests", [])
+    rec.setdefault("rounds", [])
+    return rec
+
+def commit_canonical_record(chat: dict, session_state=None) -> dict:
+    """Commit the complete canonical ConversationRecord at a lifecycle boundary.
+
+    The chat ConversationRecord remains authoritative. Session State is only the
+    transport backing used to survive Streamlit script reruns; it is a deep-copy
+    checkpoint of the complete record, never a current-request audit source.
+    """
+    rec = _canonical_record(chat)
+    cid = str(chat.get("conversation_id") or "").strip()
+    if not cid:
+        return rec
+    touch(chat)
+    if session_state is not None:
+        root = session_state.setdefault("v26_3_canonical_conversation_store", {})
+        if not isinstance(root, dict):
+            root = {}
+            session_state["v26_3_canonical_conversation_store"] = root
+        root[cid] = copy.deepcopy({
+            "schema": "v26.3.7-canonical-conversation-store/v6",
+            "conversation_id": cid,
+            "session_id": str(chat.get("session_id") or ""),
+            "record": copy.deepcopy(rec),
+        })
+    return rec
+
+def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
+    """Restore the complete canonical ConversationRecord before runtime/audit use."""
+    ensure_store(chat)
+    cid = str(chat.get("conversation_id") or "").strip()
+    if not cid or session_state is None:
+        return chat
+    root = session_state.get("v26_3_canonical_conversation_store", {})
+    saved = root.get(cid) if isinstance(root, dict) else None
+    if not isinstance(saved, dict) or not isinstance(saved.get("record"), dict):
+        return chat
+    saved_record = saved["record"]
+    current = chat["conversation_record"]
+    # Never replace canonical history with a narrower/current record. Merge by
+    # immutable identity and preserve explicit conflicts.
+    for key, ident in (("messages", "message_id"), ("requests", "request_id"), ("rounds", "round_id")):
+        target = current.setdefault(key, [])
+        existing = {str(x.get(ident) or ""): x for x in target if isinstance(x, dict) and str(x.get(ident) or "")}
+        for item in saved_record.get(key, []) if isinstance(saved_record.get(key), list) else []:
+            if not isinstance(item, dict):
+                continue
+            iid = str(item.get(ident) or "")
+            if not iid:
+                continue
+            old = existing.get(iid)
+            if old is None:
+                target.append(copy.deepcopy(item))
+                existing[iid] = target[-1]
+            else:
+                for k, v in item.items():
+                    if v not in (None, "", [], {}):
+                        old[k] = copy.deepcopy(v)
+    _chat_rebind_alias(chat)
+    return chat
+
+def _chat_rebind_alias(chat: dict) -> None:
+    rec = _canonical_record(chat)
+    root = rec.setdefault("v26_3_conversation_persistence", {})
+    if not isinstance(root, dict):
+        root = {}
+        rec["v26_3_conversation_persistence"] = root
+    cid = str(chat.get("conversation_id") or "").strip()
+    if cid:
+        row = root.setdefault(cid, {})
+        row.update({"schema": "v26.3.7-canonical-conversation-store/v6", "conversation_id": cid,
+                    "messages": rec["messages"], "requests": rec["requests"], "rounds": rec["rounds"]})
+    chat["v26_3_conversation_persistence"] = root
+
 def append_once(rows: list, row: dict, identity_keys: tuple[str, ...]) -> None:
     ident = tuple(str(row.get(k, "")) for k in identity_keys)
     if not all(ident):
