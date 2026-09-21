@@ -19,6 +19,7 @@ from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _ca
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
+from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import ensure_store, authoritative_snapshot, touch
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
@@ -764,6 +765,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 
 def _init_state() -> None:
+    ensure_persistence_store(st.session_state)
     defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -781,10 +783,14 @@ def _active_chat() -> dict:
             chat.setdefault("title", "محادثة جديدة")
             chat.setdefault("created_at", _now())
             _ensure_chat_identity_state(chat)
+            hydrate_chat_identity(chat, st.session_state)
+            snapshot_chat_identity(chat, st.session_state)
             return chat
     chat = _new_chat()
     st.session_state.chats.insert(0, chat)
     st.session_state.active_chat_id = chat["id"]
+    hydrate_chat_identity(chat, st.session_state)
+    snapshot_chat_identity(chat, st.session_state)
     return chat
 
 
@@ -1467,6 +1473,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
             runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no)
+            round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
+            if round_row:
+                persist_identity(chat, st.session_state, round_row=round_row)
             lifecycle.record("PROVIDER_EXECUTION", round_id=round_no, status="STARTED")
             round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id, bridge_controls)
             seen_keys = set()
@@ -1506,6 +1515,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             success_count = sum(1 for r in round_results if str(r.get("status") or "").upper() == "SUCCESS")
             lifecycle.finish_round(round_no, success_count, len(round_results))
             finish_round(chat, runtime_round_id, "COMPLETED", len(round_results))
+            round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
+            if round_row:
+                persist_identity(chat, st.session_state, round_row=round_row)
             lifecycle.record("RESPONSE_VALIDATION", round_id=round_no, status="PASS" if all(str(r.get("status") or "").upper() != "SUCCESS" or bool(r.get("content")) for r in round_results) else "FAIL")
             for r in round_results:
                 runtime_events = r.get("runtime_execution_events") or []
@@ -2232,7 +2244,7 @@ def run_app() -> None:
     chat = _active_chat()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
-    st.caption("V25.0: Conversation Ledger · Message Runtime · Authoritative Two-Message Audit · HOTFIX145 Core Preserved")
+    st.caption("V26.3: Authoritative Conversation Persistence · Message→Request→Round Chain · HOTFIX145 Core Preserved")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
@@ -2334,6 +2346,10 @@ def run_app() -> None:
         chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID"})
         record0 = next(r for r in chat["request_records"] if r.get("request_id") == request_id)
         attach_request_identity(record0, chat, user_message_id, request_id)
+        # V26.3: persist the Message→Request identity before any provider execution.
+        # This is an application-owned append-only session ledger used for hydration;
+        # it is never derived from agent prose and never mints replacement IDs.
+        persist_identity(chat, st.session_state, message={"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": record0.get("created_at")}, request=record0)
         # V26: durably bind the newly allocated Message ID to its Request before provider execution.
         sync_v26_message_record(chat, user_message_id, request_id, "user", record0.get("created_at"))
         ensure_store(chat)
@@ -2349,6 +2365,7 @@ def run_app() -> None:
         user_message = {"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()}
         user_message = register_message(chat, user_message)
         chat["messages"].append(user_message)
+        persist_identity(chat, st.session_state, message={"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": user_message.get("created_at")})
         record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"))
         update_memory(chat, user_message_id, prompt, (chat.get("conversation_context") or {}).get("digest", ""))
         timeline_event(chat, request_id, user_message_id, "MESSAGE_CREATED", role="user")
@@ -2408,6 +2425,8 @@ def run_app() -> None:
         # request row on reruns instead of creating duplicate request/round rows.
         ensure_v25_store(chat)
         reconcile_request(chat, request_id, user_message_id, list(results or []), st.session_state.get("last_synthesis") or {})
+        snapshot_chat_identity(chat, st.session_state)
+        hydrate_chat_identity(chat, st.session_state)
         authoritative_audit(chat)
         timeline_event(chat, request_id, user_message_id, "SYNTHESIS", status=str((st.session_state.get("last_synthesis") or {}).get("status") or "UNKNOWN"))
         touch(chat)
@@ -2417,8 +2436,11 @@ def run_app() -> None:
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1
         st.rerun()
+    hydrate_chat_identity(chat, st.session_state)
+    snapshot_chat_identity(chat, st.session_state)
     runtime_audit = conversation_audit(chat)
     v25_audit = authoritative_audit(chat)
+    v25_audit["v26_3_persistence"] = persistence_audit(chat, st.session_state)
     with st.expander("🧭 V25 Conversation Ledger / Authoritative Runtime", expanded=False):
         st.json(v25_audit)
         st.caption("مصدر الحقيقة: Application-Owned Runtime Records فقط؛ Agent prose غير مستخدم للهوية أو العدادات.")
