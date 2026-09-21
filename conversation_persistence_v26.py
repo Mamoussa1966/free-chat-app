@@ -1,7 +1,7 @@
 from __future__ import annotations
 import copy
 
-SCHEMA = "v26.3-authoritative-conversation-persistence/v1"
+SCHEMA = "v26.3.1-authoritative-conversation-persistence/v2"
 MAX_MESSAGES = 1000
 MAX_REQUESTS = 1000
 MAX_ROUNDS = 2000
@@ -72,6 +72,34 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
     bucket["requests"] = bucket["requests"][-MAX_REQUESTS:]
     bucket["rounds"] = bucket["rounds"][-MAX_ROUNDS:]
 
+
+
+def get_authoritative_bucket(session_state, conversation_id):
+    """Return the application-owned historical ledger for one conversation.
+
+    V26.3.1 makes this store the authoritative historical source. Other chat
+    ledgers may corroborate it, but they may not narrow or replace it.
+    """
+    store = ensure_persistence_store(session_state)
+    bucket = _bucket(store, conversation_id)
+    if bucket is None:
+        return {"schema": SCHEMA, "conversation_id": "", "messages": [], "requests": [], "rounds": []}
+    return bucket
+
+
+def authoritative_history(session_state, conversation_id):
+    bucket = get_authoritative_bucket(session_state, conversation_id)
+    messages = [copy.deepcopy(x) for x in bucket.get("messages", []) if isinstance(x, dict)]
+    requests = [copy.deepcopy(x) for x in bucket.get("requests", []) if isinstance(x, dict)]
+    rounds = [copy.deepcopy(x) for x in bucket.get("rounds", []) if isinstance(x, dict)]
+    return {
+        "schema": SCHEMA,
+        "source": "V26.3.1_APPLICATION_OWNED_CONVERSATION_PERSISTENCE",
+        "conversation_id": _s(conversation_id) or "NOT_PROVEN",
+        "messages": messages,
+        "requests": requests,
+        "rounds": rounds,
+    }
 
 def snapshot_chat_identity(chat, session_state):
     ensure_persistence_store(session_state)
