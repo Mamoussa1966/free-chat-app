@@ -51,7 +51,7 @@ def test_audit_without_canonical_transport_does_not_fallback_to_current_request(
     chat["request_records"]=chat["conversation_record"]["requests"][:]
     chat["round_ledger"]=chat["conversation_record"]["rounds"][:]
     audit=authoritative_audit(chat, None)
-    assert audit["HISTORICAL_MESSAGE_COUNT"] == 1
-    assert audit["HISTORICAL_REQUEST_COUNT"] == 1
-    assert audit["HISTORICAL_ROUND_COUNT"] == 1
+    assert audit["HISTORICAL_MESSAGE_COUNT"] == "NOT_PROVEN"
+    assert audit["HISTORICAL_REQUEST_COUNT"] == "NOT_PROVEN"
+    assert audit["HISTORICAL_ROUND_COUNT"] == "NOT_PROVEN"
     assert audit["overall_authoritative_status"] == "NOT_PROVEN"
