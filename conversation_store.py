@@ -123,6 +123,7 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
     checkpoint of the complete record, never a current-request audit source.
     """
     rec = _canonical_record(chat)
+    rec["canonical_store_contract"] = "V26_3_CANONICAL_CONVERSATION_STORE"
     cid = str(chat.get("conversation_id") or "").strip()
     if not cid:
         return rec
@@ -161,12 +162,14 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
         # HOTFIX118: build the complete candidate snapshot first, validate it,
         # then replace the transport bucket in one assignment. This prevents a
         # partially-mutated current chat from becoming the canonical snapshot.
+        rec["canonical_store_contract"] = "V26_3_CANONICAL_CONVERSATION_STORE"
         candidate = copy.deepcopy({
             "conversation_id": cid,
             "session_id": str(chat.get("session_id") or ""),
             "messages": rec.get("messages", []),
             "requests": rec.get("requests", []),
             "rounds": rec.get("rounds", []),
+            "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
         })
         # A normal lifecycle commits partial identity checkpoints (Request before
         # Round creation, then Round start/finish). Full graph validation belongs
@@ -179,33 +182,61 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
         previous = root.get(cid) if isinstance(root.get(cid), dict) else {}
         revision = int(previous.get("revision") or 0) + 1
         root[cid] = copy.deepcopy({
-            "schema": "v26.3.18-canonical-atomic-history/v11",
+            "schema": "v26.3.20-v26_3-canonical-conversation-store/v12",
+            "contract": "V26_3_CANONICAL_CONVERSATION_STORE",
             "conversation_id": cid,
             "session_id": str(chat.get("session_id") or ""),
             "revision": revision,
             "history_hash": candidate_integrity.get("history_hash"),
             "record": candidate,
         })
+        # Compatibility projection into the exact same canonical bucket.
+        root[cid]["messages"] = root[cid]["record"]["messages"]
+        root[cid]["requests"] = root[cid]["record"]["requests"]
+        root[cid]["rounds"] = root[cid]["record"]["rounds"]
     return rec
 
 def load_canonical_snapshot(chat: dict, session_state=None) -> dict | None:
-    """Return the committed canonical snapshot for this conversation, or None.
+    """Read the ONE V26_3_CANONICAL_CONVERSATION_STORE snapshot.
 
-    This is the sole historical transport boundary for V26.3.  It deliberately
-    does not fall back to the current chat object, request ledger, or prose.
+    Session State is only the rerun checkpoint for this same store. When it is
+    unavailable, an explicitly canonical ConversationRecord is the store itself;
+    no current request/ledger/prose reconstruction is permitted.
     """
-    if not isinstance(session_state, dict):
-        return None
     cid = str(chat.get("conversation_id") or "").strip()
     if not cid:
         return None
-    root = session_state.get("v26_3_canonical_conversation_store")
-    if not isinstance(root, dict):
-        return None
-    bucket = root.get(cid)
-    if not isinstance(bucket, dict) or not isinstance(bucket.get("record"), dict):
-        return None
-    return copy.deepcopy(bucket["record"])
+    if isinstance(session_state, dict):
+        root = session_state.get("v26_3_canonical_conversation_store")
+        if isinstance(root, dict):
+            bucket = root.get(cid)
+            if isinstance(bucket, dict) and isinstance(bucket.get("record"), dict):
+                return copy.deepcopy(bucket["record"])
+    record = chat.get("conversation_record") if isinstance(chat, dict) else None
+    if not isinstance(record, dict):
+        legacy = chat.get("v26_3_conversation_persistence") if isinstance(chat, dict) else None
+        row = legacy.get(cid) if isinstance(legacy, dict) else None
+        if isinstance(row, dict) and any(isinstance(row.get(k), list) and row.get(k) for k in ("messages", "requests", "rounds")):
+            record = {
+                "conversation_id": cid,
+                "session_id": str(chat.get("session_id") or ""),
+                "messages": copy.deepcopy(row.get("messages", [])),
+                "requests": copy.deepcopy(row.get("requests", [])),
+                "rounds": copy.deepcopy(row.get("rounds", [])),
+                "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+            }
+            chat["conversation_record"] = record
+    if isinstance(record, dict) and record.get("canonical_store_contract") == "V26_3_CANONICAL_CONVERSATION_STORE":
+        return copy.deepcopy({
+            "conversation_id": cid,
+            "session_id": str(chat.get("session_id") or record.get("session_id") or ""),
+            "messages": record.get("messages", []),
+            "requests": record.get("requests", []),
+            "rounds": record.get("rounds", []),
+            "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+        })
+    return None
+
 
 def prepare_historical_runtime(chat: dict, session_state=None) -> dict:
     """Start a new lifecycle from the last committed canonical snapshot.
@@ -293,9 +324,14 @@ def canonical_upsert_message(chat: dict, message: dict, session_state=None) -> d
         rec["messages"].append(copy.deepcopy(row))
         existing = rec["messages"][-1]
     else:
-        for k, v in row.items():
-            if v not in (None, "", [], {}):
-                existing[k] = copy.deepcopy(v)
+        old_req = str(existing.get("request_id") or "")
+        new_req = str(row.get("request_id") or "")
+        if old_req and new_req and old_req != new_req:
+            existing["identity_conflict"] = True
+        else:
+            for k, v in row.items():
+                if v not in (None, "", [], {}):
+                    existing[k] = copy.deepcopy(v)
     commit_canonical_record(chat, session_state)
     return existing
 

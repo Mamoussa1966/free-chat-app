@@ -340,8 +340,9 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # the complete canonical record still existed in session_state.
     #
     # No current-request/request_records/latest-round/provider-prose fallback is
-    # permitted to replace canonical history. If canonical transport is absent,
-    # the audit remains NOT_PROVEN.
+    # permitted to replace canonical history. Capture the canonical snapshot
+    # BEFORE any ensure/hydrate call can initialize a previously-empty runtime.
+    canonical_transport = load_canonical_snapshot(chat, session_state)
     hydrate_canonical_record(chat, session_state)
     rebuild_runtime_indexes_from_canonical(chat, session_state)
     # HOTFIX116: immediately re-read the committed canonical transport.  This is
@@ -350,7 +351,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # narrowed current ConversationRecord when canonical history exists.
     # HOTFIX119: the historical audit reads the committed canonical snapshot
     # directly.  Current ConversationRecord/request_records are never a fallback.
-    canonical_transport = load_canonical_snapshot(chat, session_state)
+    canonical_transport = canonical_transport if canonical_transport is not None else load_canonical_snapshot(chat, session_state)
     root = session_state.get("v26_3_canonical_conversation_store", {}) if isinstance(session_state, dict) else {}
     cid = _s(chat.get("conversation_id"))
     if canonical_transport is None:
@@ -382,6 +383,31 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     chat["conversation_record"] = deepcopy(canonical_transport)
     rebuild_runtime_indexes_from_canonical(chat, session_state)
 
+    # HOTFIX120: the canonical store may contain older conversation history.
+    # The historical proof window is the latest two application-owned USER
+    # MessageRecords and their exact Message→Request→Round chain; no prose is
+    # used to identify the test messages.
+    all_messages = [x for x in canonical_transport.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id"))]
+    all_requests = [x for x in canonical_transport.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]
+    all_rounds = [x for x in canonical_transport.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]
+    user_messages = [x for x in all_messages if _s(x.get("role")).lower() == "user"]
+    user_messages = user_messages[-2:]
+    selected_mids = [_s(x.get("message_id")) for x in user_messages]
+    selected_reqs = []
+    for mid in selected_mids:
+        matches = [x for x in all_requests if _s(x.get("message_id")) == mid]
+        if matches:
+            selected_reqs.append(matches[-1])
+    selected_rids = [_s(x.get("request_id")) for x in selected_reqs]
+    selected_rounds = [x for x in all_rounds if _s(x.get("request_id")) in set(selected_rids) and _s(x.get("message_id")) in set(selected_mids)]
+    # Replace only the audit working set; the canonical snapshot itself remains intact.
+    canonical_transport = dict(canonical_transport)
+    canonical_transport["messages"] = user_messages
+    canonical_transport["requests"] = selected_reqs
+    canonical_transport["rounds"] = selected_rounds
+    chat["conversation_record"] = deepcopy(load_canonical_snapshot(chat, session_state))
+    rebuild_runtime_indexes_from_canonical(chat, session_state)
+
     ensure_store(chat)
     chat.setdefault("v25_schema", V25_SCHEMA)
     chat.setdefault("request_ledger_v25", [])
@@ -402,7 +428,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # V26.3.1: historical identity MUST come from the dedicated application-owned
     # persistence ledger. Narrower/current ledgers are corroboration only and may
     # never replace a historical record already present here.
-    hist = _v2631_history(chat)
+    hist = {"source": "V26_3_CANONICAL_CONVERSATION_STORE", "messages": canonical_transport.get("messages", []), "requests": canonical_transport.get("requests", []), "rounds": canonical_transport.get("rounds", [])}
     messages = [x for x in hist.get("messages", []) if isinstance(x, dict) and _s(x.get("role")).lower() == "user"]
     requests = [x for x in hist.get("requests", []) if isinstance(x, dict)]
     rounds = [x for x in hist.get("rounds", []) if isinstance(x, dict)]
@@ -471,7 +497,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "historical_persisted_request_count": len(historical_request_records),
         "historical_persisted_request_ids": persisted_request_ids[-20:] if persisted_request_ids else "NOT_PROVEN",
         "message_ledger_source": hist.get("source", "HOTFIX145_CONVERSATION_RECORD"),
-        "historical_source_authority": "HOTFIX145_CONVERSATION_RECORD_IS_AUTHORITATIVE",
+        "historical_source_authority": "V26_3_CANONICAL_CONVERSATION_STORE_IS_AUTHORITATIVE",
         "historical_source_refuses_narrower_current_ledgers": True,
         "historical_narrowing_conflict": historical_narrowing_conflict,
         "canonical_request_count": len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]),
@@ -486,7 +512,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "HISTORICAL_REQUEST_COUNT": len(historical_request_records),
         "HISTORICAL_ROUND_COUNT": len(rounds),
         "HISTORICAL_SOURCE": hist.get("source", "HOTFIX145_CONVERSATION_RECORD"),
-        "AUTHORITATIVE_SOURCE": "APPLICATION_OWNED_RUNTIME_STATE / HOTFIX145_CONVERSATION_RECORD",
+        "AUTHORITATIVE_SOURCE": "APPLICATION_OWNED_RUNTIME_STATE / V26_3_CANONICAL_CONVERSATION_STORE",
         "previous_request_reexecuted": (False if enough and r1 != r2 else "NOT_PROVEN"),
         "two_message_isolation": (request_isolation if enough else "NOT_PROVEN"),
         "message_1_request_mapping": (r1 == _s(next((x.get("request_id") for x in req_by_msg.get(m1, [])), ""))) if enough else "NOT_PROVEN",
