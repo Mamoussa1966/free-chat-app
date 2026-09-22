@@ -9,7 +9,7 @@ accounting evidence.
 """
 
 from copy import deepcopy
-from conversation_store import ensure_store, touch, now, hydrate_canonical_record, rebuild_canonical_runtime_indexes
+from conversation_store import ensure_store, touch, now
 
 
 def _v2631_history(chat):
@@ -19,12 +19,9 @@ def _v2631_history(chat):
     prose, or a V26-only shadow store. The canonical ConversationRecord owns
     Message/Request/Round history and survives the normal chat object rerun.
     """
-    # V26.3.9: audit reads the hydrated canonical ConversationRecord only.
-    # It never falls back to the current request_record.
     record = chat.get("conversation_record") if isinstance(chat, dict) else None
     if not isinstance(record, dict):
         return {"source": "HOTFIX145_CONVERSATION_RECORD", "messages": [], "requests": [], "rounds": []}
-    rebuild_canonical_runtime_indexes(chat)
     return {
         "source": "HOTFIX145_CONVERSATION_RECORD",
         "messages": deepcopy(record.get("messages", [])) if isinstance(record.get("messages"), list) else [],
@@ -33,6 +30,7 @@ def _v2631_history(chat):
     }
 
 V25_SCHEMA = "v25-conversation-ledger-message-runtime/v2"
+V26_3_10_SCHEMA = "v26.3.10-canonical-lifecycle/v1"
 V26_SCHEMA = "v26-message-runtime-authoritative-mapping/v1"
 
 
@@ -227,6 +225,7 @@ def reconcile_request(chat: dict, request_id: str, message_id: str, results: lis
 
     request_row = {
         "schema": V25_SCHEMA,
+        "v26_3_10_lifecycle_schema": V26_3_10_SCHEMA,
         "request_id": rid,
         "conversation_id": _s(chat.get("conversation_id")),
         "session_id": _s(chat.get("session_id")),
@@ -330,6 +329,10 @@ def _structural_secret_scan(chat: dict) -> tuple[bool, bool, bool]:
 
 def authoritative_audit(chat: dict) -> dict:
     ensure_v25_store(chat)
+    # V26.3.10: this function is intentionally fed only the hydrated canonical
+    # ConversationRecord. It never substitutes the current request ledger when
+    # historical canonical state is present.
+    canonical_record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
     # V26.3.1: historical identity MUST come from the dedicated application-owned
     # persistence ledger. Narrower/current ledgers are corroboration only and may
     # never replace a historical record already present here.
@@ -399,6 +402,9 @@ def authoritative_audit(chat: dict) -> dict:
         "historical_source_authority": "HOTFIX145_CONVERSATION_RECORD_IS_AUTHORITATIVE",
         "historical_source_refuses_narrower_current_ledgers": True,
         "historical_narrowing_conflict": historical_narrowing_conflict,
+        "canonical_request_count": len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]),
+        "canonical_message_count": len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id"))]),
+        "canonical_round_count": len([x for x in canonical_record.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]),
         "message_ledger_count": len(messages),
         "message_ledger_user_count": len(messages),
         "historical_message_count": len(messages),

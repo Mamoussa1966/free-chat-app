@@ -2,7 +2,7 @@ from __future__ import annotations
 import copy
 from conversation_store import now, commit_canonical_record, hydrate_canonical_record
 
-SCHEMA = "v26.3.9-canonical-conversation-store-persistence/v8"
+SCHEMA = "v26.3.5-canonical-conversation-store-persistence/v5"
 MAX_MESSAGES = 1000
 MAX_REQUESTS = 1000
 MAX_ROUNDS = 2000
@@ -129,9 +129,11 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
     # V26.3.8: commit the complete canonical ConversationRecord at every identity
     # lifecycle boundary. This is the real persistence path, not an audit repair.
     commit_canonical_record(chat, session_state)
-    # The canonical ConversationStore is already the durable backing. The legacy
-    # V26 namespace remains only as an exact compatibility alias. Never copy a
-    # narrower current ledger over canonical history here.
+    # Session state is a mirror only. It is useful across Streamlit reruns, but
+    # it is never consulted by the authoritative audit.
+    if session_state is not None:
+        mirror = _bucket(ensure_persistence_store(session_state), chat.get("conversation_id"))
+        _merge_bucket(mirror, canonical)
 
 
 def get_authoritative_bucket(chat, session_state=None):
