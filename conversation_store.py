@@ -166,29 +166,9 @@ def rebuild_runtime_indexes_from_canonical(chat: dict, session_state=None) -> di
     hydrate_canonical_record(chat, session_state)
     rec = _canonical_record(chat)
 
-    def merge_by_id(rows, incoming, ident):
-        if not isinstance(rows, list):
-            rows = []
-        by_id = {str(x.get(ident) or ""): x for x in rows if isinstance(x, dict) and str(x.get(ident) or "")}
-        for item in incoming:
-            if not isinstance(item, dict):
-                continue
-            iid = str(item.get(ident) or "").strip()
-            if not iid:
-                continue
-            old = by_id.get(iid)
-            if old is None:
-                rows.append(copy.deepcopy(item))
-                by_id[iid] = rows[-1]
-            else:
-                for k, v in item.items():
-                    if v not in (None, "", [], {}):
-                        old[k] = copy.deepcopy(v)
-        return rows
-
-    # V26.3.13: REBUILD means replacement from canonical, never merge with the
-    # current/narrow runtime indexes. This prevents a rerun's current Round index
-    # from becoming the effective historical index.
+    # Strict replacement: REBUILD means compatibility indexes are derived only
+    # from the hydrated canonical record. A narrowed current runtime must never
+    # be merged back into the historical indexes during audit.
     chat["message_ledger"] = copy.deepcopy([x for x in rec.get("messages", []) if isinstance(x, dict)])[-1000:]
     chat["request_records"] = copy.deepcopy([x for x in rec.get("requests", []) if isinstance(x, dict)])[-1000:]
     chat["round_ledger"] = copy.deepcopy([x for x in rec.get("rounds", []) if isinstance(x, dict)])[-2000:]

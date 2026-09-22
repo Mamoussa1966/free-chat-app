@@ -1498,7 +1498,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         for round_no in range(1, total_rounds + 1):
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
-            runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no, st.session_state)
+            runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no)
             round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
             if round_row:
                 canonical_upsert_round(chat, round_row, st.session_state)
@@ -2463,7 +2463,7 @@ def run_app() -> None:
         # provider execution and synthesis are finished. This updates the same
         # request row on reruns instead of creating duplicate request/round rows.
         ensure_v25_store(chat)
-        reconcile_request(chat, request_id, user_message_id, list(results or []), st.session_state.get("last_synthesis") or {})
+        reconcile_request(chat, request_id, user_message_id, list(results or []), st.session_state.get("last_synthesis") or {}, st.session_state)
         snapshot_chat_identity(chat, st.session_state)
         hydrate_canonical_record(chat, st.session_state)
         rebuild_runtime_indexes_from_canonical(chat, st.session_state)

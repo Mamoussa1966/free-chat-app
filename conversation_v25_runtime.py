@@ -164,7 +164,7 @@ def reconcile_v26_message_ledger(chat: dict) -> list[dict]:
     touch(chat)
     return [x for x in chat.get("message_ledger_v26", []) if isinstance(x, dict)]
 
-def reconcile_v26_historical_requests(chat: dict) -> None:
+def reconcile_v26_historical_requests(chat: dict, session_state=None) -> None:
     """Materialize V25 request/round ledger rows for every persisted request.
 
     The previous V26 audit only reconciled the *current* request at submission
@@ -184,9 +184,9 @@ def reconcile_v26_historical_requests(chat: dict) -> None:
             continue
         rows = [x for x in all_results if _s(x.get("request_id")) == rid and _s(x.get("message_id")) == mid]
         syn = next((x for x in synth_rows if _s(x.get("request_id")) == rid and _s(x.get("message_id")) == mid), None)
-        reconcile_request(chat, rid, mid, rows, syn or record.get("synthesis") or {})
+        reconcile_request(chat, rid, mid, rows, syn or record.get("synthesis") or {}, session_state)
 
-def reconcile_request(chat: dict, request_id: str, message_id: str, results: list[dict], synthesis: dict | None = None) -> dict:
+def reconcile_request(chat: dict, request_id: str, message_id: str, results: list[dict], synthesis: dict | None = None, session_state=None) -> dict:
     ensure_v25_store(chat)
     rid, mid = _s(request_id), _s(message_id)
     if not rid or not mid:
@@ -340,7 +340,16 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # the audit remains NOT_PROVEN.
     hydrate_canonical_record(chat, session_state)
     rebuild_runtime_indexes_from_canonical(chat, session_state)
-    ensure_v25_store(chat)
+    # Do not migrate/reconcile from current request_records here. Historical audit
+    # is intentionally canonical-only after HYDRATE -> REBUILD.
+    ensure_store(chat)
+    chat.setdefault("v25_schema", V25_SCHEMA)
+    chat.setdefault("request_ledger_v25", [])
+    chat.setdefault("round_ledger_v25", [])
+    chat.setdefault("message_synthesis_ledger_v25", [])
+    chat.setdefault("v25_authoritative_audit", {})
+    chat.setdefault("message_ledger_v26", [])
+    chat.setdefault("v26_authoritative_audit", {})
     # V26.3.10: this function is intentionally fed only the hydrated canonical
     # ConversationRecord. It never substitutes the current request ledger when
     # historical canonical state is present.
@@ -365,7 +374,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     req_ids = [_s(req_by_msg[mid][-1].get("request_id")) for mid in mids if req_by_msg[mid]]
     historical_request_records = [x for x in requests if _s(x.get("request_id"))]
     narrower_request_count = len([x for x in chat.get("request_records", []) if isinstance(x, dict) and _s(x.get("request_id"))])
-    historical_narrowing_conflict = bool(pre_rebuild_request_count and pre_rebuild_request_count != len(historical_request_records))
+    historical_narrowing_conflict = (pre_rebuild_request_count > 0 and pre_rebuild_request_count < len(historical_request_records))
     persisted_request_ids = [_s(x.get("request_id")) for x in historical_request_records]
     round_by_msg = {mid: [x for x in rounds if _s(x.get("message_id")) == mid] for mid in mids}
     round_ids_by_msg = {mid: [_s(x.get("round_id")) for x in round_by_msg[mid] if _s(x.get("round_id"))] for mid in mids}
