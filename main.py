@@ -20,7 +20,7 @@ from production_core import RequestLifecycle, ProviderExecutionContract, SeatExe
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
-from conversation_store import commit_canonical_record, hydrate_canonical_record
+from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_canonical_runtime_indexes
 from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, assert_canonical_lifecycle_ready
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
@@ -1593,6 +1593,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             record["synthesis"]["session_id"] = chat.get("session_id")
             record["synthesis"]["provenance_count"] = sum(len(provenance_for_result(chat, current_user_message_id, int(r.get("round") or 1), r)) for r in all_results if isinstance(r, dict))
             st.session_state.last_synthesis = copy.deepcopy(record["synthesis"])
+            # V26.3.9: provider/result lifecycle mutations are committed into the
+            # same canonical RequestRecord before the orchestrator returns.
+            canonical_upsert_request(chat, record, st.session_state)
+            commit_canonical_record(chat, st.session_state)
+            rebuild_canonical_runtime_indexes(chat)
         _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
     return all_results
 

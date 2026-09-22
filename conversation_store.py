@@ -56,13 +56,48 @@ def _canonical_record(chat: dict) -> dict:
     rec.setdefault("rounds", [])
     return rec
 
-def commit_canonical_record(chat: dict, session_state=None) -> dict:
-    """Commit the complete canonical ConversationRecord at a lifecycle boundary.
+def _merge_record_by_identity(dst: dict, src: dict) -> dict:
+    """Merge a narrower live record into an already-persisted canonical record.
 
-    The chat ConversationRecord remains authoritative. Session State is only the
-    transport backing used to survive Streamlit script reruns; it is a deep-copy
-    checkpoint of the complete record, never a current-request audit source.
+    Historical identity is append-only: a later Streamlit rerun may expose only
+    the current RequestRecord, but that narrower view must never overwrite the
+    previously committed Message/Request/Round history.
     """
+    if not isinstance(dst, dict):
+        dst = {}
+    if not isinstance(src, dict):
+        return dst
+    for key, ident in (("messages", "message_id"), ("requests", "request_id"), ("rounds", "round_id")):
+        target = dst.setdefault(key, [])
+        if not isinstance(target, list):
+            target = []
+            dst[key] = target
+        existing = {str(x.get(ident) or ""): x for x in target if isinstance(x, dict) and str(x.get(ident) or "")}
+        for item in src.get(key, []) if isinstance(src.get(key), list) else []:
+            if not isinstance(item, dict):
+                continue
+            iid = str(item.get(ident) or "").strip()
+            if not iid:
+                continue
+            old = existing.get(iid)
+            if old is None:
+                target.append(copy.deepcopy(item))
+                existing[iid] = target[-1]
+                continue
+            # Preserve established identity bindings; enrich lifecycle fields only.
+            if ident == "message_id" and old.get("request_id") and item.get("request_id") and str(old.get("request_id")) != str(item.get("request_id")):
+                old["identity_conflict"] = True
+                continue
+            if ident == "request_id" and old.get("message_id") and item.get("message_id") and str(old.get("message_id")) != str(item.get("message_id")):
+                old["identity_conflict"] = True
+                continue
+            for k, v in item.items():
+                if v not in (None, "", [], {}):
+                    old[k] = copy.deepcopy(v)
+    return dst
+
+def commit_canonical_record(chat: dict, session_state=None) -> dict:
+    """Commit canonical history without allowing a narrow rerun to erase history."""
     rec = _canonical_record(chat)
     cid = str(chat.get("conversation_id") or "").strip()
     if not cid:
@@ -73,13 +108,52 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
         if not isinstance(root, dict):
             root = {}
             session_state["v26_3_canonical_conversation_store"] = root
-        root[cid] = copy.deepcopy({
-            "schema": "v26.3.8-canonical-conversation-store/v7",
+        saved = root.get(cid) if isinstance(root.get(cid), dict) else {}
+        saved_record = saved.get("record") if isinstance(saved.get("record"), dict) else {}
+        # CRITICAL V26.3.9: merge CURRENT into SAVED, never replace SAVED with CURRENT.
+        merged = _merge_record_by_identity(copy.deepcopy(saved_record), copy.deepcopy(rec))
+        merged["conversation_id"] = cid
+        merged["session_id"] = str(chat.get("session_id") or merged.get("session_id") or "")
+        root[cid] = {
+            "schema": "v26.3.9-canonical-conversation-store/v8",
             "conversation_id": cid,
             "session_id": str(chat.get("session_id") or ""),
-            "record": copy.deepcopy(rec),
-        })
+            "record": copy.deepcopy(merged),
+        }
+        # Rebind the live chat to the complete canonical record immediately.
+        chat["conversation_record"] = copy.deepcopy(merged)
+        rec = chat["conversation_record"]
+        _chat_rebind_alias(chat)
+        # Backward-compatible mirror for older V26 persistence tests/exports.
+        # It is populated from the already-merged canonical record and can never
+        # replace or narrow the canonical source.
+        legacy_root = session_state.setdefault("v26_3_conversation_persistence", {})
+        if not isinstance(legacy_root, dict):
+            legacy_root = {}
+            session_state["v26_3_conversation_persistence"] = legacy_root
+        legacy_root[cid] = {
+            "schema": "v26.3.9-canonical-conversation-store/v8",
+            "conversation_id": cid,
+            "messages": copy.deepcopy(merged.get("messages", [])),
+            "requests": copy.deepcopy(merged.get("requests", [])),
+            "rounds": copy.deepcopy(merged.get("rounds", [])),
+        }
+        rebuild_canonical_runtime_indexes(chat)
     return rec
+
+def rebuild_canonical_runtime_indexes(chat: dict) -> dict:
+    """Rebuild non-authoritative runtime indexes from the canonical record only."""
+    rec = _canonical_record(chat)
+    idx = {
+        "by_message_id": {str(x.get("message_id")): copy.deepcopy(x) for x in rec.get("messages", []) if isinstance(x, dict) and str(x.get("message_id") or "")},
+        "by_request_id": {str(x.get("request_id")): copy.deepcopy(x) for x in rec.get("requests", []) if isinstance(x, dict) and str(x.get("request_id") or "")},
+        "by_round_id": {str(x.get("round_id")): copy.deepcopy(x) for x in rec.get("rounds", []) if isinstance(x, dict) and str(x.get("round_id") or "")},
+    }
+    idx["request_ids"] = list(idx["by_request_id"].keys())
+    idx["message_ids"] = list(idx["by_message_id"].keys())
+    idx["round_ids"] = list(idx["by_round_id"].keys())
+    chat["canonical_runtime_indexes"] = idx
+    return idx
 
 def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
     """Restore the complete canonical ConversationRecord before runtime/audit use."""
@@ -113,6 +187,7 @@ def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
                     if v not in (None, "", [], {}):
                         old[k] = copy.deepcopy(v)
     _chat_rebind_alias(chat)
+    rebuild_canonical_runtime_indexes(chat)
     return chat
 
 def _chat_rebind_alias(chat: dict) -> None:

@@ -9,7 +9,7 @@ accounting evidence.
 """
 
 from copy import deepcopy
-from conversation_store import ensure_store, touch, now
+from conversation_store import ensure_store, touch, now, hydrate_canonical_record, rebuild_canonical_runtime_indexes
 
 
 def _v2631_history(chat):
@@ -19,9 +19,12 @@ def _v2631_history(chat):
     prose, or a V26-only shadow store. The canonical ConversationRecord owns
     Message/Request/Round history and survives the normal chat object rerun.
     """
+    # V26.3.9: audit reads the hydrated canonical ConversationRecord only.
+    # It never falls back to the current request_record.
     record = chat.get("conversation_record") if isinstance(chat, dict) else None
     if not isinstance(record, dict):
         return {"source": "HOTFIX145_CONVERSATION_RECORD", "messages": [], "requests": [], "rounds": []}
+    rebuild_canonical_runtime_indexes(chat)
     return {
         "source": "HOTFIX145_CONVERSATION_RECORD",
         "messages": deepcopy(record.get("messages", [])) if isinstance(record.get("messages"), list) else [],
