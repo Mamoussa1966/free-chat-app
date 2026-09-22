@@ -186,14 +186,12 @@ def rebuild_runtime_indexes_from_canonical(chat: dict, session_state=None) -> di
                         old[k] = copy.deepcopy(v)
         return rows
 
-    chat["message_ledger"] = merge_by_id(chat.get("message_ledger", []), rec.get("messages", []), "message_id")
-    chat["request_records"] = merge_by_id(chat.get("request_records", []), rec.get("requests", []), "request_id")
-    chat["round_ledger"] = merge_by_id(chat.get("round_ledger", []), rec.get("rounds", []), "round_id")
-    # Keep the bounded compatibility ledgers aligned without becoming historical
-    # authority. These are indexes only; audit reads the canonical record.
-    chat["message_ledger"] = chat["message_ledger"][-1000:]
-    chat["request_records"] = chat["request_records"][-1000:]
-    chat["round_ledger"] = chat["round_ledger"][-2000:]
+    # V26.3.13: REBUILD means replacement from canonical, never merge with the
+    # current/narrow runtime indexes. This prevents a rerun's current Round index
+    # from becoming the effective historical index.
+    chat["message_ledger"] = copy.deepcopy([x for x in rec.get("messages", []) if isinstance(x, dict)])[-1000:]
+    chat["request_records"] = copy.deepcopy([x for x in rec.get("requests", []) if isinstance(x, dict)])[-1000:]
+    chat["round_ledger"] = copy.deepcopy([x for x in rec.get("rounds", []) if isinstance(x, dict)])[-2000:]
     return chat
 
 def canonical_upsert_message(chat: dict, message: dict, session_state=None) -> dict:

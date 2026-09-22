@@ -114,7 +114,7 @@ def register_message(chat: dict[str, Any], message: dict[str, Any]) -> dict[str,
     return item
 
 
-def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no: int) -> str:
+def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no: int, session_state=None) -> str:
     ensure_conversation_state(chat)
     round_id = f"{chat['conversation_id']}:{request_id}:r{int(round_no)}"
     row = {
@@ -133,11 +133,11 @@ def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no
     record = chat.setdefault("conversation_record", {})
     record.setdefault("rounds", [])
     # V26.3.8: RoundRecord is committed to the canonical store at creation.
-    canonical_upsert_round(chat, row)
+    canonical_upsert_round(chat, row, session_state)
     return round_id
 
 
-def finish_round(chat: dict[str, Any], round_id: str, status: str, result_count: int) -> None:
+def finish_round(chat: dict[str, Any], round_id: str, status: str, result_count: int, session_state=None) -> None:
     ensure_conversation_state(chat)
     for row in reversed(chat["round_ledger"]):
         if row.get("round_id") == round_id:
@@ -147,7 +147,7 @@ def finish_round(chat: dict[str, Any], round_id: str, status: str, result_count:
                 if isinstance(canonical, dict) and canonical.get("round_id") == round_id:
                     canonical.update({"status": row["status"], "result_count": row["result_count"], "finished_at": row["finished_at"]})
                     break
-            commit_canonical_record(chat)
+            commit_canonical_record(chat, session_state)
             return
 
 

@@ -27,6 +27,7 @@ def _v2631_history(chat):
 V25_SCHEMA = "v25-conversation-ledger-message-runtime/v2"
 V26_3_10_SCHEMA = "v26.3.10-canonical-lifecycle/v1"
 V26_3_11_SCHEMA = "v26.3.11-canonical-lifecycle/v1"
+V26_3_12_SCHEMA = "v26.3.12-canonical-hydration-index-rebuild-authoritative-audit/v1"
 V26_SCHEMA = "v26-message-runtime-authoritative-mapping/v1"
 
 
@@ -221,6 +222,8 @@ def reconcile_request(chat: dict, request_id: str, message_id: str, results: lis
 
     request_row = {
         "schema": V25_SCHEMA,
+        "v26_3_12_lifecycle_schema": V26_3_12_SCHEMA,
+        "canonical_hydration_transport": "APPLICATION_OWNED_CANONICAL_SESSION_TRANSPORT" if session_state is not None else "NOT_PROVEN",
         "v26_3_11_lifecycle_schema": V26_3_11_SCHEMA,
         "v26_3_10_lifecycle_schema": V26_3_10_SCHEMA,
         "request_id": rid,
@@ -324,12 +327,19 @@ def _structural_secret_scan(chat: dict) -> tuple[bool, bool, bool]:
     return found_cred, found_raw, found_diag
 
 
-def authoritative_audit(chat: dict) -> dict:
-    # V26.3.11: hydrate the canonical record, then rebuild compatibility indexes
-    # from that canonical record before computing historical identity. Never
-    # narrow history to the current request ledger.
-    hydrate_canonical_record(chat, None)
-    rebuild_runtime_indexes_from_canonical(chat, None)
+def authoritative_audit(chat: dict, session_state=None) -> dict:
+    pre_rebuild_request_count = len([x for x in chat.get("request_records", []) if isinstance(x, dict) and _s(x.get("request_id"))])
+    # V26.3.12: the authoritative audit MUST perform its own hydration from the
+    # application-owned canonical transport before reading history. The previous
+    # V26.3.11 implementation passed None here, so a Streamlit rerun could leave
+    # the in-memory ConversationRecord narrowed to the current Request even when
+    # the complete canonical record still existed in session_state.
+    #
+    # No current-request/request_records/latest-round/provider-prose fallback is
+    # permitted to replace canonical history. If canonical transport is absent,
+    # the audit remains NOT_PROVEN.
+    hydrate_canonical_record(chat, session_state)
+    rebuild_runtime_indexes_from_canonical(chat, session_state)
     ensure_v25_store(chat)
     # V26.3.10: this function is intentionally fed only the hydrated canonical
     # ConversationRecord. It never substitutes the current request ledger when
@@ -355,7 +365,7 @@ def authoritative_audit(chat: dict) -> dict:
     req_ids = [_s(req_by_msg[mid][-1].get("request_id")) for mid in mids if req_by_msg[mid]]
     historical_request_records = [x for x in requests if _s(x.get("request_id"))]
     narrower_request_count = len([x for x in chat.get("request_records", []) if isinstance(x, dict) and _s(x.get("request_id"))])
-    historical_narrowing_conflict = False
+    historical_narrowing_conflict = bool(pre_rebuild_request_count and pre_rebuild_request_count != len(historical_request_records))
     persisted_request_ids = [_s(x.get("request_id")) for x in historical_request_records]
     round_by_msg = {mid: [x for x in rounds if _s(x.get("message_id")) == mid] for mid in mids}
     round_ids_by_msg = {mid: [_s(x.get("round_id")) for x in round_by_msg[mid] if _s(x.get("round_id"))] for mid in mids}
@@ -453,7 +463,9 @@ def authoritative_audit(chat: dict) -> dict:
         "local_engine": "NOT_USED",
         "paid_fallback": "NOT_USED",
     }
-    structural_pass = all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation", "message_1_request_mapping", "message_2_request_mapping", "round_1_message_mapping", "round_2_message_mapping"))
+    historical_exact_two = (len(messages) == 2 and len(historical_request_records) == 2 and len(rounds) == 2 and len(mids) == 2 and len(req_ids) == 2)
+    audit["historical_exact_two_contract"] = historical_exact_two
+    structural_pass = historical_exact_two and all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation", "message_1_request_mapping", "message_2_request_mapping", "round_1_message_mapping", "round_2_message_mapping"))
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
     audit["overall_authoritative_status"] = "PASS" if audit["conversation_runtime_audit"] == "PASS" and enough else "NOT_PROVEN"
     chat["v25_authoritative_audit"] = deepcopy(audit)

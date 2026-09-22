@@ -1498,7 +1498,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         for round_no in range(1, total_rounds + 1):
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
-            runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no)
+            runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no, st.session_state)
             round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
             if round_row:
                 canonical_upsert_round(chat, round_row, st.session_state)
@@ -1544,7 +1544,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             chat["messages"] = chat["messages"][-MAX_CHAT_MESSAGES:]
             success_count = sum(1 for r in round_results if str(r.get("status") or "").upper() == "SUCCESS")
             lifecycle.finish_round(round_no, success_count, len(round_results))
-            finish_round(chat, runtime_round_id, "COMPLETED", len(round_results))
+            finish_round(chat, runtime_round_id, "COMPLETED", len(round_results), st.session_state)
             round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
             if round_row:
                 persist_identity(chat, st.session_state, round_row=round_row)
@@ -2468,7 +2468,7 @@ def run_app() -> None:
         hydrate_canonical_record(chat, st.session_state)
         rebuild_runtime_indexes_from_canonical(chat, st.session_state)
         commit_canonical_record(chat, st.session_state)
-        authoritative_audit(chat)
+        authoritative_audit(chat, st.session_state)
         timeline_event(chat, request_id, user_message_id, "SYNTHESIS", status=str((st.session_state.get("last_synthesis") or {}).get("status") or "UNKNOWN"))
         touch(chat)
         _shared_context(chat, max_chars=30_000)
@@ -2482,7 +2482,7 @@ def run_app() -> None:
     hydrate_chat_identity(chat, st.session_state)
     snapshot_chat_identity(chat, st.session_state)
     runtime_audit = conversation_audit(chat)
-    v25_audit = authoritative_audit(chat)
+    v25_audit = authoritative_audit(chat, st.session_state)
     v25_audit["v26_3_persistence"] = persistence_audit(chat, st.session_state)
     with st.expander("🧭 V25 Conversation Ledger / Authoritative Runtime", expanded=False):
         st.json(v25_audit)
