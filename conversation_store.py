@@ -188,6 +188,40 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
         })
     return rec
 
+def load_canonical_snapshot(chat: dict, session_state=None) -> dict | None:
+    """Return the committed canonical snapshot for this conversation, or None.
+
+    This is the sole historical transport boundary for V26.3.  It deliberately
+    does not fall back to the current chat object, request ledger, or prose.
+    """
+    if not isinstance(session_state, dict):
+        return None
+    cid = str(chat.get("conversation_id") or "").strip()
+    if not cid:
+        return None
+    root = session_state.get("v26_3_canonical_conversation_store")
+    if not isinstance(root, dict):
+        return None
+    bucket = root.get(cid)
+    if not isinstance(bucket, dict) or not isinstance(bucket.get("record"), dict):
+        return None
+    return copy.deepcopy(bucket["record"])
+
+def prepare_historical_runtime(chat: dict, session_state=None) -> dict:
+    """Start a new lifecycle from the last committed canonical snapshot.
+
+    The critical invariant is: Message N+1 is allocated only after Message N's
+    committed Message/Request/Round graph has been restored.  A narrowed current
+    runtime can therefore never become the base for the next canonical commit.
+    """
+    snapshot = load_canonical_snapshot(chat, session_state)
+    if snapshot is not None:
+        chat["conversation_record"] = snapshot
+        _chat_rebind_alias(chat)
+        rebuild_runtime_indexes_from_canonical(chat, session_state)
+        return snapshot
+    return _canonical_record(chat)
+
 def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
     """Restore the complete canonical ConversationRecord before runtime/audit use."""
     ensure_store(chat)

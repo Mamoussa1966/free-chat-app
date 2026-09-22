@@ -9,7 +9,7 @@ accounting evidence.
 """
 
 from copy import deepcopy
-from conversation_store import ensure_store, touch, now, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_history_hash, validate_canonical_chain
+from conversation_store import ensure_store, touch, now, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_history_hash, validate_canonical_chain, load_canonical_snapshot
 from conversation_persistence_v26 import get_authoritative_bucket
 
 
@@ -348,18 +348,40 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # not a second audit source; it is the same application-owned persistence
     # transport used by HYDRATE.  The audit must never silently continue with a
     # narrowed current ConversationRecord when canonical history exists.
-    canonical_transport = {}
-    cid = _s(chat.get("conversation_id"))
+    # HOTFIX119: the historical audit reads the committed canonical snapshot
+    # directly.  Current ConversationRecord/request_records are never a fallback.
+    canonical_transport = load_canonical_snapshot(chat, session_state)
     root = session_state.get("v26_3_canonical_conversation_store", {}) if isinstance(session_state, dict) else {}
-    if isinstance(session_state, dict):
-        bucket = root.get(cid) if isinstance(root, dict) else None
-        if isinstance(bucket, dict) and isinstance(bucket.get("record"), dict):
-            canonical_transport = deepcopy(bucket["record"])
-            chat["conversation_record"] = canonical_transport
-            # Rebuild once more from the exact canonical transport just restored.
-            rebuild_runtime_indexes_from_canonical(chat, session_state)
-    # Do not migrate/reconcile from current request_records here. Historical audit
-    # is intentionally canonical-only after HYDRATE -> REBUILD.
+    cid = _s(chat.get("conversation_id"))
+    if canonical_transport is None:
+        # No durable canonical transport => historical proof is impossible.
+        # Keep current runtime untouched and return an explicit NOT_PROVEN audit.
+        audit = {
+            "schema": V25_SCHEMA,
+            "authoritative_source": "APPLICATION_OWNED_CANONICAL_TRANSPORT_ONLY",
+            "historical_source": "V26_3_CONVERSATION_PERSISTENCE",
+            "canonical_transport_loaded": "NOT_PROVEN",
+            "HISTORICAL_MESSAGE_COUNT": "NOT_PROVEN",
+            "HISTORICAL_REQUEST_COUNT": "NOT_PROVEN",
+            "HISTORICAL_ROUND_COUNT": "NOT_PROVEN",
+            "message_1_request_mapping": "NOT_PROVEN",
+            "message_2_request_mapping": "NOT_PROVEN",
+            "request_1_round_1_mapping": "NOT_PROVEN",
+            "request_2_round_1_mapping": "NOT_PROVEN",
+            "round_ids_unique": "NOT_PROVEN",
+            "previous_request_reexecuted": "NOT_PROVEN",
+            "two_message_isolation": "NOT_PROVEN",
+            "overall_authoritative_status": "NOT_PROVEN",
+            "canonical_transport_failure": "CANONICAL_TRANSPORT_MISSING",
+            "agent_prose_used_as_identity": "NO",
+            "agent_prose_used_as_counter": "NO",
+        }
+        chat["v25_authoritative_audit"] = deepcopy(audit)
+        return audit
+    # Rebind the chat only from the committed transport, then rebuild indexes.
+    chat["conversation_record"] = deepcopy(canonical_transport)
+    rebuild_runtime_indexes_from_canonical(chat, session_state)
+
     ensure_store(chat)
     chat.setdefault("v25_schema", V25_SCHEMA)
     chat.setdefault("request_ledger_v25", [])
@@ -377,24 +399,6 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # Rebind the same canonical ConversationRecord from the existing persistence
     # object when the chat object arrived after a rerun without its direct alias.
     # This is transport hydration, not a fallback to current request state.
-    bucket = get_authoritative_bucket(chat, session_state)
-    if isinstance(bucket, dict) and any(isinstance(bucket.get(k), list) and bucket.get(k) for k in ("messages", "requests", "rounds")):
-        canonical_record = {
-            "conversation_id": _s(chat.get("conversation_id")),
-            "session_id": _s(chat.get("session_id")),
-            "messages": deepcopy(bucket.get("messages", [])),
-            "requests": deepcopy(bucket.get("requests", [])),
-            "rounds": deepcopy(bucket.get("rounds", [])),
-        }
-        chat["conversation_record"] = canonical_record
-        rebuild_runtime_indexes_from_canonical(chat, session_state)
-    if not canonical_transport and isinstance(canonical_record, dict):
-        # The canonical ConversationRecord itself is the application-owned store.
-        # When no separate session transport exists (e.g. unit tests or a first
-        # in-memory lifecycle), it remains valid only as long as its complete
-        # historical identity is actually present; there is still no current-
-        # request or provider-prose fallback.
-        canonical_transport = deepcopy(canonical_record)
     # V26.3.1: historical identity MUST come from the dedicated application-owned
     # persistence ledger. Narrower/current ledgers are corroboration only and may
     # never replace a historical record already present here.

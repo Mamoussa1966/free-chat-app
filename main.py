@@ -21,7 +21,7 @@ from production_platform import PLATFORM_VERSION, compact_context, synthesize_co
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical
-from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -2365,6 +2365,11 @@ def run_app() -> None:
             st.session_state.last_continuation_audit = copy.deepcopy(continuation_audit)
             st.info(f"Continuation resolved to persisted Request ID: {persisted_id} — READ-ONLY; no new Request, provider call, round, cascade, or Bridge created.")
             return
+        # HOTFIX119: before allocating any new Message/Request/round identity,
+        # restore the last committed canonical history.  This closes the exact
+        # runtime gap observed after Message 1 -> Streamlit rerun -> Message 2.
+        # A narrowed current runtime is never permitted to seed the next commit.
+        prepare_historical_runtime(chat, st.session_state)
         prompt, harness_abc = _extract_hotfix141_harness(prompt)
         sanitized_prompt, bridge_controls = _extract_bridge_control_values(prompt)
         prompt = sanitized_prompt
