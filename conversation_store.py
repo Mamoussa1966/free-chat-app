@@ -2,6 +2,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from conversation_schema import SCHEMA_VERSION
 
@@ -21,6 +22,7 @@ def ensure_store(chat: dict) -> dict:
     rec.setdefault("messages", [])
     rec.setdefault("requests", [])
     rec.setdefault("rounds", [])
+    rec.setdefault("canonical_store_contract", "V26_3_CANONICAL_CONVERSATION_STORE")
     chat.setdefault("message_ledger_v24", [])
     chat.setdefault("round_ledger_v24", [])
     chat.setdefault("request_ledger_v24", [])
@@ -163,6 +165,7 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
         # then replace the transport bucket in one assignment. This prevents a
         # partially-mutated current chat from becoming the canonical snapshot.
         rec["canonical_store_contract"] = "V26_3_CANONICAL_CONVERSATION_STORE"
+        rec["canonical_store_committed"] = True
         candidate = copy.deepcopy({
             "conversation_id": cid,
             "session_id": str(chat.get("session_id") or ""),
@@ -170,6 +173,7 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
             "requests": rec.get("requests", []),
             "rounds": rec.get("rounds", []),
             "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+            "canonical_store_committed": True,
         })
         # A normal lifecycle commits partial identity checkpoints (Request before
         # Round creation, then Round start/finish). Full graph validation belongs
@@ -194,47 +198,54 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
         root[cid]["messages"] = root[cid]["record"]["messages"]
         root[cid]["requests"] = root[cid]["record"]["requests"]
         root[cid]["rounds"] = root[cid]["record"]["rounds"]
+        rec["canonical_store_committed"] = True
+        rec["canonical_store_revision"] = revision
     return rec
 
 def load_canonical_snapshot(chat: dict, session_state=None) -> dict | None:
     """Read the ONE V26_3_CANONICAL_CONVERSATION_STORE snapshot.
 
-    Session State is only the rerun checkpoint for this same store. When it is
-    unavailable, an explicitly canonical ConversationRecord is the store itself;
-    no current request/ledger/prose reconstruction is permitted.
+    The writer and reader share one contract.  Session State is only the
+    rerun transport for that same store; the embedded ConversationRecord is
+    the durable application-owned representation.  No legacy/current-request
+    fallback is permitted.
     """
     cid = str(chat.get("conversation_id") or "").strip()
     if not cid:
         return None
-    if isinstance(session_state, dict):
+
+    # Streamlit session_state is Mapping-like, not necessarily a dict.
+    if isinstance(session_state, Mapping):
         root = session_state.get("v26_3_canonical_conversation_store")
-        if isinstance(root, dict):
+        if isinstance(root, Mapping):
             bucket = root.get(cid)
-            if isinstance(bucket, dict) and isinstance(bucket.get("record"), dict):
-                return copy.deepcopy(bucket["record"])
-    record = chat.get("conversation_record") if isinstance(chat, dict) else None
-    if not isinstance(record, dict):
-        legacy = chat.get("v26_3_conversation_persistence") if isinstance(chat, dict) else None
-        row = legacy.get(cid) if isinstance(legacy, dict) else None
-        if isinstance(row, dict) and any(isinstance(row.get(k), list) and row.get(k) for k in ("messages", "requests", "rounds")):
-            record = {
+            if isinstance(bucket, Mapping) and isinstance(bucket.get("record"), Mapping):
+                rec = bucket["record"]
+                return {
+                    "conversation_id": cid,
+                    "session_id": str(rec.get("session_id") or chat.get("session_id") or ""),
+                    "messages": copy.deepcopy(rec.get("messages", [])),
+                    "requests": copy.deepcopy(rec.get("requests", [])),
+                    "rounds": copy.deepcopy(rec.get("rounds", [])),
+                    "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+                    "canonical_store_revision": int(bucket.get("revision") or 0),
+                }
+
+    # Same canonical record, not a second persistence source.  This path is
+    # required when Streamlit restores the conversation object but its mapping
+    # transport is not exposed as a plain dict.
+    record = chat.get("conversation_record") if isinstance(chat, Mapping) else None
+    if isinstance(record, Mapping) and record.get("canonical_store_committed") is True:
+        if record.get("canonical_store_contract") == "V26_3_CANONICAL_CONVERSATION_STORE":
+            return {
                 "conversation_id": cid,
-                "session_id": str(chat.get("session_id") or ""),
-                "messages": copy.deepcopy(row.get("messages", [])),
-                "requests": copy.deepcopy(row.get("requests", [])),
-                "rounds": copy.deepcopy(row.get("rounds", [])),
+                "session_id": str(record.get("session_id") or chat.get("session_id") or ""),
+                "messages": copy.deepcopy(record.get("messages", [])),
+                "requests": copy.deepcopy(record.get("requests", [])),
+                "rounds": copy.deepcopy(record.get("rounds", [])),
                 "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+                "canonical_store_revision": int(record.get("canonical_store_revision") or 0),
             }
-            chat["conversation_record"] = record
-    if isinstance(record, dict) and record.get("canonical_store_contract") == "V26_3_CANONICAL_CONVERSATION_STORE":
-        return copy.deepcopy({
-            "conversation_id": cid,
-            "session_id": str(chat.get("session_id") or record.get("session_id") or ""),
-            "messages": record.get("messages", []),
-            "requests": record.get("requests", []),
-            "rounds": record.get("rounds", []),
-            "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
-        })
     return None
 
 

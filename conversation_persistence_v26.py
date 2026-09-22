@@ -135,31 +135,14 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
 
 
 def get_authoritative_bucket(chat, session_state=None):
-    """Read the SAME canonical store used by persist_identity/commit.
-
-    There is deliberately no fallback to chat-local compatibility ledgers.
-    """
+    """Read the exact same canonical snapshot used by the writer."""
     from conversation_store import load_canonical_snapshot
     snapshot = load_canonical_snapshot(chat, session_state)
     if snapshot is None:
-        record = chat.get("conversation_record") if isinstance(chat, dict) else None
-        legacy = record.get("v26_3_conversation_persistence") if isinstance(record, dict) else None
-        if not isinstance(legacy, dict):
-            legacy = chat.get("v26_3_conversation_persistence") if isinstance(chat, dict) else None
-        cid = _s(chat.get("conversation_id"))
-        row = legacy.get(cid) if isinstance(legacy, dict) else None
-        if isinstance(row, dict) and any(isinstance(row.get(k), list) and row.get(k) for k in ("messages", "requests", "rounds")):
-            record = record if isinstance(record, dict) else {}
-            record["canonical_store_contract"] = "V26_3_CANONICAL_CONVERSATION_STORE"
-            for key in ("messages", "requests", "rounds"):
-                record[key] = copy.deepcopy(row.get(key, []))
-            chat["conversation_record"] = record
-            snapshot = {"conversation_id": cid, "session_id": _s(chat.get("session_id")), **{k: copy.deepcopy(record.get(k, [])) for k in ("messages", "requests", "rounds")}}
-        else:
-            return None
+        return None
     return {
         "schema": SCHEMA,
-        "conversation_id": _s(chat.get("conversation_id")),
+        "conversation_id": _s(snapshot.get("conversation_id")),
         "messages": copy.deepcopy(snapshot.get("messages", [])),
         "requests": copy.deepcopy(snapshot.get("requests", [])),
         "rounds": copy.deepcopy(snapshot.get("rounds", [])),
