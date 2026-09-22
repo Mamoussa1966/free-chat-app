@@ -57,4 +57,4 @@ def test_hotfix117_read_is_application_owned_and_happens_after_barrier():
 
 
 def test_hotfix117_release_identity_is_canonical():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V26.3.8-CANONICAL-LIFECYCLE-PERSISTENCE-HYDRATION-DISPATCH-GATE"
