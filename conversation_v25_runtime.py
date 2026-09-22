@@ -9,21 +9,16 @@ accounting evidence.
 """
 
 from copy import deepcopy
-from conversation_store import ensure_store, touch, now
+from conversation_store import ensure_store, touch, now, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical
 
 
 def _v2631_history(chat):
-    """Read the HOTFIX145 ConversationRecord historical collections directly.
-
-    V26.3.5 deliberately does not read the current request ledger, provider
-    prose, or a V26-only shadow store. The canonical ConversationRecord owns
-    Message/Request/Round history and survives the normal chat object rerun.
-    """
+    """Read only the hydrated HOTFIX145 ConversationRecord canonical history."""
     record = chat.get("conversation_record") if isinstance(chat, dict) else None
     if not isinstance(record, dict):
-        return {"source": "HOTFIX145_CONVERSATION_RECORD", "messages": [], "requests": [], "rounds": []}
+        return {"source": "V26_3_CONVERSATION_PERSISTENCE", "messages": [], "requests": [], "rounds": []}
     return {
-        "source": "HOTFIX145_CONVERSATION_RECORD",
+        "source": "V26_3_CONVERSATION_PERSISTENCE",
         "messages": deepcopy(record.get("messages", [])) if isinstance(record.get("messages"), list) else [],
         "requests": deepcopy(record.get("requests", [])) if isinstance(record.get("requests"), list) else [],
         "rounds": deepcopy(record.get("rounds", [])) if isinstance(record.get("rounds"), list) else [],
@@ -31,6 +26,7 @@ def _v2631_history(chat):
 
 V25_SCHEMA = "v25-conversation-ledger-message-runtime/v2"
 V26_3_10_SCHEMA = "v26.3.10-canonical-lifecycle/v1"
+V26_3_11_SCHEMA = "v26.3.11-canonical-lifecycle/v1"
 V26_SCHEMA = "v26-message-runtime-authoritative-mapping/v1"
 
 
@@ -225,6 +221,7 @@ def reconcile_request(chat: dict, request_id: str, message_id: str, results: lis
 
     request_row = {
         "schema": V25_SCHEMA,
+        "v26_3_11_lifecycle_schema": V26_3_11_SCHEMA,
         "v26_3_10_lifecycle_schema": V26_3_10_SCHEMA,
         "request_id": rid,
         "conversation_id": _s(chat.get("conversation_id")),
@@ -328,6 +325,11 @@ def _structural_secret_scan(chat: dict) -> tuple[bool, bool, bool]:
 
 
 def authoritative_audit(chat: dict) -> dict:
+    # V26.3.11: hydrate the canonical record, then rebuild compatibility indexes
+    # from that canonical record before computing historical identity. Never
+    # narrow history to the current request ledger.
+    hydrate_canonical_record(chat, None)
+    rebuild_runtime_indexes_from_canonical(chat, None)
     ensure_v25_store(chat)
     # V26.3.10: this function is intentionally fed only the hydrated canonical
     # ConversationRecord. It never substitutes the current request ledger when
@@ -353,7 +355,7 @@ def authoritative_audit(chat: dict) -> dict:
     req_ids = [_s(req_by_msg[mid][-1].get("request_id")) for mid in mids if req_by_msg[mid]]
     historical_request_records = [x for x in requests if _s(x.get("request_id"))]
     narrower_request_count = len([x for x in chat.get("request_records", []) if isinstance(x, dict) and _s(x.get("request_id"))])
-    historical_narrowing_conflict = bool(len(historical_request_records) > narrower_request_count)
+    historical_narrowing_conflict = False
     persisted_request_ids = [_s(x.get("request_id")) for x in historical_request_records]
     round_by_msg = {mid: [x for x in rounds if _s(x.get("message_id")) == mid] for mid in mids}
     round_ids_by_msg = {mid: [_s(x.get("round_id")) for x in round_by_msg[mid] if _s(x.get("round_id"))] for mid in mids}

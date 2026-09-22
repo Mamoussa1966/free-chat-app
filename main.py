@@ -20,7 +20,7 @@ from production_core import RequestLifecycle, ProviderExecutionContract, SeatExe
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
-from conversation_store import commit_canonical_record, hydrate_canonical_record
+from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical
 from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, assert_canonical_lifecycle_ready
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
@@ -785,6 +785,7 @@ def _active_chat() -> dict:
             chat.setdefault("created_at", _now())
             _ensure_chat_identity_state(chat)
             hydrate_canonical_record(chat, st.session_state)
+            rebuild_runtime_indexes_from_canonical(chat, st.session_state)
             hydrate_chat_identity(chat, st.session_state)
             snapshot_chat_identity(chat, st.session_state)
             return chat
@@ -2464,7 +2465,9 @@ def run_app() -> None:
         ensure_v25_store(chat)
         reconcile_request(chat, request_id, user_message_id, list(results or []), st.session_state.get("last_synthesis") or {})
         snapshot_chat_identity(chat, st.session_state)
-        hydrate_chat_identity(chat, st.session_state)
+        hydrate_canonical_record(chat, st.session_state)
+        rebuild_runtime_indexes_from_canonical(chat, st.session_state)
+        commit_canonical_record(chat, st.session_state)
         authoritative_audit(chat)
         timeline_event(chat, request_id, user_message_id, "SYNTHESIS", status=str((st.session_state.get("last_synthesis") or {}).get("status") or "UNKNOWN"))
         touch(chat)
@@ -2475,6 +2478,7 @@ def run_app() -> None:
         st.session_state.voice_nonce += 1
         st.rerun()
     hydrate_canonical_record(chat, st.session_state)
+    rebuild_runtime_indexes_from_canonical(chat, st.session_state)
     hydrate_chat_identity(chat, st.session_state)
     snapshot_chat_identity(chat, st.session_state)
     runtime_audit = conversation_audit(chat)

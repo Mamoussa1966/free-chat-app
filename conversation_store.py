@@ -100,7 +100,7 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
                                 old[k] = copy.deepcopy(v)
             _chat_rebind_alias(chat)
         root[cid] = copy.deepcopy({
-            "schema": "v26.3.10-canonical-conversation-store/v8",
+            "schema": "v26.3.11-canonical-conversation-store/v9",
             "conversation_id": cid,
             "session_id": str(chat.get("session_id") or ""),
             "record": copy.deepcopy(rec),
@@ -154,6 +154,47 @@ def _chat_rebind_alias(chat: dict) -> None:
                     "messages": rec["messages"], "requests": rec["requests"], "rounds": rec["rounds"]})
     chat["v26_3_conversation_persistence"] = root
 
+
+
+def rebuild_runtime_indexes_from_canonical(chat: dict, session_state=None) -> dict:
+    """Rebuild compatibility/runtime indexes strictly from the hydrated canonical record.
+
+    This is an index rebuild, not a second persistence source and not an audit
+    reconstruction. The canonical ConversationRecord remains the sole historical
+    owner of Message/Request/Round identity.
+    """
+    hydrate_canonical_record(chat, session_state)
+    rec = _canonical_record(chat)
+
+    def merge_by_id(rows, incoming, ident):
+        if not isinstance(rows, list):
+            rows = []
+        by_id = {str(x.get(ident) or ""): x for x in rows if isinstance(x, dict) and str(x.get(ident) or "")}
+        for item in incoming:
+            if not isinstance(item, dict):
+                continue
+            iid = str(item.get(ident) or "").strip()
+            if not iid:
+                continue
+            old = by_id.get(iid)
+            if old is None:
+                rows.append(copy.deepcopy(item))
+                by_id[iid] = rows[-1]
+            else:
+                for k, v in item.items():
+                    if v not in (None, "", [], {}):
+                        old[k] = copy.deepcopy(v)
+        return rows
+
+    chat["message_ledger"] = merge_by_id(chat.get("message_ledger", []), rec.get("messages", []), "message_id")
+    chat["request_records"] = merge_by_id(chat.get("request_records", []), rec.get("requests", []), "request_id")
+    chat["round_ledger"] = merge_by_id(chat.get("round_ledger", []), rec.get("rounds", []), "round_id")
+    # Keep the bounded compatibility ledgers aligned without becoming historical
+    # authority. These are indexes only; audit reads the canonical record.
+    chat["message_ledger"] = chat["message_ledger"][-1000:]
+    chat["request_records"] = chat["request_records"][-1000:]
+    chat["round_ledger"] = chat["round_ledger"][-2000:]
+    return chat
 
 def canonical_upsert_message(chat: dict, message: dict, session_state=None) -> dict:
     """Create/update a MessageRecord in the canonical ConversationRecord before dispatch."""
