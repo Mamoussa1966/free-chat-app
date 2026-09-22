@@ -21,7 +21,7 @@ from production_platform import PLATFORM_VERSION, compact_context, synthesize_co
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical
-from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, assert_canonical_lifecycle_ready
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -1498,10 +1498,23 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         for round_no in range(1, total_rounds + 1):
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
-            runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no)
+            runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no, st.session_state)
             round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
             if round_row:
-                canonical_upsert_round(chat, round_row, st.session_state)
+                # HOTFIX117: converge the already allocated identity into one
+                # application-owned atomic lifecycle checkpoint before provider dispatch.
+                request_row = next((x for x in reversed(chat.get("request_records", [])) if isinstance(x, dict) and str(x.get("request_id") or "") == request_id), None)
+                message_row = {
+                    "message_id": current_user_message_id,
+                    "conversation_id": chat.get("conversation_id"),
+                    "session_id": chat.get("session_id"),
+                    "role": "user",
+                    "request_id": request_id,
+                    "created_at": (request_row or {}).get("created_at") or _now(),
+                }
+                atomic = canonical_create_lifecycle(chat, message_row, request_row or {"request_id": request_id, "message_id": current_user_message_id}, round_row, st.session_state)
+                if not atomic.get("committed"):
+                    raise RuntimeError("CANONICAL_ATOMIC_LIFECYCLE_COMMIT_FAILED")
                 persist_identity(chat, st.session_state, round_row=round_row)
             # V26.3.8 hard gate: provider dispatch cannot begin until the canonical
             # ConversationRecord contains the exact Message→Request→Round chain.
@@ -2121,7 +2134,7 @@ def _render_bridge_audit(results: list[dict]) -> None:
                 f"TOTAL_CASCADE_ATTEMPTS = {metrics.get('total_cascade_attempts', 0)}",
                 f"DEEPSEEK_SEAT_7_ROUND_1_EXECUTIONS = {metrics.get('deepseek_round1_executions', 0)}",
                 f"PROVIDER_EXECUTION_EVENTS = {metrics.get('provider_execution_events', 0)}",
-                "COUNTER_SOURCE = REQUEST_RECORD / LIFECYCLE_AUDIT",
+                "COUNTER_SOURCE = REQUEST_RECORD / LIFECYCLE_AUDIT (CURRENT REQUEST TELEMETRY)",
                 "SEAT_GENERATED_PROSE_USED_AS_COUNTER_SOURCE = NO",
             ]), language="text")
 
@@ -2484,7 +2497,7 @@ def run_app() -> None:
     runtime_audit = conversation_audit(chat)
     v25_audit = authoritative_audit(chat, st.session_state)
     v25_audit["v26_3_persistence"] = persistence_audit(chat, st.session_state)
-    with st.expander("🧭 V25 Conversation Ledger / Authoritative Runtime", expanded=False):
+    with st.expander("🧭 HOTFIX118 — Authoritative Historical Conversation Audit", expanded=True):
         st.json(v25_audit)
         st.caption("مصدر الحقيقة: Application-Owned Runtime Records فقط؛ Agent prose غير مستخدم للهوية أو العدادات.")
     with st.expander("🧭 Conversation Runtime / Provenance", expanded=False):

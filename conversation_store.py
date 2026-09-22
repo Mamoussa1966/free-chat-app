@@ -1,5 +1,7 @@
 from __future__ import annotations
 import copy
+import hashlib
+import json
 from datetime import datetime, timezone
 from conversation_schema import SCHEMA_VERSION
 
@@ -56,6 +58,63 @@ def _canonical_record(chat: dict) -> dict:
     rec.setdefault("rounds", [])
     return rec
 
+def canonical_history_hash(record: dict) -> str:
+    """Deterministic identity hash over canonical Message/Request/Round history."""
+    payload = {
+        "conversation_id": str(record.get("conversation_id") or ""),
+        "session_id": str(record.get("session_id") or ""),
+        "messages": [
+            {k: x.get(k) for k in ("message_id", "conversation_id", "session_id", "role", "request_id", "created_at")}
+            for x in record.get("messages", []) if isinstance(x, dict) and x.get("message_id")
+        ],
+        "requests": [
+            {k: x.get(k) for k in ("request_id", "conversation_id", "session_id", "message_id", "created_at", "state")}
+            for x in record.get("requests", []) if isinstance(x, dict) and x.get("request_id")
+        ],
+        "rounds": [
+            {k: x.get(k) for k in ("round_id", "conversation_id", "session_id", "message_id", "request_id", "round", "created_at", "status")}
+            for x in record.get("rounds", []) if isinstance(x, dict) and x.get("round_id")
+        ],
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+def validate_canonical_chain(record: dict) -> dict:
+    """Validate the immutable Message→Request→Round graph without inference."""
+    messages = [x for x in record.get("messages", []) if isinstance(x, dict)]
+    requests = [x for x in record.get("requests", []) if isinstance(x, dict)]
+    rounds = [x for x in record.get("rounds", []) if isinstance(x, dict)]
+    mids = {str(x.get("message_id") or "") for x in messages if x.get("message_id")}
+    rids = {str(x.get("request_id") or "") for x in requests if x.get("request_id")}
+    oids = [str(x.get("round_id") or "") for x in rounds if x.get("round_id")]
+    msg_req = all(str(x.get("request_id") or "") in rids for x in messages if str(x.get("role") or "").lower() == "user")
+    req_msg = all(str(x.get("message_id") or "") in mids for x in requests if x.get("message_id"))
+    round_req = all(str(x.get("request_id") or "") in rids and str(x.get("message_id") or "") in mids for x in rounds if x.get("round_id"))
+    return {
+        "message_request_integrity": bool(msg_req and req_msg),
+        "request_round_integrity": bool(round_req),
+        "round_ids_unique": len(oids) == len(set(oids)),
+        "history_hash": canonical_history_hash(record),
+    }
+
+def canonical_create_lifecycle(chat: dict, message: dict, request: dict, round_row: dict, session_state=None) -> dict:
+    """Atomically append Message/Request/Round identity and commit one canonical snapshot."""
+    rec = _canonical_record(chat)
+    snapshot = copy.deepcopy(rec)
+    try:
+        canonical_upsert_message(chat, message, None)
+        canonical_upsert_request(chat, request, None)
+        canonical_upsert_round(chat, round_row, None)
+        integrity = validate_canonical_chain(_canonical_record(chat))
+        if not all(integrity.values()):
+            raise RuntimeError("CANONICAL_ATOMIC_LIFECYCLE_VALIDATION_FAILED")
+        commit_canonical_record(chat, session_state)
+        return {"committed": True, "integrity": integrity, "record": copy.deepcopy(_canonical_record(chat))}
+    except Exception:
+        chat["conversation_record"] = snapshot
+        _chat_rebind_alias(chat)
+        raise
+
 def commit_canonical_record(chat: dict, session_state=None) -> dict:
     """Commit the complete canonical ConversationRecord at a lifecycle boundary.
 
@@ -99,11 +158,33 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
                             if v not in (None, "", [], {}):
                                 old[k] = copy.deepcopy(v)
             _chat_rebind_alias(chat)
-        root[cid] = copy.deepcopy({
-            "schema": "v26.3.11-canonical-conversation-store/v9",
+        # HOTFIX118: build the complete candidate snapshot first, validate it,
+        # then replace the transport bucket in one assignment. This prevents a
+        # partially-mutated current chat from becoming the canonical snapshot.
+        candidate = copy.deepcopy({
             "conversation_id": cid,
             "session_id": str(chat.get("session_id") or ""),
-            "record": copy.deepcopy(rec),
+            "messages": rec.get("messages", []),
+            "requests": rec.get("requests", []),
+            "rounds": rec.get("rounds", []),
+        })
+        # A normal lifecycle commits partial identity checkpoints (Request before
+        # Round creation, then Round start/finish). Full graph validation belongs
+        # to canonical_create_lifecycle/assert_canonical_lifecycle_ready; COMMIT
+        # itself must therefore accept a valid partial lifecycle while still
+        # enforcing unique immutable Round IDs.
+        candidate_integrity = validate_canonical_chain(candidate)
+        if not candidate_integrity.get("round_ids_unique"):
+            raise RuntimeError("CANONICAL_ATOMIC_COMMIT_ROUND_ID_COLLISION")
+        previous = root.get(cid) if isinstance(root.get(cid), dict) else {}
+        revision = int(previous.get("revision") or 0) + 1
+        root[cid] = copy.deepcopy({
+            "schema": "v26.3.18-canonical-atomic-history/v11",
+            "conversation_id": cid,
+            "session_id": str(chat.get("session_id") or ""),
+            "revision": revision,
+            "history_hash": candidate_integrity.get("history_hash"),
+            "record": candidate,
         })
     return rec
 
@@ -118,26 +199,17 @@ def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
     if not isinstance(saved, dict) or not isinstance(saved.get("record"), dict):
         return chat
     saved_record = saved["record"]
+    # HOTFIX116: HYDRATE is authoritative transport restoration.  A Streamlit
+    # rerun may leave chat["conversation_record"] narrowed to Message 2 /
+    # Request 2.  Merging that narrow object into the saved object is unsafe
+    # because later lifecycle code can accidentally audit the narrow view.
+    # The canonical session transport has already been committed monotonically,
+    # so restore the complete immutable-identity record first.
     current = chat["conversation_record"]
-    # Never replace canonical history with a narrower/current record. Merge by
-    # immutable identity and preserve explicit conflicts.
-    for key, ident in (("messages", "message_id"), ("requests", "request_id"), ("rounds", "round_id")):
-        target = current.setdefault(key, [])
-        existing = {str(x.get(ident) or ""): x for x in target if isinstance(x, dict) and str(x.get(ident) or "")}
-        for item in saved_record.get(key, []) if isinstance(saved_record.get(key), list) else []:
-            if not isinstance(item, dict):
-                continue
-            iid = str(item.get(ident) or "")
-            if not iid:
-                continue
-            old = existing.get(iid)
-            if old is None:
-                target.append(copy.deepcopy(item))
-                existing[iid] = target[-1]
-            else:
-                for k, v in item.items():
-                    if v not in (None, "", [], {}):
-                        old[k] = copy.deepcopy(v)
+    if isinstance(saved_record, dict) and any(isinstance(saved_record.get(k), list) and saved_record.get(k) for k in ("messages", "requests", "rounds")):
+        chat["conversation_record"] = copy.deepcopy(saved_record)
+    else:
+        chat["conversation_record"] = current
     _chat_rebind_alias(chat)
     return chat
 
