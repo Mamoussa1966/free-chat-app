@@ -1,13 +1,37 @@
-# HOTFIX128 — RESULT STATUS SEMANTICS HARDENING
+# HOTFIX128 — PERSISTENCE TEST CONTRACT CORRECTION / FINAL
 
-Built directly from HOTFIX127. Scope is intentionally narrow.
+## Purpose
+HOTFIX128 makes one and only one correction above HOTFIX127: the active V26.3 Persistence test contract now uses the correct positive mapping **REQUEST_2 → ROUND_2**. The old **REQUEST_2 → ROUND_1** wording is retained only in historical release notes where it describes older defects/tests; it is not an active positive acceptance condition.
 
-## Fixed
-- Separates NOT_CONFIGURED, REQUEST_CREATED, DISPATCH_REJECTED, NOT_EXECUTED, EXECUTION_STARTED, PROVIDER_ERROR, TRANSIENT_PROVIDER_ERROR, MODEL_UNAVAILABLE, QUOTA_ERROR, and SUCCESS semantics.
-- `attempted_models == []` can never be rendered/classified as API_ERROR or PROVIDER_ERROR.
-- `Free models == 0` is NOT_CONFIGURED, never API_FAILURE.
-- Zero runtime execution events cannot produce SUCCESS or prove PROVIDER_ERROR.
-- Worker/orchestration failures are DISPATCH_REJECTED and do not create provider execution attempts.
+## Engineering scope
+- No Provider Core change.
+- No Free Cascade change.
+- No Secrets change.
+- No Model List change.
+- No Bridge implementation change.
+- No canonical persistence engine behavior change.
+- No identity-generation change.
+- Only the authoritative test-contract artifact and its regression gate are added.
 
-## Explicitly unchanged
-Secrets, `*_FREE_MODELS`, Gemini cascade, DeepSeek, Transactional Bridge, Request ID lifecycle, Free Cascade, and Provider Execution Contract.
+## Active contract
+`MESSAGE_1 → REQUEST_1 → ROUND_1`
+
+`MESSAGE_2 → REQUEST_2 → ROUND_2`
+
+Negative control:
+`REQUEST_2 → ROUND_1 = FALSE`
+
+## Fail-closed regression
+The HOTFIX128 test suite verifies that an intentionally corrupted Request 2 → Round 1 canonical record cannot pass the authoritative gate. It must produce `request_2_round_2_mapping=false`, `canonical_round_sequence_proven=false`, and a non-PASS authoritative result.
+
+## Historical compatibility
+Older HOTFIX116/HOTFIX119/HOTFIX121 notes may contain the obsolete positive `REQUEST_2 → ROUND_1` wording because those files are historical evidence and are preserved byte-for-byte. HOTFIX128 does not reinterpret those historical notes as the current contract.
+
+## Release acceptance
+1. Preserve every HOTFIX127 packaged file.
+2. Add only HOTFIX128 contract/gate/version/test artifacts.
+3. Run the complete pytest suite.
+4. Re-extract the exact ZIP.
+5. Run the complete pytest suite against the re-extracted release.
+6. Verify ZIP member uniqueness and SHA-256.
+7. Verify the active contract contains `REQUEST_2 → ROUND_2` as the positive mapping and `REQUEST_2 → ROUND_1 = FALSE` only as the negative control.
