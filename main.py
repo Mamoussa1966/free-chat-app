@@ -238,10 +238,14 @@ class SharedContextBridge:
     request from committed Shared Context after the provider response.
     """
 
-    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000, request_id: str = "", round_no: int = 0):
+    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000, request_id: str = "", round_no: int = 0, application_owned_test: bool = False):
         self.max_chars = max(1, int(max_chars))
         self.request_id = str(request_id or "")
         self.round_no = int(round_no or 0)
+        # HOTFIX124: explicit application-owned Bridge test mode. When enabled,
+        # the diagnostic canary is created and controlled exclusively by the
+        # application; provider prose is never authoritative for the transaction.
+        self.application_owned_test = bool(application_owned_test)
         self.bridge_id = hashlib.sha256(
             f"{self.request_id}:{self.round_no}:{uuid.uuid4().hex}".encode("utf-8")
         ).hexdigest()[:24]
@@ -437,6 +441,26 @@ class SharedContextBridge:
             f"Output:\n{content}"
         )
         for key, value in _extract_bridge_writes(content):
+            # HOTFIX124: application-owned diagnostic state is immutable at the
+            # provider boundary. A model may emit BRIDGE_WRITE-looking prose, but
+            # that prose is untrusted presentation data and can never overwrite
+            # an application-owned transaction value.
+            existing = self._values.get(key)
+            if self.application_owned_test and isinstance(existing, dict) and existing.get("write_origin") == "APPLICATION_TEST_CONTROL":
+                self._entries.append(
+                    "BRIDGE PROVIDER WRITE REJECTED (APPLICATION-OWNED STATE):\n"
+                    f"Room seat: {room_slot}\nKey: {key}\nReason: PROVIDER_PROSE_CANNOT_OVERWRITE_APPLICATION_STATE"
+                )
+                self._record_trace(
+                    source_seat=room_slot,
+                    source_provider=provider,
+                    target_seat=0,
+                    key=key,
+                    write_sequence=int(existing.get("write_sequence", 0) or 0),
+                    commit_status="REJECTED",
+                    schema_validation="UNTRUSTED_PROVIDER_DATA",
+                )
+                continue
             self._write_sequence += 1
             self._source_values[key] = value
             self._values[key] = {
@@ -444,6 +468,7 @@ class SharedContextBridge:
                 "source_seat": room_slot,
                 "source_provider": provider,
                 "write_sequence": self._write_sequence,
+                "write_origin": "PROVIDER_UNTRUSTED_DATA",
             }
             self._entries.append(
                 "BRIDGE WRITE RECORD (PROVIDER UNTRUSTED DATA):\n"
@@ -520,10 +545,16 @@ class SharedContextBridge:
         target_key_has = bool(key and key in target_payload)
         target_value_outside_sanitized = target_payload_has
         target_value = str(read.get("value")) if read else ""
-        source_ok = bool(record and int(record.get("source_seat", 0)) == int(source_seat))
+        application_owned = bool(record and record.get("write_origin") == "APPLICATION_TEST_CONTROL")
+        source_ok = bool(record and int(record.get("source_seat", 0)) == int(source_seat) and (not self.application_owned_test or application_owned))
         target_ok = bool(read and int(read.get("target_seat", 0)) == int(target_seat))
         runtime_attestation_present = bool(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256"))
         runtime_payload_is_sanitized = runtime_attestation_present and not target_value_outside_sanitized and not target_key_has
+        proven = bool(source_value)
+        user_isolation = ("NO" if not user_has else "YES") if proven else "NOT_PROVEN"
+        gemini_isolation = ("NO" if not target_prompt_has else "YES") if proven else "NOT_PROVEN"
+        bridge_state = ("YES" if record and record.get("value") == source_value and (not self.application_owned_test or application_owned) else "NO") if proven else "NOT_PROVEN"
+        match = ("PASS" if source_value and target_value and source_value == target_value and (not self.application_owned_test or application_owned) else "FAIL") if proven else "NOT_PROVEN"
         return {
             "BRIDGE_ID": self.bridge_id, "ROUND_ID": self.round_no,
             "SOURCE": "DeepSeek / Seat 7" if int(source_seat) == 7 else f"Seat {source_seat}",
@@ -536,13 +567,13 @@ class SharedContextBridge:
             "READ": "PASS" if read and target_ok else "FAIL",
             "SCHEMA_VALIDATION": "PASS" if read and target_ok else "FAIL",
             "SOURCE_VALUE": "[REDACTED]", "TARGET_VALUE": "[REDACTED]",
-            "MATCH": "PASS" if source_value and target_value and source_value == target_value else "FAIL",
-            "USER_PROMPT_CONTAINS_VALUE": "NO" if source_value and not user_has else "YES",
-            "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": "NO" if source_value and not target_prompt_has else "YES",
-            "BRIDGE_STATE_CONTAINS_VALUE": "YES" if source_value and record and record.get("value") == source_value else "NO",
+            "MATCH": match,
+            "USER_PROMPT_CONTAINS_VALUE": user_isolation,
+            "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": gemini_isolation,
+            "BRIDGE_STATE_CONTAINS_VALUE": bridge_state,
             "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES" if runtime_attestation_present else "NO",
-            "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": "NO" if runtime_attestation_present and not target_value_outside_sanitized else "YES",
-            "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": "NO" if runtime_attestation_present and not target_key_has else "YES",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": ("NO" if not target_value_outside_sanitized else "YES") if runtime_attestation_present else "NOT_PROVEN",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": ("NO" if not target_key_has else "YES") if runtime_attestation_present else "NOT_PROVEN",
             "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS" if runtime_payload_is_sanitized else "FAIL",
             "write_sequence": int(record.get("write_sequence", 0)) if record else 0,
             "read_sequence": int(read.get("read_sequence", 0)) if read else 0,
@@ -562,6 +593,27 @@ class SharedContextBridge:
             audit["AUDIT_SEAL_HASH"] = ""
             audit["PRODUCTION_GATE"] = "NOT_SEALED"
         return audit
+
+    def bridge_security_regression_gate(self, audit: dict | None = None) -> dict:
+        """HOTFIX124 fail-closed publication gate for the nine Bridge invariants."""
+        report = audit if isinstance(audit, dict) else self.transaction_audit()
+        required = {
+            "WRITE": "PASS", "VALIDATE": "PASS", "COMMIT": "PASS",
+            "BARRIER": "PASS", "READ": "PASS", "SCHEMA_VALIDATION": "PASS",
+            "MATCH": "PASS", "BRIDGE_STATE_CONTAINS_VALUE": "YES",
+            "USER_PROMPT_CONTAINS_VALUE": "NO",
+            "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": "NO",
+        }
+        failures = [k for k, expected in required.items() if report.get(k) != expected]
+        return {
+            "schema": "hotfix124-bridge-security-regression-gate/v1",
+            "status": "PASS" if not failures else "FAIL",
+            "required": required,
+            "failures": failures,
+            "bridge_id": self.bridge_id,
+            "request_id": self.request_id,
+            "round_id": self.round_no,
+        }
 
     def transaction_trace(self) -> list[dict]:
         return [dict(item) for item in self.trace]
@@ -1135,23 +1187,26 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             if str(msg.get("continuation_mode") or "").upper() == "READ_ONLY":
                 raise RuntimeError("HOTFIX125.4: provider/round execution forbidden for continuation")
     seats = get_seats()
+    bridge_test_active = "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt).upper()
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
         request_id=request_id,
         round_no=round_no,
+        application_owned_test=bridge_test_active,
     )
     # HOTFIX123 Bridge/Security deterministic test boundary. For the explicit
     # Transactional Bridge diagnostic, the application owns the canary value and
     # binds it to the logical DeepSeek source seat. The canary is never copied into
     # the user prompt or Gemini input, and its origin is recorded as application test
     # control so the audit cannot misattribute model prose as authoritative state.
-    if ("TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt) and
-            "Free Cascade number actually executed" in str(user_prompt) and
-            not any(str(k) == "BRIDGE_RESULT" for k, _ in (bridge_controls or []))):
+    if bridge_test_active:
+        # HOTFIX124: always create the diagnostic canary from application-owned
+        # runtime state. Activation no longer depends on a second brittle phrase
+        # or on a user-supplied BRIDGE_RESULT value.
         bridge.seed_application_state(
             "BRIDGE_RESULT",
-            f"HOTFIX123_BRIDGE_RUNTIME_{uuid.uuid4().hex}",
+            f"HOTFIX124_BRIDGE_RUNTIME_{uuid.uuid4().hex}",
             source="DeepSeek",
             source_seat=7,
         )
@@ -1291,8 +1346,12 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 # HOTFIX139: audit the control-free, provider-boundary-safe user input.
                 # Bridge assignments are application-owned control data and must not
                 # be counted as a user-prompt leak after extraction/redaction.
-                audit_user_prompt = bridge.sanitize_user_prompt(user_prompt, seat)
-                result["bridge_transaction_audit"] = bridge.seal_runtime_audit(user_prompt=audit_user_prompt)
+                # HOTFIX124: audit the original user boundary. The canary is
+                # application-generated, so normal execution remains clean; if a
+                # canary is ever present in the raw user prompt, the gate must see it
+                # rather than having sanitization hide the leak.
+                result["bridge_transaction_audit"] = bridge.seal_runtime_audit(user_prompt=str(user_prompt or ""))
+                result["bridge_security_regression_gate"] = bridge.bridge_security_regression_gate(result["bridge_transaction_audit"])
                 result["_bridge_application_state"] = bridge.application_owned_state()
                 result["bridge_trace"] = bridge.transaction_trace()
             else:
