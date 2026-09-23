@@ -229,6 +229,7 @@ def load_canonical_snapshot(chat: dict, session_state=None) -> dict | None:
                     "rounds": copy.deepcopy(rec.get("rounds", [])),
                     "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
                     "canonical_store_revision": int(bucket.get("revision") or 0),
+                    "canonical_history_hash": str(bucket.get("history_hash") or ""),
                 }
 
     # Same canonical record, not a second persistence source.  This path is
@@ -245,6 +246,7 @@ def load_canonical_snapshot(chat: dict, session_state=None) -> dict | None:
                 "rounds": copy.deepcopy(record.get("rounds", [])),
                 "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
                 "canonical_store_revision": int(record.get("canonical_store_revision") or 0),
+                "canonical_history_hash": canonical_history_hash(dict(record)),
             }
     return None
 

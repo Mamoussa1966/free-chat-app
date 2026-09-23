@@ -9,6 +9,7 @@ accounting evidence.
 """
 
 from copy import deepcopy
+from collections.abc import Mapping
 from conversation_store import ensure_store, touch, now, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_history_hash, validate_canonical_chain, load_canonical_snapshot
 from conversation_persistence_v26 import get_authoritative_bucket
 
@@ -352,7 +353,10 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # HOTFIX119: the historical audit reads the committed canonical snapshot
     # directly.  Current ConversationRecord/request_records are never a fallback.
     canonical_transport = canonical_transport if canonical_transport is not None else load_canonical_snapshot(chat, session_state)
-    root = session_state.get("v26_3_canonical_conversation_store", {}) if isinstance(session_state, dict) else {}
+    # Streamlit SessionState is Mapping-like, not necessarily a plain dict.
+    # The previous implementation treated non-dict SessionState as empty, which
+    # made an otherwise valid canonical hash report NOT_PROVEN at runtime.
+    root = session_state.get("v26_3_canonical_conversation_store", {}) if isinstance(session_state, Mapping) else {}
     cid = _s(chat.get("conversation_id"))
     if canonical_transport is None:
         # No durable canonical transport => historical proof is impossible.
@@ -528,8 +532,11 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "canonical_transport_request_count": len([x for x in canonical_transport.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]) if canonical_transport else "NOT_PROVEN",
         "canonical_transport_round_count": len([x for x in canonical_transport.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]) if canonical_transport else "NOT_PROVEN",
         "canonical_transport_hash_matches": (
-            (root.get(cid, {}).get("history_hash") == canonical_hash_before_audit)
-            if isinstance(root, dict) and isinstance(root.get(cid), dict) and root.get(cid, {}).get("history_hash")
+            (
+                str(root.get(cid, {}).get("history_hash")) == str(canonical_hash_before_audit)
+                and str(root.get(cid, {}).get("history_hash")) == str(canonical_transport.get("canonical_history_hash") or root.get(cid, {}).get("history_hash"))
+            )
+            if isinstance(root, Mapping) and isinstance(root.get(cid), Mapping) and root.get(cid, {}).get("history_hash")
             else "NOT_PROVEN"
         ),
         "conversation_id_stable": (len(conv_ids) == 1 and enough) if enough else "NOT_PROVEN",
