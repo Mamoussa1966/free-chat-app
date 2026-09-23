@@ -1,0 +1,22 @@
+{
+  "version": "V23.0.0-HOTFIX129-TWO-REAL-TURN-PERSISTENCE-EXECUTION-GATE",
+  "base": "HOTFIX128_PERSISTENCE_TEST_CONTRACT_FINAL_VERIFIED.zip",
+  "provider_core": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "purpose": "Require two real user submissions to create the two-message canonical persistence state; no inference from one submission.",
+  "baseline_member_count": 218,
+  "file_count": 222,
+  "new_members": [
+    "HOTFIX129_PERSISTENCE_TWO_TURN_CONTRACT.md",
+    "HOTFIX129_RELEASE_GATE.py",
+    "HOTFIX129_RELEASE_NOTES.md",
+    "VERSION_HOTFIX129.txt",
+    "tests/test_hotfix129_two_turn_persistence.py"
+  ],
+  "source_full_pytest": "........................................................................ [ 14%]\n........................................................................ [ 28%]\n........................................................................ [ 43%]\n........................................................................ [ 57%]\n........................................................................ [ 72%]\n........................................................................ [ 86%]\n..................................................................       [100%]\n498 passed in 3.75s",
+  "reextracted_full_pytest": "........................................................................ [ 14%]\n........................................................................ [ 28%]\n........................................................................ [ 43%]\n........................................................................ [ 57%]\n........................................................................ [ 72%]\n........................................................................ [ 86%]\n..................................................................       [100%]\n498 passed in 4.00s",
+  "sha256": "e9bd256f269732a2ad3743f3d81d8b9aa4ad758a83d2942242bc918631d7e8ad",
+  "positive_contract": "MESSAGE_1→REQUEST_1→ROUND_1; MESSAGE_2→REQUEST_2→ROUND_2",
+  "negative_contract": "REQUEST_2→ROUND_1=FALSE",
+  "one_submission_result": "NOT_PROVEN",
+  "fail_closed": true
+}
