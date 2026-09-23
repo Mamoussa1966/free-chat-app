@@ -4,12 +4,12 @@ from conversation_v25_runtime import authoritative_audit
 
 
 def add(chat, ss, i):
-    mid=f"m{i}"; rid=f"r{i}"; oid=f"{chat['conversation_id']}:{rid}:r1"
+    mid=f"m{i}"; rid=f"r{i}"; oid=f"{chat['conversation_id']}:{rid}:r{i}"
     ts=f"2026-09-22T00:0{i}:00Z"
     persist_identity(chat, ss,
         message={"message_id":mid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"role":"user","request_id":rid,"created_at":ts},
         request={"request_id":rid,"message_id":mid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"state":"COMPLETED"},
-        round_row={"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"round":1,"status":"COMPLETED"})
+        round_row={"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"round":i,"status":"COMPLETED","round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"})
 
 
 def test_single_store_writer_and_reader_are_same_contract():
@@ -39,7 +39,12 @@ def test_latest_two_message_chain_is_audited_from_canonical_store_even_with_olde
     assert a["request_1_id"] == "r4" and a["request_2_id"] == "r5"
     assert a["round_ids_unique"] is True
     assert a["message_1_request_mapping"] is True and a["message_2_request_mapping"] is True
-    assert a["request_1_round_1_mapping"] is True and a["request_2_round_1_mapping"] is True
+    assert a["request_1_round_1_mapping"] is False and a["request_2_round_2_mapping"] is False
+    assert a["request_2_round_1_mapping"] is False
+    assert a["canonical_round_ordinals"] == [4, 5]
+    assert a["canonical_round_sequence_proven"] is True
+    assert a["canonical_round_identity_evidence"]["request_1_round_generic_exact"] is True
+    assert a["canonical_round_identity_evidence"]["request_2_round_generic_exact"] is True
     assert a["overall_authoritative_status"] == "PASS"
 
 
@@ -48,7 +53,7 @@ def test_missing_canonical_store_is_fail_closed():
     ensure_store(chat)
     chat["conversation_record"]["messages"]=[{"message_id":"m2","request_id":"r2","role":"user"}]
     chat["conversation_record"]["requests"]=[{"request_id":"r2","message_id":"m2"}]
-    chat["conversation_record"]["rounds"]=[{"round_id":"c:r2:r1","request_id":"r2","message_id":"m2","round":1}]
+    chat["conversation_record"]["rounds"]=[{"round_id":"c:r2:r2","request_id":"r2","message_id":"m2","round":2,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}]
     # Not committed: authoritative history must not use current runtime as proof.
     a=authoritative_audit(chat,{})
     assert a["overall_authoritative_status"] == "NOT_PROVEN"

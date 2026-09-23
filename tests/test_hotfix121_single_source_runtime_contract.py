@@ -7,11 +7,11 @@ class SessionMapping(UserDict):
     pass
 
 def seed(chat, ss, i):
-    mid=f"m{i}"; rid=f"r{i}"; oid=f"{chat['conversation_id']}:{rid}:round1"
+    mid=f"m{i}"; rid=f"r{i}"; oid=f"{chat['conversation_id']}:{rid}:r{i}"
     persist_identity(chat, ss,
       message={"message_id":mid,"request_id":rid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"role":"user","created_at":f"2026-09-23T00:0{i}:00Z"},
       request={"request_id":rid,"message_id":mid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"state":"COMPLETED"},
-      round_row={"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"round":1,"status":"COMPLETED"})
+      round_row={"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":chat['conversation_id'],"session_id":chat['session_id'],"round":i,"status":"COMPLETED","round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"})
 
 def test_streamlit_like_mapping_uses_same_canonical_store_for_writer_reader_and_audit():
     ss=SessionMapping(); ensure_persistence_store(ss)
@@ -31,8 +31,13 @@ def test_streamlit_like_mapping_uses_same_canonical_store_for_writer_reader_and_
     assert audit["HISTORICAL_ROUND_COUNT"]==2
     assert audit["message_1_request_mapping"] is True
     assert audit["message_2_request_mapping"] is True
-    assert audit["request_1_round_1_mapping"] is True
-    assert audit["request_2_round_1_mapping"] is True
+    assert audit["request_1_round_1_mapping"] is False
+    assert audit["request_2_round_2_mapping"] is False
+    assert audit["request_2_round_1_mapping"] is False
+    assert audit["canonical_round_ordinals"] == [2, 3]
+    assert audit["canonical_round_sequence_proven"] is True
+    assert audit["canonical_round_identity_evidence"]["request_1_round_generic_exact"] is True
+    assert audit["canonical_round_identity_evidence"]["request_2_round_generic_exact"] is True
     assert audit["round_ids_unique"] is True
     assert audit["previous_request_reexecuted"] is False
     assert audit["two_message_isolation"] is True
@@ -44,7 +49,7 @@ def test_uncommitted_current_record_is_not_historical_proof():
     ensure_store(chat)
     chat["conversation_record"]["messages"]=[{"message_id":"m2","request_id":"r2","role":"user"}]
     chat["conversation_record"]["requests"]=[{"request_id":"r2","message_id":"m2"}]
-    chat["conversation_record"]["rounds"]=[{"round_id":"conv121-missing:r2:round1","request_id":"r2","message_id":"m2","round":1}]
+    chat["conversation_record"]["rounds"]=[{"round_id":"conv121-missing:r2:r2","request_id":"r2","message_id":"m2","round":2,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}]
     audit=authoritative_audit(chat,None)
     assert audit["HISTORICAL_MESSAGE_COUNT"]=="NOT_PROVEN"
     assert audit["HISTORICAL_REQUEST_COUNT"]=="NOT_PROVEN"

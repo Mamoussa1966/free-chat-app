@@ -5,10 +5,10 @@ class SS(dict):
     pass
 
 def _add(chat, ss, i):
-    mid=f"m{i}"; rid=f"r{i}"; q=f"{chat['conversation_id']}:{rid}:r1"
+    mid=f"m{i}"; rid=f"r{i}"; q=f"{chat['conversation_id']}:{rid}:r{i}"
     msg={"message_id":mid,"conversation_id":chat["conversation_id"],"session_id":chat["session_id"],"role":"user","request_id":rid,"created_at":f"2026-09-21T00:0{i}:00Z"}
     req={"request_id":rid,"message_id":mid,"conversation_id":chat["conversation_id"],"session_id":chat["session_id"]}
-    rnd={"round_id":q,"request_id":rid,"message_id":mid,"conversation_id":chat["conversation_id"],"session_id":chat["session_id"],"round":1}
+    rnd={"round_id":q,"request_id":rid,"message_id":mid,"conversation_id":chat["conversation_id"],"session_id":chat["session_id"],"round":i,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}
     persist_identity(chat, ss, message=msg, request=req, round_row=rnd)
 
 def test_canonical_record_survives_reconstruction_and_narrow_current_ledgers():

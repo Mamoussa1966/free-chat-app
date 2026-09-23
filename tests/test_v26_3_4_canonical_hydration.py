@@ -19,8 +19,8 @@ def test_v2634_hydrates_history_from_canonical_chat_messages_and_real_rounds():
             {"request_id":"r2","message_id":"m2","conversation_id":"conv","session_id":"sess","status":"COMPLETED"},
         ],
         "round_ledger":[
-            {"round_id":"conv:r1:r1","request_id":"r1","message_id":"m1","conversation_id":"conv","session_id":"sess","round":1,"status":"COMPLETED"},
-            {"round_id":"conv:r2:r1","request_id":"r2","message_id":"m2","conversation_id":"conv","session_id":"sess","round":1,"status":"COMPLETED"},
+            {"round_id":"conv:r1:r1","request_id":"r1","message_id":"m1","conversation_id":"conv","session_id":"sess","round":1,"status":"COMPLETED","round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"},
+            {"round_id":"conv:r2:r2","request_id":"r2","message_id":"m2","conversation_id":"conv","session_id":"sess","round":2,"status":"COMPLETED","round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"},
         ],
     }
     snapshot_chat_identity(chat,ss)
