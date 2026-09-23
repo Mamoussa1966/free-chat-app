@@ -563,7 +563,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "historical_source_refuses_narrower_current_ledgers": True,
         "historical_narrowing_conflict": historical_narrowing_conflict,
         "canonical_request_count": len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]),
-        "canonical_message_count": len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id"))]),
+        "canonical_message_count": len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id")) and _s(x.get("role")).lower() == "user"]),
         "canonical_round_count": len([x for x in canonical_record.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]),
         "message_ledger_count": len(messages),
         "message_ledger_user_count": len(messages),
@@ -587,7 +587,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "request_2_round_2_mapping": (bool(round_by_msg.get(m2)) and all(_s(x.get("request_id")) == r2 and int(x.get("round") or 0) == 2 for x in round_by_msg.get(m2, []))) if enough else "NOT_PROVEN",
         "request_2_round_1_mapping": (bool(round_by_msg.get(m2)) and all(_s(x.get("request_id")) == r2 and int(x.get("round") or 0) == 1 for x in round_by_msg.get(m2, []))) if enough else "NOT_PROVEN",
         "canonical_transport_loaded": bool(canonical_transport) if canonical_transport else "NOT_PROVEN",
-        "canonical_transport_message_count": len([x for x in canonical_transport.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id"))]) if canonical_transport else "NOT_PROVEN",
+        "canonical_transport_message_count": len([x for x in canonical_transport.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id")) and _s(x.get("role")).lower() == "user"]) if canonical_transport else "NOT_PROVEN",
         "canonical_transport_request_count": len([x for x in canonical_transport.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]) if canonical_transport else "NOT_PROVEN",
         "canonical_transport_round_count": len([x for x in canonical_transport.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]) if canonical_transport else "NOT_PROVEN",
         "canonical_transport_hash_matches": (

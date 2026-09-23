@@ -32,3 +32,7 @@ No UI projection, Agent Prose, timestamp ordering, synthesis record, or raw list
 
 ## Preservation
 HOTFIX130 is a surgical patch over HOTFIX129. Provider Core, Free Cascade, official API-only policy, Bridge behavior, Secrets handling, model configuration, and HOTFIX129's two-real-turn lifecycle are unchanged.
+
+
+## Final lock invariant
+`authoritative_audit.canonical_message_count == persistence_audit.persisted_message_count == historical_message_count == canonical_transport_message_count` for the same loaded canonical store. Assistant/provider/synthesis artifacts must never inflate the Message count.

@@ -30,3 +30,9 @@ A valid two-turn canonical conversation must report:
 
 ## Verification
 The release gate requires the full HOTFIX129 regression suite, plus dedicated counter-consistency tests, source/re-extracted ZIP verification, baseline member preservation, and an explicit regression containing three non-user message artifacts so raw list length cannot silently become authoritative again.
+
+
+## Final lock correction
+The first HOTFIX130 artifact unified `persistence_audit()` but left one legacy field in `authoritative_audit()` using raw canonical message-list length. That could still produce `canonical_message_count=5` beside `persisted_message_count=2`. This final-locked artifact removes that last split: authoritative and persistence counters both count only identity-bearing user MessageRecords, while requests/rounds count canonical identity records. Canonical transport message counts use the same rule.
+
+No provider, cascade, secret, model-list, Bridge, or API policy behavior is changed.
