@@ -626,33 +626,170 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "local_engine": "NOT_USED",
         "paid_fallback": "NOT_USED",
     }
-    # HOTFIX126: a Round is proven only when the canonical ledger's numeric
-    # ordinal, request/message mappings, and round_id suffix agree. Audit labels
-    # alone are never sufficient evidence.
+    # HOTFIX127: authoritative Round Identity must be derived directly from the
+    # canonical Message→Request→Round records.  No audit label, UI field, agent
+    # prose, or narrower/current ledger may promote a mapping to PASS.
+    def _round_row_proof(mid: str, rid_expected: str, ordinal_expected: int) -> tuple[bool, dict | None]:
+        rows = round_by_msg.get(mid, [])
+        if len(rows) != 1:
+            return False, None
+        row = rows[0]
+        row_rid = _s(row.get("request_id"))
+        row_mid = _s(row.get("message_id"))
+        row_cid = _s(row.get("conversation_id"))
+        row_sid = _s(row.get("session_id"))
+        round_id = _s(row.get("round_id"))
+        try:
+            numeric = int(row.get("round"))
+        except (TypeError, ValueError):
+            return False, row
+        suffix = None
+        if ":r" in round_id:
+            tail = round_id.rsplit(":r", 1)[1]
+            if tail.isdigit():
+                suffix = int(tail)
+        contract = _s(row.get("round_identity_contract"))
+        proven = (
+            row_mid == mid
+            and row_rid == rid_expected
+            and row_cid == _s(chat.get("conversation_id"))
+            and row_sid == _s(chat.get("session_id"))
+            and numeric == ordinal_expected
+            and suffix == ordinal_expected
+            and contract == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"
+        )
+        return proven, row
+
+    # Each selected MessageRecord must have exactly one canonical RequestRecord.
+    # A duplicate/ambiguous binding is not resolved by choosing the latest row.
+    exact_request_rows = {
+        mid: req_by_msg.get(mid, []) for mid in mids
+    }
+    exact_request_binding = bool(
+        enough
+        and all(len(exact_request_rows[mid]) == 1 for mid in mids)
+        and all(
+            _s(exact_request_rows[mid][0].get("request_id")) == rid
+            and _s(exact_request_rows[mid][0].get("message_id")) == mid
+            and _s(exact_request_rows[mid][0].get("conversation_id")) == _s(chat.get("conversation_id"))
+            and _s(exact_request_rows[mid][0].get("session_id")) == _s(chat.get("session_id"))
+            for mid, rid in zip(mids, req_ids)
+        )
+    )
+
+    round1_proven, round1_row = _round_row_proof(m1, r1, 1) if enough else (False, None)
+    round2_proven, round2_row = _round_row_proof(m2, r2, 2) if enough else (False, None)
+    wrong_round1_proven, _ = _round_row_proof(m2, r2, 1) if enough else (False, None)
+
+    def _generic_round_row_proof(mid: str, rid_expected: str) -> tuple[bool, dict | None]:
+        rows = round_by_msg.get(mid, [])
+        if len(rows) != 1:
+            return False, None
+        row = rows[0]
+        round_id = _s(row.get("round_id"))
+        try:
+            numeric = int(row.get("round"))
+        except (TypeError, ValueError):
+            return False, row
+        suffix = None
+        if ":r" in round_id:
+            tail = round_id.rsplit(":r", 1)[1]
+            if tail.isdigit():
+                suffix = int(tail)
+        proven = (
+            _s(row.get("message_id")) == mid
+            and _s(row.get("request_id")) == rid_expected
+            and _s(row.get("conversation_id")) == _s(chat.get("conversation_id"))
+            and _s(row.get("session_id")) == _s(chat.get("session_id"))
+            and numeric >= 1
+            and suffix == numeric
+            and _s(row.get("round_identity_contract")) == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"
+        )
+        return proven, row
+
+    generic_round1_proven, generic_round1_row = _generic_round_row_proof(m1, r1) if enough else (False, None)
+    generic_round2_proven, generic_round2_row = _generic_round_row_proof(m2, r2) if enough else (False, None)
+
     selected_round_numbers = []
     for mid in mids:
         rows = round_by_msg.get(mid, [])
         if len(rows) != 1:
             selected_round_numbers.append(None)
             continue
-        row = rows[0]
-        rid = _s(row.get("round_id"))
-        numeric = int(row.get("round") or 0)
-        suffix = int(rid.rsplit(":r", 1)[1]) if ":r" in rid and rid.rsplit(":r", 1)[1].isdigit() else 0
-        selected_round_numbers.append(numeric if numeric == suffix else None)
-    marked_rounds = [x for mid in mids for x in round_by_msg.get(mid, []) if isinstance(x, dict) and x.get("round_identity_contract") == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"]
+        try:
+            numeric = int(rows[0].get("round"))
+        except (TypeError, ValueError):
+            numeric = None
+        selected_round_numbers.append(numeric)
+
+    marked_rounds = [
+        x for mid in mids
+        for x in round_by_msg.get(mid, [])
+        if isinstance(x, dict) and x.get("round_identity_contract") == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"
+    ]
     monotonic_round_contract_active = bool(enough and len(marked_rounds) == len(mids))
-    audit["round_identity_contract"] = "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1" if monotonic_round_contract_active else "LEGACY_COMPATIBILITY"
+    audit["round_identity_contract"] = "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1" if monotonic_round_contract_active else "NOT_PROVEN"
     audit["canonical_round_ordinals"] = selected_round_numbers if enough else "NOT_PROVEN"
-    audit["canonical_round_sequence_proven"] = (bool(enough and selected_round_numbers == [1, 2]) if monotonic_round_contract_active else "NOT_PROVEN")
-    historical_exact_two = (len(messages) == 2 and len(historical_request_records) == 2 and len(rounds) == 2 and len(mids) == 2 and len(req_ids) == 2)
+    selected_sequence_contiguous = bool(
+        enough
+        and generic_round1_proven
+        and generic_round2_proven
+        and selected_round_numbers[1] == selected_round_numbers[0] + 1
+    )
+    audit["selected_round_sequence_contiguous"] = selected_sequence_contiguous if enough else "NOT_PROVEN"
+    audit["canonical_round_sequence_base"] = selected_round_numbers[0] if enough and selected_round_numbers and selected_round_numbers[0] is not None else "NOT_PROVEN"
+    audit["canonical_round_sequence_proven"] = bool(
+        enough
+        and exact_request_binding
+        and generic_round1_proven
+        and generic_round2_proven
+        and selected_sequence_contiguous
+        and len({ _s(x.get("round_id")) for x in rounds }) == len(rounds) == 2
+    ) if enough else "NOT_PROVEN"
+    audit["canonical_round_identity_evidence"] = {
+        "message_1_request_1_exact": bool(enough and exact_request_binding and r1 == _s(exact_request_rows[m1][0].get("request_id"))) if enough and exact_request_rows.get(m1) else False,
+        "message_2_request_2_exact": bool(enough and exact_request_binding and r2 == _s(exact_request_rows[m2][0].get("request_id"))) if enough and exact_request_rows.get(m2) else False,
+        "request_1_round_1_exact": round1_proven,
+        "request_2_round_2_exact": round2_proven,
+        "request_2_round_1_exact": wrong_round1_proven,
+        "request_1_round_generic_exact": generic_round1_proven,
+        "request_2_round_generic_exact": generic_round2_proven,
+        "round_1_record_count": len(round_by_msg.get(m1, [])) if enough else "NOT_PROVEN",
+        "round_2_record_count": len(round_by_msg.get(m2, [])) if enough else "NOT_PROVEN",
+    }
+    audit["request_1_round_1_mapping"] = round1_proven if enough else "NOT_PROVEN"
+    audit["request_2_round_2_mapping"] = round2_proven if enough else "NOT_PROVEN"
+    audit["request_2_round_1_mapping"] = wrong_round1_proven if enough else "NOT_PROVEN"
+    full_canonical_message_count = len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id")) and _s(x.get("role")).lower() == "user"])
+    full_canonical_request_count = len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))])
+    full_canonical_round_count = len([x for x in canonical_record.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))])
+    historical_exact_two = (
+        full_canonical_message_count == 2
+        and full_canonical_request_count == 2
+        and full_canonical_round_count == 2
+        and len(mids) == 2
+        and len(req_ids) == 2
+        and exact_request_binding
+    )
     audit["historical_exact_two_contract"] = historical_exact_two
-    round_progression_gate = (audit.get("canonical_round_sequence_proven") is True) if monotonic_round_contract_active else True
-    structural_pass = historical_exact_two and (audit.get("canonical_transport_loaded") is True or audit.get("canonical_transport_loaded") == "NOT_PROVEN") and audit.get("canonical_transport_message_count") == 2 and audit.get("canonical_transport_request_count") == 2 and audit.get("canonical_transport_round_count") == 2 and all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation", "message_1_request_mapping", "message_2_request_mapping", "round_1_message_mapping", "round_2_message_mapping", "request_1_round_1_mapping")) and (audit.get("request_2_round_2_mapping") is True if monotonic_round_contract_active else audit.get("request_2_round_1_mapping") is True) and round_progression_gate
+    round_progression_gate = audit.get("canonical_round_sequence_proven") is True
+    structural_pass = (
+        enough
+        and (audit.get("canonical_transport_loaded") is True or audit.get("canonical_transport_loaded") == "NOT_PROVEN")
+        and all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation", "message_1_request_mapping", "message_2_request_mapping", "round_1_message_mapping", "round_2_message_mapping"))
+        and audit.get("request_2_round_1_mapping") is False
+        and generic_round1_proven
+        and generic_round2_proven
+        and round_progression_gate
+        and (
+            not historical_exact_two
+            or (audit.get("request_1_round_1_mapping") is True and audit.get("request_2_round_2_mapping") is True)
+        )
+    )
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
-    # Strict regression gate: a complete two-message history without an
-    # application-owned Round-2 proof is not Production-ready.
-    if historical_exact_two and monotonic_round_contract_active and audit.get("canonical_round_sequence_proven") is not True:
+    # Strict regression gate: complete two-message history without direct
+    # canonical proof is FAIL, never a legacy-compatibility PASS.
+    if historical_exact_two and audit.get("canonical_round_sequence_proven") is not True:
         audit["conversation_runtime_audit"] = "FAIL"
     audit["overall_authoritative_status"] = "PASS" if audit["conversation_runtime_audit"] == "PASS" and enough else "NOT_PROVEN"
     chat["v25_authoritative_audit"] = deepcopy(audit)
