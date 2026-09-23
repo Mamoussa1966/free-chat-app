@@ -3,6 +3,16 @@ from production_platform import conversation_persistence_audit, session_integrit
 def _chat():
     return {
         "id": "session-1",
+        "conversation_id": "conv-test",
+        "session_id": "sess-test",
+        "conversation_record": {
+            "conversation_id": "conv-test", "session_id": "sess-test",
+            "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+            "canonical_store_committed": True,
+            "messages": [{"message_id":"m1","conversation_id":"conv-test","session_id":"sess-test","role":"user","request_id":"r1"}],
+            "requests": [{"request_id":"r1","conversation_id":"conv-test","session_id":"sess-test","message_id":"m1"}],
+            "rounds": [{"round_id":"conv-test:r1:r1","conversation_id":"conv-test","session_id":"sess-test","message_id":"m1","request_id":"r1","round":1,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1","status":"COMPLETED"}]
+        },
         "messages": [{"role":"user","content":"hello","request_id":"r1"}],
         "request_records": [{
             "request_id":"r1", "rounds_executed":1,

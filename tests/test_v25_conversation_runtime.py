@@ -24,11 +24,12 @@ def test_two_messages_are_isolated_and_stable():
     from provenance_engine import record_result
     from conversation_store import append_once
     for rid,mid in [("r1","m1"),("r2","m2")]:
-        actual_round_id = begin_round(chat, mid, rid, 1)
+        actual_round_no = 1 if rid == "r1" else 2
+        actual_round_id = begin_round(chat, mid, rid, actual_round_no)
         finish_round(chat, actual_round_id, "COMPLETED", 1)
-        rr=result(rid,1,attempts=2 if rid=="r1" else 1)
+        rr=result(rid,actual_round_no,attempts=2 if rid=="r1" else 1)
         reconcile_request(chat,rid,mid,[rr],chat["request_records"][0 if rid=="r1" else 1]["synthesis"])
-        record_result(chat,rr,mid,f"conv-fixed:{rid}:r1")
+        record_result(chat,rr,mid,f"conv-fixed:{rid}:r{actual_round_no}")
         append_once(chat["result_ledger_v24"],{"result_id":f"res-{rid}","request_id":rid,"message_id":mid,"provider":"Gemini","seat":"gemini","model":rr["executed_model"],"status":"SUCCESS","provenance_count":2},("result_id",))
     audit=authoritative_audit(chat)
     assert audit["conversation_id_stable"] is True
@@ -41,6 +42,7 @@ def test_two_messages_are_isolated_and_stable():
     assert audit["agent_prose_used_as_identity"] == "NO"
     assert audit["agent_prose_used_as_counter"] == "NO"
     assert audit["overall_authoritative_status"] == "PASS"
+    assert audit["canonical_round_sequence_proven"] is True
 
 
 def test_single_message_is_not_false_pass():

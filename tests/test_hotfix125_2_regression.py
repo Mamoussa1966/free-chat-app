@@ -26,7 +26,7 @@ def test_bridge_user_control_is_removed_and_state_is_application_owned():
 
 def test_full_audit_fails_on_bridge_isolation_runtime_failure():
     c={"id":"s","messages":[{"role":"user","content":"x","request_id":"r1"}],"request_records":[{
-        "request_id":"r1","rounds_executed":1,"results":[{"status":"SUCCESS","content":"ok","request_id":"r1","round":1,
+        "request_id":"r1","bridge_test_requested":True,"rounds_executed":1,"results":[{"status":"SUCCESS","content":"ok","request_id":"r1","round":1,
         "bridge_transaction_audit":{"BRIDGE_ID":"b1","WRITE":"FAIL","USER_PROMPT_CONTAINS_VALUE":"YES","GEMINI_INPUT_PROMPT_CONTAINS_VALUE":"YES","BRIDGE_STATE_CONTAINS_VALUE":"NO"}}],
         "request_metrics":{"unique_request_ids":1},"synthesis":{"status":"READY"}}],"history_identity_ledger":[["r1",1,"deepseek"]]}
     ctx={"chars":1,"digest":"x"}; health=[{"status":"READY"}]; sec={"status":"PASS"}; reg={"gate":"PASS"}

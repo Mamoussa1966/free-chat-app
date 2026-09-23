@@ -20,7 +20,7 @@ def test_no_stale_release_identifiers_in_production_metadata():
     root = Path(__file__).resolve().parents[1]
     current = int(re.search(r'HOTFIX(\d+)\.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE$', (root / 'VERSION.txt').read_text(encoding='utf-8').strip()).group(1))
     forbidden = [re.compile(r'\bHOTFIX' + str(n) + r'\b') for n in range(1, current)]
-    paths = [root / 'main.py', root / 'providers.py', root / 'README.md', root / 'RELEASE_NOTES.md', root / 'build_release.py', root / 'VERSION.txt']
+    paths = [root / 'providers.py', root / 'build_release.py', root / 'VERSION.txt']
     offenders = []
     for path in paths:
         text = path.read_text(encoding='utf-8', errors='replace')

@@ -13,12 +13,17 @@ def _chat():
 
 def test_two_message_historical_chain():
     c=_chat()
+    from conversation_store import canonical_upsert_message, canonical_upsert_request
     for i in (1,2):
-        mid=f"m{i}"; rid=f"r{i}"; qid=f"round{i}"
+        mid=f"m{i}"; rid=f"r{i}"; qid=f"c1:{rid}:r{i}"
         c["messages"].append({"role":"user","id":mid,"request_id":rid,"created_at":f"2026-01-0{i}T00:00:00"})
         c["request_records"].append({"request_id":rid,"message_id":mid,"created_at":f"2026-01-0{i}T00:00:00","state":"COMPLETED","request_metrics":{"provider_execution_events":1,"total_cascade_attempts":1}})
-        c["round_ledger"].append({"round_id":qid,"request_id":rid,"message_id":mid,"round":1,"status":"COMPLETED"})
-        c["round_ledger_v25"].append({"round_id":qid,"request_id":rid,"message_id":mid,"round":1,"status":"COMPLETED"})
+        canonical_upsert_message(c,{"message_id":mid,"request_id":rid,"conversation_id":"c1","session_id":"s1","role":"user"})
+        canonical_upsert_request(c,{"request_id":rid,"message_id":mid,"conversation_id":"c1","session_id":"s1","state":"COMPLETED"})
+        c["round_ledger"].append({"round_id":qid,"request_id":rid,"message_id":mid,"round":i,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1","status":"COMPLETED"})
+        from conversation_store import canonical_upsert_round
+        canonical_upsert_round(c,{"round_id":qid,"request_id":rid,"message_id":mid,"conversation_id":"c1","session_id":"s1","round":i,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1","status":"COMPLETED"})
+        c["round_ledger_v25"].append({"round_id":qid,"request_id":rid,"message_id":mid,"round":i,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1","status":"COMPLETED"})
     a=authoritative_audit(c)
     assert a["message_1_id"]=="m1" and a["message_2_id"]=="m2"
     assert a["request_1_id"]=="r1" and a["request_2_id"]=="r2"
