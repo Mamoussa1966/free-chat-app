@@ -273,9 +273,11 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     security_status = str((security or {}).get("status") or "NOT_RUN").upper()
     bridge_audits = []
     persisted_bridge = None
+    bridge_test_requested = False
     for rec in chat.get("request_records", []):
         if not isinstance(rec, dict) or str(rec.get("request_id") or "") != str(request_id or ""):
             continue
+        bridge_test_requested = bool(rec.get("bridge_test_requested"))
         persisted_bridge = rec.get("application_owned_bridge_state")
         for item in rec.get("results", []) if isinstance(rec.get("results"), list) else []:
             if isinstance(item, dict) and isinstance(item.get("bridge_transaction_audit"), dict):
@@ -295,8 +297,26 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             break
     continuation_status = "PASS" if (not continuation_audit or (continuation_audit.get("mode") == "READ_ONLY" and continuation_audit.get("provider_execution", 0) == 0 and continuation_audit.get("cascade", 0) == 0 and continuation_audit.get("new_round", 0) == 0 and continuation_audit.get("new_bridge", 0) == 0 and continuation_audit.get("actual_request_id") == request_id)) else "FAIL"
     if bridge is None:
-        bridge_status = "PASS" if (not persisted_bridge and identity_match) else "FAIL"
-        bridge_checks = {"APPLICATION_OWNED_STATE": bool(persisted_bridge) or True, "NO_AGENT_PROSE_AUTHORITY": True, "REQUEST_ID_IDENTITY_MATCH": identity_match}
+        # HOTFIX125: no Bridge was requested => Bridge is NOT_REQUESTED, not FAIL.
+        # But an explicitly requested Bridge Test with no authoritative audit is a
+        # hard failure and therefore cannot pass the production gate.
+        if bridge_test_requested:
+            bridge_status = "FAIL"
+            bridge_checks = {
+                "BRIDGE_TEST_REQUESTED": True,
+                "BRIDGE_AUDIT_PRESENT": False,
+                "NO_AGENT_PROSE_AUTHORITY": True,
+                "REQUEST_ID_IDENTITY_MATCH": identity_match,
+            }
+        else:
+            bridge_status = "NOT_REQUESTED"
+            bridge_checks = {
+                "BRIDGE_TEST_REQUESTED": False,
+                "BRIDGE_AUDIT_PRESENT": False,
+                "APPLICATION_OWNED_STATE": True,
+                "NO_AGENT_PROSE_AUTHORITY": True,
+                "REQUEST_ID_IDENTITY_MATCH": identity_match,
+            }
     elif not any(k in bridge for k in ("USER_PROMPT_CONTAINS_VALUE", "GEMINI_INPUT_PROMPT_CONTAINS_VALUE", "BRIDGE_STATE_CONTAINS_VALUE")):
         bridge_status = "PASS"
         bridge_checks = {"LEGACY_AUDIT_COMPATIBLE": True, "NO_AGENT_PROSE_AUTHORITY": True}
@@ -334,7 +354,8 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         bridge_checks["UNIQUE_BRIDGE_ID"] = False
     else:
         bridge_checks["UNIQUE_BRIDGE_ID"] = True
-    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, bridge_status, continuation_status)) and identity_match and bridge_identity_status == "PASS"
+    bridge_gate_ok = bridge_status in {"PASS", "NOT_REQUESTED"}
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, continuation_status)) and bridge_gate_ok and identity_match and bridge_identity_status == "PASS"
     return {
         "schema": "v23-platform-audit/v1",
         "status": "PASS" if overall else "FAIL",
@@ -344,7 +365,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         "session_integrity": session,
         "provider_health": {"status": health_status, "rows": health_rows},
         "regression_core": {"status": regression_status, **regression},
-        "bridge_isolation": {"status": bridge_status, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}, "unique_persisted_bridge_ids": unique_persisted_bridge_ids},
+        "bridge_isolation": {"status": bridge_status, "requested": bridge_test_requested, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}, "unique_persisted_bridge_ids": unique_persisted_bridge_ids},
         "continuation_runtime_gate": {"status": continuation_status, "audit": continuation_audit, "REQUEST_ID_IDENTITY_MATCH": identity_match},
     }
 
@@ -396,15 +417,21 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
         for record in chat.get("request_records", []):
             if not isinstance(record, dict):
                 continue
-            for result in record.get("results", []) if isinstance(record.get("results"), list) else []:
-                audit = result.get("bridge_transaction_audit") if isinstance(result, dict) else None
-                if not isinstance(audit, dict):
-                    continue
+            requested = bool(record.get("bridge_test_requested"))
+            audits = [
+                result.get("bridge_transaction_audit")
+                for result in (record.get("results") if isinstance(record.get("results"), list) else [])
+                if isinstance(result, dict) and isinstance(result.get("bridge_transaction_audit"), dict)
+            ]
+            if requested and not audits:
+                checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
+                continue
+            for audit in audits:
                 if any(audit.get(k) == "YES" for k in ("USER_PROMPT_CONTAINS_VALUE", "GEMINI_INPUT_PROMPT_CONTAINS_VALUE")):
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
                 if audit.get("BRIDGE_STATE_CONTAINS_VALUE") != "YES":
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
-                if any(audit.get(k) != "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION")):
+                if any(audit.get(k) != "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH")):
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
 
         # HOTFIX144: verify authoritative identity from persisted application-owned

@@ -1187,7 +1187,12 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             if str(msg.get("continuation_mode") or "").upper() == "READ_ONLY":
                 raise RuntimeError("HOTFIX125.4: provider/round execution forbidden for continuation")
     seats = get_seats()
-    bridge_test_active = "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt).upper()
+    # HOTFIX125: Bridge execution is an explicit request-scoped mode.  A normal
+    # Persistence/History request must not instantiate, fail, or render a Bridge audit.
+    bridge_test_active = (
+        "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt).upper()
+        or bool(bridge_controls)
+    )
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
@@ -1211,12 +1216,12 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             source_seat=7,
         )
 
-    # Current release: explicit BRIDGE_* assignments in the current request become
-    # round-scoped bridge data before any provider is called. This makes a
-    # deliberate "save to Shared Context, then retrieve later" test real
-    # rather than relying on a model to echo the value in its answer.
-    for key, value in (bridge_controls or []):
-        bridge.seed_application_state(key, value)
+    # HOTFIX125: explicit bridge controls are meaningful only inside the
+    # request-scoped Bridge Test mode. Never create Bridge state for ordinary
+    # Persistence/History requests.
+    if bridge_test_active:
+        for key, value in (bridge_controls or []):
+            bridge.seed_application_state(key, value)
     results: dict[str, dict] = {}
     working_context = bridge.prompt_snapshot(None)
     # HOTFIX123: one logical seat execution claim per request/round. Free Cascade
@@ -1342,7 +1347,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     result["bridge_read_value"] = str(resolution["value"])
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
-            if seat.key == "gemini":
+            if seat.key == "gemini" and bridge_test_active:
+                # HOTFIX125: emit Bridge audit only when this Request explicitly
+                # requested a Bridge Test. A non-Bridge request has no Bridge audit.
                 # HOTFIX139: audit the control-free, provider-boundary-safe user input.
                 # Bridge assignments are application-owned control data and must not
                 # be counted as a user-prompt leak after extraction/redaction.
@@ -1543,6 +1550,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         if record is not None:
             record["state"] = "RUNNING"
             record["execution_scope"] = request_id
+            # HOTFIX125: immutable request-scoped Bridge mode.
+            record["bridge_test_requested"] = bool(
+                "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper()
+                or bool(bridge_controls)
+            )
     # V26.3.8: every real orchestrator entry point converges into the canonical
     # ConversationRecord before creating/dispatching its first provider round.
     if record is None:
@@ -1555,6 +1567,10 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             "session_id": chat.get("session_id"), "message_id": current_user_message_id,
             "created_at": _now(), "state": "RUNNING",
             "identity_authority": "RUNTIME_REQUEST_ID",
+            "bridge_test_requested": bool(
+                "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper()
+                or bool(bridge_controls)
+            ),
         }
         chat.setdefault("request_records", []).append(record)
     canonical_upsert_request(chat, record, st.session_state)
