@@ -124,6 +124,7 @@ def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no
         "message_id": str(message_id),
         "request_id": str(request_id),
         "round": int(round_no),
+        "round_identity_contract": "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1",
         "status": "STARTED",
         "created_at": utc_now(),
     }

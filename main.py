@@ -1525,6 +1525,28 @@ def _request_record(chat: dict, request_id: str) -> dict | None:
     return next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip() == rid), None)
 
 
+def _authoritative_round_base(chat: dict) -> int:
+    """Return the highest numeric Round ordinal already committed by the canonical ledger.
+
+    This is deliberately derived only from application-owned ConversationRecord state;
+    UI labels, audit labels, provider prose, and the current request ledger are not used.
+    """
+    record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    rows = record.get("rounds", []) if isinstance(record.get("rounds"), list) else []
+    numbers = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = row.get("round")
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            numbers.append(number)
+    return max(numbers, default=0)
+
+
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str, bridge_controls: list[tuple[str, str]] | None = None, continuation_request_id: str = "") -> list[dict]:
     # HOTFIX123.2: one orchestrator invocation per Request ID. A secondary
     # execution path must never create another lifecycle/round/bridge. A completed
@@ -1589,10 +1611,17 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
     chat["audit_events"] = [e for e in chat.get("audit_events", []) if e.get("request_id") != request_id]
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
+    # HOTFIX126: round identity is conversation-scoped, not reset to r1 for every
+    # new Request. The provider still executes exactly `total_rounds` rounds for
+    # this Request, but the authoritative RoundRecord receives the next monotonic
+    # conversation ordinal from the canonical ledger. This makes Message 2 ->
+    # Request 2 -> Round 2 provable from Application-Owned Runtime State itself.
+    round_base = _authoritative_round_base(chat)
     try:
         lifecycle.record("REQUEST_START", round_id=0, status="RUNNING")
-        lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds)})
-        for round_no in range(1, total_rounds + 1):
+        lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds), "conversation_round_base": str(round_base)})
+        for local_round_no in range(1, total_rounds + 1):
+            round_no = round_base + local_round_no
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
             runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no, st.session_state)
@@ -1706,7 +1735,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # V26.3.10: mutate the canonical RequestRecord with authoritative
             # completion/metrics data, then commit the entire historical record.
             canonical_upsert_request(chat, record, st.session_state)
-            st.session_state.last_synthesis = copy.deepcopy(record["synthesis"])
+            st.session_state["last_synthesis"] = copy.deepcopy(record["synthesis"])
         _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
     return all_results
 

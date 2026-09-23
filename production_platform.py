@@ -259,6 +259,53 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
     }
 
 
+
+def canonical_round_identity_gate(chat: dict[str, Any] | None) -> dict[str, Any]:
+    """HOTFIX126: prove numeric Round identity from the canonical ledger itself.
+
+    Once the monotonic conversation-round contract is present, every RoundRecord
+    must agree across its numeric `round` field and `round_id` suffix, and the
+    complete canonical sequence must be 1..N with no duplicates. Audit labels or
+    provider prose are never used as evidence. Legacy records without the marker
+    remain compatibility-readable and do not claim the new proof.
+    """
+    chat = chat if isinstance(chat, dict) else {}
+    rec = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    rows = [x for x in rec.get("rounds", []) if isinstance(x, dict) and str(x.get("round_id") or "").strip()]
+    marked = [x for x in rows if x.get("round_identity_contract") == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"]
+    if not marked:
+        return {"status": "NOT_PROVEN", "gate": "LEGACY_COMPATIBILITY", "active": False, "evidence_source": "APPLICATION_OWNED_CANONICAL_CONVERSATION_RECORD"}
+    numbers = []
+    ids = []
+    checks = []
+    for row in marked:
+        rid = str(row.get("round_id") or "")
+        try:
+            number = int(row.get("round") or 0)
+        except (TypeError, ValueError):
+            number = 0
+        suffix = 0
+        if ":r" in rid and rid.rsplit(":r", 1)[1].isdigit():
+            suffix = int(rid.rsplit(":r", 1)[1])
+        numbers.append(number); ids.append(rid)
+        checks.append(number > 0 and number == suffix)
+    unique = len(ids) == len(set(ids)) and len(numbers) == len(set(numbers))
+    sequence = sorted(numbers) == list(range(1, len(numbers) + 1))
+    ok = bool(checks and all(checks) and unique and sequence)
+    return {
+        "status": "PASS" if ok else "FAIL",
+        "gate": "PASS" if ok else "FAIL",
+        "active": True,
+        "round_ids": ids,
+        "round_ordinals": numbers,
+        "round_id_numeric_suffix_match": all(checks),
+        "round_ids_unique": len(ids) == len(set(ids)),
+        "round_ordinals_unique": len(numbers) == len(set(numbers)),
+        "round_sequence_1_to_n": sequence,
+        "evidence_source": "APPLICATION_OWNED_CANONICAL_CONVERSATION_RECORD",
+        "agent_prose_used_as_identity": "NO",
+    }
+
 def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, context_meta: dict[str, Any] | None, health: list[dict[str, Any]] | None, security: dict[str, Any] | None, regression: dict[str, Any] | None) -> dict[str, Any]:
     """Assemble one application-owned V23 continuation report from runtime records."""
     chat = chat if isinstance(chat, dict) else {}
@@ -271,6 +318,8 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     regression = regression if isinstance(regression, dict) else {}
     regression_status = str(regression.get("gate") or regression.get("status") or "NOT_RUN").upper()
     security_status = str((security or {}).get("status") or "NOT_RUN").upper()
+    round_identity = canonical_round_identity_gate(chat)
+    round_identity_status = "PASS" if round_identity.get("gate") == "PASS" else ("PASS" if round_identity.get("gate") == "LEGACY_COMPATIBILITY" else "FAIL")
     bridge_audits = []
     persisted_bridge = None
     bridge_test_requested = False
@@ -355,13 +404,14 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     else:
         bridge_checks["UNIQUE_BRIDGE_ID"] = True
     bridge_gate_ok = bridge_status in {"PASS", "NOT_REQUESTED"}
-    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, continuation_status)) and bridge_gate_ok and identity_match and bridge_identity_status == "PASS"
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, continuation_status, round_identity_status)) and bridge_gate_ok and identity_match and bridge_identity_status == "PASS"
     return {
         "schema": "v23-platform-audit/v1",
         "status": "PASS" if overall else "FAIL",
         "security_audit": security or {"status": "NOT_RUN"},
         "context_window": {"status": context_status, **ctx},
         "conversation_persistence": persistence,
+        "round_identity_gate": round_identity,
         "session_integrity": session,
         "provider_health": {"status": health_status, "rows": health_rows},
         "regression_core": {"status": regression_status, **regression},
