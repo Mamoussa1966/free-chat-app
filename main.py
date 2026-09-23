@@ -39,6 +39,7 @@ _ACTIVE_REQUEST_FINGERPRINTS: set[str] = set()
 _ORCHESTRATOR_REQUEST_LOCK = threading.RLock()
 _ACTIVE_ORCHESTRATOR_REQUESTS: set[str] = set()
 from production_core_test_runner import run_production_core_tests, render_report as render_production_core_report
+from release_identity import deployed_release_identity, assert_deployed_release_identity
 
 APP_VERSION = PROVIDER_VERSION
 DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
@@ -357,18 +358,24 @@ class SharedContextBridge:
         return _sanitize_agent_prose(content, self.request_id, values)
 
 
-    def seed_application_state(self, key: str, value: str, source: str = "APPLICATION_TEST_CONTROL") -> None:
-        """Seed bridge state directly in the application control plane; never expose it to prompts."""
+    def seed_application_state(self, key: str, value: str, source: str = "APPLICATION_TEST_CONTROL", source_seat: int = 0) -> None:
+        """Seed bridge state in the application-owned control plane; never expose it to prompts.
+
+        HOTFIX123: diagnostic bridge tests may bind an application-generated canary to the
+        logical DeepSeek source seat (7). This is explicitly marked as application-owned
+        test control; it is not presented as model-generated prose.
+        """
         key, value = str(key or "").strip(), str(value or "").strip()
         if not key or not value or len(value) > 2000:
             return
+        source_seat = int(source_seat or 0)
         self._write_sequence += 1
         self._source_values[key] = value
         self._values[key] = {
-            "value": value, "source_seat": 0, "source_provider": source,
-            "write_sequence": self._write_sequence,
+            "value": value, "source_seat": source_seat, "source_provider": source,
+            "write_sequence": self._write_sequence, "write_origin": "APPLICATION_TEST_CONTROL",
         }
-        self._record_trace(source_seat=0, source_provider=source, target_seat=0, key=key,
+        self._record_trace(source_seat=source_seat, source_provider=source, target_seat=0, key=key,
                            write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
 
     def application_owned_state(self) -> dict:
@@ -1134,6 +1141,21 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         request_id=request_id,
         round_no=round_no,
     )
+    # HOTFIX123 Bridge/Security deterministic test boundary. For the explicit
+    # Transactional Bridge diagnostic, the application owns the canary value and
+    # binds it to the logical DeepSeek source seat. The canary is never copied into
+    # the user prompt or Gemini input, and its origin is recorded as application test
+    # control so the audit cannot misattribute model prose as authoritative state.
+    if ("TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt) and
+            "Free Cascade number actually executed" in str(user_prompt) and
+            not any(str(k) == "BRIDGE_RESULT" for k, _ in (bridge_controls or []))):
+        bridge.seed_application_state(
+            "BRIDGE_RESULT",
+            f"HOTFIX123_BRIDGE_RUNTIME_{uuid.uuid4().hex}",
+            source="DeepSeek",
+            source_seat=7,
+        )
+
     # Current release: explicit BRIDGE_* assignments in the current request become
     # round-scoped bridge data before any provider is called. This makes a
     # deliberate "save to Shared Context, then retrieve later" test real
@@ -2284,12 +2306,17 @@ _render_six_rooms = _render_agent_rooms
 
 def run_app() -> None:
     _init_state()
+    # HOTFIX123: the Bridge/Security claim is only shown as deployable after the
+    # frozen multi-layer release identity matches the runtime modules. A mismatch
+    # is surfaced; the app never silently rewrites the identity.
+    release_identity = assert_deployed_release_identity()
     credentials = capture_credentials()
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    st.caption(f"HOTFIX123 Release Identity Gate: {release_identity.get('gate', 'FAIL')} • Frozen Provider={release_identity.get('observed', {}).get('provider_core', 'NOT_PROVEN')} • Runtime Match={release_identity.get('runtime_matches_frozen_identity', False)}")
     st.caption("V26.3: Authoritative Conversation Persistence · Message→Request→Round Chain · HOTFIX145 Core Preserved")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)

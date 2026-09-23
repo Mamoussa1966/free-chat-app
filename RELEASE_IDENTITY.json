@@ -1,0 +1,12 @@
+{
+  "schema": "hotfix123-release-identity/v1",
+  "release": "HOTFIX123",
+  "purpose": "Freeze deployed release identity before Bridge/Security modification",
+  "observed_deployed_identity": {
+    "provider_core": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+    "hotfix_release": "V23.0-HOTFIX144-PROSE-RUNTIME-TRUTH-SEPARATION-AUTHORITATIVE-GATE",
+    "platform_release": "V24.0-HOTFIX145-CONVERSATION-RUNTIME-PROFESSIONAL-CHAT-FOUNDATION"
+  },
+  "source_version_file": "V24.0-HOTFIX120-V26_3-CANONICAL-CONVERSATION-STORE-SINGLE-CONTRACT",
+  "identity_policy": "FAIL_CLOSED_ON_MISMATCH"
+}
