@@ -74,7 +74,7 @@ def canonical_history_hash(record: dict) -> str:
             for x in record.get("requests", []) if isinstance(x, dict) and x.get("request_id")
         ],
         "rounds": [
-            {k: x.get(k) for k in ("round_id", "conversation_id", "session_id", "message_id", "request_id", "round", "created_at", "status")}
+            {k: x.get(k) for k in ("round_id", "conversation_id", "session_id", "message_id", "request_id", "round", "round_identity_contract", "created_at", "status")}
             for x in record.get("rounds", []) if isinstance(x, dict) and x.get("round_id")
         ],
     }
@@ -130,6 +130,11 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
     if not cid:
         return rec
     touch(chat)
+    # The in-memory ConversationRecord is itself the application-owned canonical
+    # ledger. SessionState is only the rerun transport checkpoint. Mark the record
+    # committed even when no transport mapping is supplied so tests/runtime paths
+    # can audit the ledger directly without inventing a second source of truth.
+    rec["canonical_store_committed"] = True
     if session_state is not None:
         root = session_state.setdefault("v26_3_canonical_conversation_store", {})
         if not isinstance(root, dict):

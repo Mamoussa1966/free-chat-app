@@ -319,7 +319,9 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     regression_status = str(regression.get("gate") or regression.get("status") or "NOT_RUN").upper()
     security_status = str((security or {}).get("status") or "NOT_RUN").upper()
     round_identity = canonical_round_identity_gate(chat)
-    round_identity_status = "PASS" if round_identity.get("gate") == "PASS" else ("PASS" if round_identity.get("gate") == "LEGACY_COMPATIBILITY" else "FAIL")
+    # HOTFIX126 FINAL: round identity is a mandatory production gate.
+    # Legacy compatibility is readable, but it is never Production-ready.
+    round_identity_status = "PASS" if round_identity.get("gate") == "PASS" else "FAIL"
     bridge_audits = []
     persisted_bridge = None
     bridge_test_requested = False
@@ -366,9 +368,29 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
                 "NO_AGENT_PROSE_AUTHORITY": True,
                 "REQUEST_ID_IDENTITY_MATCH": identity_match,
             }
-    elif not any(k in bridge for k in ("USER_PROMPT_CONTAINS_VALUE", "GEMINI_INPUT_PROMPT_CONTAINS_VALUE", "BRIDGE_STATE_CONTAINS_VALUE")):
-        bridge_status = "PASS"
-        bridge_checks = {"LEGACY_AUDIT_COMPATIBLE": True, "NO_AGENT_PROSE_AUTHORITY": True}
+    elif bridge_test_requested:
+        # Explicit Bridge Test has no intermediate/legacy PASS state. All required
+        # application-owned proof fields must be present and satisfy the gate.
+        bridge_checks = {
+            "APPLICATION_OWNED_STATE": bool(persisted_bridge),
+            "WRITE": bridge.get("WRITE") == "PASS",
+            "VALIDATE": bridge.get("VALIDATE") == "PASS",
+            "COMMIT": bridge.get("COMMIT") == "PASS",
+            "BARRIER": bridge.get("BARRIER") == "PASS",
+            "READ": bridge.get("READ") == "PASS",
+            "SCHEMA_VALIDATION": bridge.get("SCHEMA_VALIDATION") == "PASS",
+            "USER_PROMPT_ISOLATED": bridge.get("USER_PROMPT_CONTAINS_VALUE") == "NO",
+            "GEMINI_INPUT_ISOLATED": bridge.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE") == "NO",
+            "BRIDGE_STATE_CONTAINS_VALUE": bridge.get("BRIDGE_STATE_CONTAINS_VALUE") == "YES",
+            "NO_AGENT_PROSE_AUTHORITY": True,
+            "REQUEST_ID_IDENTITY_MATCH": identity_match,
+        }
+        bridge_status = "PASS" if all(bridge_checks.values()) else "FAIL"
+    elif not bridge_test_requested:
+        # A Bridge record is not allowed to manufacture a Bridge FAIL in a
+        # persistence-only request. Keep the bridge status neutral.
+        bridge_status = "NOT_REQUESTED"
+        bridge_checks = {"BRIDGE_TEST_REQUESTED": False, "NO_AGENT_PROSE_AUTHORITY": True, "REQUEST_ID_IDENTITY_MATCH": identity_match}
     else:
         bridge_checks = {
             "APPLICATION_OWNED_STATE": bool(persisted_bridge),

@@ -1627,7 +1627,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no, st.session_state)
             round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
             if round_row:
-                # HOTFIX117: converge the already allocated identity into one
+                # prior lifecycle convergence: converge the already allocated identity into one
                 # application-owned atomic lifecycle checkpoint before provider dispatch.
                 request_row = next((x for x in reversed(chat.get("request_records", [])) if isinstance(x, dict) and str(x.get("request_id") or "") == request_id), None)
                 message_row = {
@@ -2496,7 +2496,7 @@ def run_app() -> None:
             st.session_state.last_continuation_audit = copy.deepcopy(continuation_audit)
             st.info(f"Continuation resolved to persisted Request ID: {persisted_id} — READ-ONLY; no new Request, provider call, round, cascade, or Bridge created.")
             return
-        # HOTFIX119: before allocating any new Message/Request/round identity,
+        # prior canonical lifecycle: before allocating any new Message/Request/round identity,
         # restore the last committed canonical history.  This closes the exact
         # runtime gap observed after Message 1 -> Streamlit rerun -> Message 2.
         # A narrowed current runtime is never permitted to seed the next commit.

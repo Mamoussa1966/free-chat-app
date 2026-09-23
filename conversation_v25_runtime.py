@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 """V25 authoritative Conversation Ledger / Message Runtime.
 
 Additive reconciliation layer on top of HOTFIX145/V24.  It consumes only
@@ -108,6 +109,17 @@ def sync_v26_message_record(chat: dict, message_id: str, request_id: str, role: 
     if row is None: rows.append(payload)
     else: row.update(payload)
     chat["message_ledger_v26"] = rows[-1000:]
+    from conversation_store import canonical_upsert_message, canonical_upsert_request
+    canonical_upsert_message(chat, {
+        "message_id": mid, "request_id": rid, "conversation_id": _s(chat.get("conversation_id")),
+        "session_id": _s(chat.get("session_id")), "role": _s(role).lower() or "user",
+        "created_at": created_at or _s(record.get("created_at")),
+    })
+    canonical_upsert_request(chat, {
+        "request_id": rid, "message_id": mid, "conversation_id": _s(chat.get("conversation_id")),
+        "session_id": _s(chat.get("session_id")), "state": _s(record.get("state")) or "COMPLETED",
+        "created_at": record.get("created_at") or now(),
+    })
     touch(chat)
     return payload
 
@@ -199,6 +211,25 @@ def reconcile_request(chat: dict, request_id: str, message_id: str, results: lis
 
     records = [r for r in chat.get("request_records", []) if isinstance(r, dict) and _s(r.get("request_id")) == rid]
     record = records[-1] if records else {}
+    # Keep the canonical Message→Request graph application-owned at lifecycle
+    # reconciliation time. These identities already exist in REQUEST_RECORD;
+    # this does not mint IDs or consult provider prose.
+    from conversation_store import canonical_upsert_message, canonical_upsert_request
+    if record:
+        mid_record = _s(record.get("message_id"))
+        if mid_record:
+            canonical_upsert_message(chat, {
+                "message_id": mid_record, "conversation_id": _s(chat.get("conversation_id")),
+                "session_id": _s(chat.get("session_id")), "role": "user", "request_id": rid,
+                "created_at": record.get("created_at") or now(),
+            }, session_state)
+            canonical_upsert_request(chat, {
+                "request_id": rid, "message_id": mid_record,
+                "conversation_id": _s(chat.get("conversation_id")),
+                "session_id": _s(chat.get("session_id")),
+                "state": _s(record.get("state")) or "COMPLETED",
+                "created_at": record.get("created_at") or now(),
+            }, session_state)
     actual_rounds = _actual_round_rows(chat, rid, mid)
     round_nos = sorted({int(r.get("round") or 1) for r in actual_rounds})
     if not round_nos:
@@ -344,6 +375,23 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     # permitted to replace canonical history. Capture the canonical snapshot
     # BEFORE any ensure/hydrate call can initialize a previously-empty runtime.
     canonical_transport = load_canonical_snapshot(chat, session_state)
+    if canonical_transport is None and session_state is None:
+        # The canonical V26 persistence alias is the same application-owned store,
+        # not a current-request fallback. Use it only when it is explicitly present.
+        legacy_root = chat.get("v26_3_conversation_persistence") if isinstance(chat, Mapping) else None
+        cid0 = _s(chat.get("conversation_id"))
+        if isinstance(legacy_root, Mapping) and isinstance(legacy_root.get(cid0), Mapping):
+            row0 = legacy_root.get(cid0)
+            canonical_transport = {
+                "conversation_id": cid0,
+                "session_id": _s(row0.get("session_id") or chat.get("session_id")),
+                "messages": copy.deepcopy(row0.get("messages", [])),
+                "requests": copy.deepcopy(row0.get("requests", [])),
+                "rounds": copy.deepcopy(row0.get("rounds", [])),
+                "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+                "canonical_store_revision": int(row0.get("canonical_store_revision") or 0),
+                "canonical_history_hash": str(row0.get("history_hash") or ""),
+            }
     hydrate_canonical_record(chat, session_state)
     rebuild_runtime_indexes_from_canonical(chat, session_state)
     # HOTFIX116: immediately re-read the committed canonical transport.  This is
@@ -366,6 +414,16 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
             "authoritative_source": "APPLICATION_OWNED_CANONICAL_TRANSPORT_ONLY",
             "historical_source": "V26_3_CONVERSATION_PERSISTENCE",
             "canonical_transport_loaded": "NOT_PROVEN",
+            "message_1_id": "NOT_PROVEN",
+            "message_2_id": "NOT_PROVEN",
+            "request_1_id": "NOT_PROVEN",
+            "request_2_id": "NOT_PROVEN",
+            "round_1_ids": "NOT_PROVEN",
+            "round_2_ids": "NOT_PROVEN",
+            "conversation_id_stable": "NOT_PROVEN",
+            "session_id_stable": "NOT_PROVEN",
+            "message_ids_unique": "NOT_PROVEN",
+            "request_ids_unique": "NOT_PROVEN",
             "HISTORICAL_MESSAGE_COUNT": "NOT_PROVEN",
             "HISTORICAL_REQUEST_COUNT": "NOT_PROVEN",
             "HISTORICAL_ROUND_COUNT": "NOT_PROVEN",
@@ -515,7 +573,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "HISTORICAL_MESSAGE_COUNT": len(messages),
         "HISTORICAL_REQUEST_COUNT": len(historical_request_records),
         "HISTORICAL_ROUND_COUNT": len(rounds),
-        "HISTORICAL_SOURCE": hist.get("source", "HOTFIX145_CONVERSATION_RECORD"),
+        "HISTORICAL_SOURCE": "V26_3_CONVERSATION_PERSISTENCE",
         "AUTHORITATIVE_SOURCE": "APPLICATION_OWNED_RUNTIME_STATE / V26_3_CANONICAL_CONVERSATION_STORE",
         "previous_request_reexecuted": (False if enough and r1 != r2 else "NOT_PROVEN"),
         "two_message_isolation": (request_isolation if enough else "NOT_PROVEN"),
@@ -592,6 +650,10 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     round_progression_gate = (audit.get("canonical_round_sequence_proven") is True) if monotonic_round_contract_active else True
     structural_pass = historical_exact_two and (audit.get("canonical_transport_loaded") is True or audit.get("canonical_transport_loaded") == "NOT_PROVEN") and audit.get("canonical_transport_message_count") == 2 and audit.get("canonical_transport_request_count") == 2 and audit.get("canonical_transport_round_count") == 2 and all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation", "message_1_request_mapping", "message_2_request_mapping", "round_1_message_mapping", "round_2_message_mapping", "request_1_round_1_mapping")) and (audit.get("request_2_round_2_mapping") is True if monotonic_round_contract_active else audit.get("request_2_round_1_mapping") is True) and round_progression_gate
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
+    # Strict regression gate: a complete two-message history without an
+    # application-owned Round-2 proof is not Production-ready.
+    if historical_exact_two and monotonic_round_contract_active and audit.get("canonical_round_sequence_proven") is not True:
+        audit["conversation_runtime_audit"] = "FAIL"
     audit["overall_authoritative_status"] = "PASS" if audit["conversation_runtime_audit"] == "PASS" and enough else "NOT_PROVEN"
     chat["v25_authoritative_audit"] = deepcopy(audit)
     return audit
