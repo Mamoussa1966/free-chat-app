@@ -1,27 +1,32 @@
-# HOTFIX130 — AUTHORITATIVE RESULT COUNTER / UI STATE CONSISTENCY FIX
+# HOTFIX130 — CANONICAL PERSISTENCE COUNTER CONSISTENCY
 
-Version: `HOTFIX130`
+Built directly from HOTFIX129 without deleting any existing packaged file.
 
-Built from the complete HOTFIX129 artifact. No existing project files are removed.
+## Problem fixed
+HOTFIX129 correctly established the two-real-turn persistence contract, but runtime output could still show two different meanings for "message count":
 
-## Narrow scope
-- Presentation/semantic projection only; runtime accounting is unchanged.
-- Visible counters use persisted `REQUEST_RECORD / LIFECYCLE_AUDIT` data only.
-- `DISPATCH_REJECTED` and `NOT_CONFIGURED` remain independent states.
-- `SUCCESS`, `EXECUTED`, `CASCADE_ATTEMPTS`, `CONFIGURED`, and `REQUESTED` use authoritative request metrics.
-- Agent-generated prose is not a source for counters or Request ID.
-- Telemetry Request ID is taken from the authoritative result/request identity.
-- The generic `successful • failed` summary is removed.
-- Regression guard rejects any generic `failed` counter when `DISPATCH_REJECTED > 0` or `NOT_CONFIGURED > 0`.
+- authoritative historical audit: identity-bearing user MessageRecords;
+- `v26_3_persistence`: raw length of the canonical messages list.
 
-## Unchanged
-- Secrets, credentials, and all `*_FREE_MODELS`.
-- Cascade controller/classification.
-- Transactional Bridge.
-- Request Lifecycle and runtime execution accounting.
-- Provider Execution Contract.
-- No Local Engine / no Paid fallback.
+That allowed a conversation containing two user turns plus provider/synthesis message artifacts to report `canonical_message_count = 2` and `persisted_message_count = 5`.
 
-## Regression
-- `tests/test_hotfix130_authoritative_result_counter.py`
-- Verifies required 4/4/2/2/2/0/2/2 authoritative counters and removal of the legacy generic summary.
+## Surgical fix
+`conversation_persistence_v26.persistence_audit()` now derives Message/Request/Round counts from the same canonical identity semantics used by the authoritative audit. Raw list lengths are no longer authoritative.
+
+## Required runtime result
+A valid two-turn canonical conversation must report:
+
+- `canonical_message_count = 2`
+- `persisted_message_count = 2`
+- `canonical_request_count = 2`
+- `persisted_request_count = 2`
+- `canonical_round_count = 2`
+- `persisted_round_count = 2`
+- `counter_semantics_consistent = TRUE`
+- `canonical_round_ordinals = [1, 2]`
+- `canonical_round_sequence_proven = TRUE`
+- `REQUEST_2 → ROUND_2 = TRUE`
+- `REQUEST_2 → ROUND_1 = FALSE`
+
+## Verification
+The release gate requires the full HOTFIX129 regression suite, plus dedicated counter-consistency tests, source/re-extracted ZIP verification, baseline member preservation, and an explicit regression containing three non-user message artifacts so raw list length cannot silently become authoritative again.

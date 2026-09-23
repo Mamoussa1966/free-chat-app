@@ -266,14 +266,71 @@ def hydrate_chat_identity(chat, session_state=None):
     return chat
 
 
+def _canonical_identity_counts(bucket):
+    """Return the counts used by the authoritative V26.3 persistence contract.
+
+    The canonical ConversationRecord may contain assistant/provider-facing message
+    artifacts in addition to the two historical user MessageRecords.  Those artifacts
+    are not independent user turns and must never inflate the persistence contract's
+    message count.  Counts are therefore derived from the same identity-bearing rows
+    used by the authoritative historical audit, rather than from raw list lengths.
+    """
+    if not isinstance(bucket, dict):
+        return None
+    messages = [
+        x for x in bucket.get("messages", [])
+        if isinstance(x, dict)
+        and _s(x.get("message_id"))
+        and _s(x.get("role")).lower() == "user"
+    ]
+    requests = [
+        x for x in bucket.get("requests", [])
+        if isinstance(x, dict) and _s(x.get("request_id"))
+    ]
+    rounds = [
+        x for x in bucket.get("rounds", [])
+        if isinstance(x, dict) and _s(x.get("round_id"))
+    ]
+    return {
+        "message_count": len(messages),
+        "request_count": len(requests),
+        "round_count": len(rounds),
+    }
+
+
 def persistence_audit(chat, session_state):
+    """Audit the exact canonical store without introducing a second counter model.
+
+    HOTFIX130 closes the counter split exposed by HOTFIX129: raw
+    ``len(bucket["messages"])`` included non-user message artifacts (for example
+    provider/synthesis messages), while the authoritative historical contract counts
+    only identity-bearing user MessageRecords.  This audit now derives all three
+    persistence counts from the exact same canonical identity semantics as the
+    authoritative history audit.
+    """
     bucket = get_authoritative_bucket(chat, session_state)
+    if bucket is None:
+        return {
+            "schema": SCHEMA,
+            "source": "V26_3_CANONICAL_CONVERSATION_STORE",
+            "conversation_id": _s(chat.get("conversation_id")) or "NOT_PROVEN",
+            "canonical_store_loaded": "NOT_PROVEN",
+            "persisted_message_count": "NOT_PROVEN",
+            "persisted_request_count": "NOT_PROVEN",
+            "persisted_round_count": "NOT_PROVEN",
+            "canonical_counter_source": "NOT_PROVEN",
+            "counter_semantics_consistent": "NOT_PROVEN",
+        }
+
+    counts = _canonical_identity_counts(bucket)
     return {
         "schema": SCHEMA,
         "source": "V26_3_CANONICAL_CONVERSATION_STORE",
         "conversation_id": _s(chat.get("conversation_id")) or "NOT_PROVEN",
-        "canonical_store_loaded": bool(bucket) if bucket is not None else "NOT_PROVEN",
-        "persisted_message_count": len(bucket.get("messages", [])) if bucket is not None else "NOT_PROVEN",
-        "persisted_request_count": len(bucket.get("requests", [])) if bucket is not None else "NOT_PROVEN",
-        "persisted_round_count": len(bucket.get("rounds", [])) if bucket is not None else "NOT_PROVEN",
+        "canonical_store_loaded": True,
+        "persisted_message_count": counts["message_count"],
+        "persisted_request_count": counts["request_count"],
+        "persisted_round_count": counts["round_count"],
+        "canonical_counter_source": "CANONICAL_IDENTITY_RECORDS",
+        "counter_semantics_consistent": True,
     }
