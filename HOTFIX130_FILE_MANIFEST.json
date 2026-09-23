@@ -1,17 +1,21 @@
 {
-  "version": "V23.0.0-HOTFIX130-CANONICAL-PERSISTENCE-COUNTER-CONSISTENCY-FINAL-LOCKED",
-  "base_artifact": "HOTFIX130_CANONICAL_PERSISTENCE_COUNTER_CONSISTENCY_FINAL_VERIFIED.zip",
-  "root_cause_closed": "authoritative_audit canonical_message_count previously used raw message-list length while persistence_audit used user identity records",
-  "counter_authority": "CANONICAL_IDENTITY_RECORDS",
-  "message_count_rule": "valid message_id + role=user",
-  "request_count_rule": "valid request_id",
-  "round_count_rule": "valid round_id",
-  "raw_list_length_authoritative": false,
-  "original_hotfix130_members_preserved": true,
-  "original_hotfix130_member_count": 229,
-  "final_member_count_before_manifest": 233,
-  "new_regression_tests": 2,
-  "full_pytest": "502 passed",
-  "no_provider_or_secret_changes": true,
-  "sha256": "0e63a94de88df3ea356ac5b88e62a8bb5edb6cf1796ad592e8cb01f994768edc"
+  "version": "V23.0.0-HOTFIX130-CANONICAL-PERSISTENCE-COUNTER-CONSISTENCY",
+  "base": "HOTFIX129_TWO_REAL_TURN_PERSISTENCE_EXECUTION_GATE_FINAL_VERIFIED(2).zip",
+  "provider_core": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "purpose": "Unify persistence and authoritative historical counters on canonical identity records; raw list length is non-authoritative.",
+  "baseline_member_count": 223,
+  "file_count": 228,
+  "new_members": [
+    "HOTFIX130_COUNTER_CONSISTENCY_CONTRACT.md",
+    "HOTFIX130_RELEASE_GATE.py",
+    "HOTFIX130_RELEASE_NOTES.md",
+    "VERSION_HOTFIX130.txt",
+    "tests/test_hotfix130_counter_consistency.py"
+  ],
+  "source_full_pytest": "........................................................................ [ 14%]\n........................................................................ [ 28%]\n........................................................................ [ 43%]\n........................................................................ [ 57%]\n........................................................................ [ 72%]\n........................................................................ [ 86%]\n....................................................................     [100%]\n500 passed in 3.31s",
+  "reextracted_full_pytest": "........................................................................ [ 14%]\n........................................................................ [ 28%]\n........................................................................ [ 43%]\n........................................................................ [ 57%]\n........................................................................ [ 72%]\n........................................................................ [ 86%]\n....................................................................     [100%]\n500 passed in 4.04s",
+  "sha256": "3a29b4f711741bf3cd6123a86832d7eb24052fe07cbc56ced6264a62d44c6b28",
+  "counter_contract": "persisted counts == authoritative canonical identity counts",
+  "fail_closed": true,
+  "hotfix129_two_real_turn_contract_preserved": true
 }

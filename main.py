@@ -18,6 +18,7 @@ from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
+from v23_final_closure_audit import build_v23_final_closure_audit
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical
@@ -826,7 +827,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 def _init_state() -> None:
     ensure_persistence_store(st.session_state)
-    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}}
+    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}, "last_v23_final_closure_audit": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -2679,6 +2680,14 @@ def run_app() -> None:
                 st.session_state.get("last_security_audit"),
                 st.session_state.get("last_production_core_report"),
             )
+            # HOTFIX146: fresh, observational final-closure report. This layer
+            # never mutates canonical persistence or provider execution.
+            st.session_state.last_v23_final_closure_audit = build_v23_final_closure_audit(
+                chat,
+                st.session_state.get("last_security_audit"),
+                st.session_state.get("last_v23_platform_audit"),
+                st.session_state.get("last_results"),
+            )
         if st.button("Run A/B/C Multi-Request Lifecycle Audit", key="v23_multi_request_audit"):
             chat = _active_chat()
             st.session_state.last_v23_multi_request_regression = multi_request_regression_audit(chat)
@@ -2690,6 +2699,10 @@ def run_app() -> None:
         report = st.session_state.get("last_v23_platform_audit") or {}
         if report:
             st.json(report)
+            closure = st.session_state.get("last_v23_final_closure_audit") or {}
+            if closure:
+                st.subheader("HOTFIX146 — V23 Final Closure Audit")
+                st.json(closure)
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
 

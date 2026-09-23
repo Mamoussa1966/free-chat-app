@@ -1,0 +1,22 @@
+{
+  "release": "HOTFIX146",
+  "version": "V23.0.0-HOTFIX146-V23-FINAL-CLOSURE-AUDIT",
+  "base_zip": "HOTFIX130_CANONICAL_PERSISTENCE_COUNTER_CONSISTENCY_FINAL_VERIFIED.zip",
+  "purpose": "V23 final closure audit without changing canonical persistence semantics",
+  "added_files": [
+    "HOTFIX146_RELEASE_GATE.py",
+    "HOTFIX146_RELEASE_NOTES.md",
+    "HOTFIX146_V23_FINAL_CLOSURE_AUDIT_CONTRACT.md",
+    "VERSION_HOTFIX146.txt",
+    "tests/test_v23_final_closure_audit.py",
+    "v23_final_closure_audit.py"
+  ],
+  "preserved_hotfix130_core_files_byte_identical": true,
+  "hotfix123_2_provider_core_preserved": true,
+  "hotfix129_persistence_contract_preserved": true,
+  "hotfix130_counter_semantics_preserved": true,
+  "fresh_full_v23_audit_button": true,
+  "fail_closed": true,
+  "source_pytest": "500+ tests; see gate output",
+  "zip_pytest": "500+ tests; see gate output"
+}
