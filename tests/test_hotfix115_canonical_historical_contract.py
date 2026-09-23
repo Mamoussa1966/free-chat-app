@@ -9,10 +9,10 @@ def base():
 def test_hotfix115_two_message_historical_contract_after_rerun_narrowing():
     chat=base(); ensure_store(chat); ss={}
     for i in (1,2):
-        mid=f"msg{i}"; rid=f"req{i}"; oid=f"conv-115:{rid}:r1"
+        mid=f"msg{i}"; rid=f"req{i}"; oid=f"conv-115:{rid}:r{i}"
         canonical_upsert_message(chat,{"message_id":mid,"request_id":rid,"role":"user","conversation_id":"conv-115","session_id":"sess-115","created_at":f"2026-01-0{i}"},ss)
         canonical_upsert_request(chat,{"request_id":rid,"message_id":mid,"conversation_id":"conv-115","session_id":"sess-115","state":"COMPLETED"},ss)
-        canonical_upsert_round(chat,{"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":"conv-115","session_id":"sess-115","round":1,"status":"COMPLETED"},ss)
+        canonical_upsert_round(chat,{"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":"conv-115","session_id":"sess-115","round":i,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1","status":"COMPLETED"},ss)
     chat["conversation_record"]={"conversation_id":"conv-115","session_id":"sess-115","messages":[chat["conversation_record"]["messages"][1]],"requests":[chat["conversation_record"]["requests"][1]],"rounds":[chat["conversation_record"]["rounds"][1]]}
     chat["request_records"]=chat["conversation_record"]["requests"][:]
     chat["round_ledger"]=chat["conversation_record"]["rounds"][:]
@@ -29,6 +29,7 @@ def test_hotfix115_two_message_historical_contract_after_rerun_narrowing():
     assert a["previous_request_reexecuted"] is False
     assert a["two_message_isolation"] is True
     assert a["HISTORICAL_SOURCE"]=="V26_3_CONVERSATION_PERSISTENCE"
+    assert a["canonical_round_sequence_proven"] is True
     assert a["AUTHORITATIVE_SOURCE"].startswith("APPLICATION_OWNED_RUNTIME_STATE")
 
 
@@ -38,7 +39,7 @@ def test_hotfix115_no_transport_never_falls_back_to_current_request():
     chat["request_records"]=chat["conversation_record"]["requests"][:]
     chat["round_ledger"]=chat["conversation_record"]["rounds"][:]
     a=authoritative_audit(chat,None)
-    assert a["HISTORICAL_MESSAGE_COUNT"]==1
-    assert a["HISTORICAL_REQUEST_COUNT"]==1
-    assert a["HISTORICAL_ROUND_COUNT"]==1
+    assert a["HISTORICAL_MESSAGE_COUNT"]=="NOT_PROVEN"
+    assert a["HISTORICAL_REQUEST_COUNT"]=="NOT_PROVEN"
+    assert a["HISTORICAL_ROUND_COUNT"]=="NOT_PROVEN"
     assert a["overall_authoritative_status"]=="NOT_PROVEN"
