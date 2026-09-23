@@ -35,3 +35,36 @@ def test_hotfix126_full_audit_rejects_two_bridge_ids():
     assert r["bridge_isolation"]["status"] == "FAIL"
     assert r["status"] == "FAIL"
     assert r["bridge_isolation"]["unique_persisted_bridge_ids"] == ["b1","b2"]
+
+
+def test_hotfix126_production_gate_rejects_non_authoritative_round_2_label():
+    from production_platform import build_v23_platform_audit
+    chat = {
+        "id": "c", "conversation_id": "c", "session_id": "s",
+        "messages": [], "request_records": [{"request_id":"rid","state":"COMPLETED","results":[]}],
+        "conversation_record": {
+            "rounds": [
+                {"round_id":"c:rid1:r1","round":1,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"},
+                {"round_id":"c:rid2:r1","round":2,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"},
+            ]
+        },
+    }
+    r = build_v23_platform_audit(chat, "rid", {"chars":0,"digest":"x"}, [{"status":"READY"}], {"status":"PASS"}, {"gate":"PASS"})
+    assert r["round_identity_gate"]["status"] == "FAIL"
+    assert r["status"] == "FAIL"
+
+
+def test_hotfix126_production_gate_proves_real_round_2_from_ledger():
+    from production_platform import build_v23_platform_audit
+    chat = {
+        "id": "c", "conversation_id": "c", "session_id": "s",
+        "messages": [], "request_records": [{"request_id":"rid","state":"COMPLETED","results":[]}],
+        "conversation_record": {
+            "rounds": [
+                {"round_id":"c:rid1:r1","round":1,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"},
+                {"round_id":"c:rid2:r2","round":2,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"},
+            ]
+        },
+    }
+    r = build_v23_platform_audit(chat, "rid", {"chars":0,"digest":"x"}, [{"status":"READY"}], {"status":"PASS"}, {"gate":"PASS"})
+    assert r["round_identity_gate"]["status"] == "PASS"
