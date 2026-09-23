@@ -7,10 +7,10 @@ def _chat():
 
 
 def _append(chat, ss, n):
-    mid, rid, oid = f"m{n}", f"req{n}", f"conv119:{rid if False else f'req{n}'}:r1"
+    mid, rid, oid = f"m{n}", f"req{n}", f"conv119:{rid if False else f'req{n}'}:r{n}"
     canonical_upsert_message(chat, {"message_id":mid,"request_id":rid,"role":"user","conversation_id":"conv119","session_id":"sess119"}, ss)
     canonical_upsert_request(chat, {"request_id":rid,"message_id":mid,"conversation_id":"conv119","session_id":"sess119","state":"COMPLETED"}, ss)
-    canonical_upsert_round(chat, {"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":"conv119","session_id":"sess119","round":1,"status":"COMPLETED"}, ss)
+    canonical_upsert_round(chat, {"round_id":oid,"request_id":rid,"message_id":mid,"conversation_id":"conv119","session_id":"sess119","round":n,"status":"COMPLETED","round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}, ss)
     return mid, rid, oid
 
 
@@ -36,7 +36,7 @@ def test_message2_allocation_starts_from_durable_message1_snapshot():
 def test_historical_audit_uses_only_durable_transport():
     ss={}; chat=_chat(); ensure_store(chat)
     _append(chat, ss, 1); _append(chat, ss, 2)
-    chat["conversation_record"]={"conversation_id":"conv119","session_id":"sess119","messages":[{"message_id":"m2","request_id":"req2","role":"user"}],"requests":[{"request_id":"req2","message_id":"m2"}],"rounds":[{"round_id":"conv119:req2:r1","request_id":"req2","message_id":"m2","round":1}]}
+    chat["conversation_record"]={"conversation_id":"conv119","session_id":"sess119","messages":[{"message_id":"m2","request_id":"req2","role":"user"}],"requests":[{"request_id":"req2","message_id":"m2"}],"rounds":[{"round_id":"conv119:req2:r2","request_id":"req2","message_id":"m2","round":2,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}]}
     chat["request_records"]=chat["conversation_record"]["requests"][:]
     audit=authoritative_audit(chat, ss)
     assert audit["HISTORICAL_MESSAGE_COUNT"] == 2
@@ -52,7 +52,7 @@ def test_missing_canonical_transport_is_not_proven_even_if_current_has_history()
     chat=_chat(); ensure_store(chat)
     chat["conversation_record"]["messages"]=[{"message_id":"m2","request_id":"req2","role":"user"}]
     chat["conversation_record"]["requests"]=[{"request_id":"req2","message_id":"m2"}]
-    chat["conversation_record"]["rounds"]=[{"round_id":"conv119:req2:r1","request_id":"req2","message_id":"m2","round":1}]
+    chat["conversation_record"]["rounds"]=[{"round_id":"conv119:req2:r2","request_id":"req2","message_id":"m2","round":2,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}]
     audit=authoritative_audit(chat, None)
     assert audit["HISTORICAL_MESSAGE_COUNT"] == "NOT_PROVEN"
     assert audit["HISTORICAL_REQUEST_COUNT"] == "NOT_PROVEN"

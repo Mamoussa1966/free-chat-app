@@ -8,17 +8,17 @@ def test_hotfix116_request_round_message_chain_survives_rerun():
     ensure_store(chat)
     for i in (1, 2):
         mid, rid = f"msg{i}", f"req{i}"
-        round_id = f"conv-116:{rid}:r1"
+        round_id = f"conv-116:{rid}:r{i}"
         canonical_upsert_message(chat, {"message_id":mid,"request_id":rid,"role":"user","conversation_id":"conv-116","session_id":"sess-116"}, ss)
         canonical_upsert_request(chat, {"request_id":rid,"message_id":mid,"conversation_id":"conv-116","session_id":"sess-116","state":"COMPLETED"}, ss)
-        canonical_upsert_round(chat, {"round_id":round_id,"request_id":rid,"message_id":mid,"conversation_id":"conv-116","session_id":"sess-116","round":1,"status":"COMPLETED"}, ss)
+        canonical_upsert_round(chat, {"round_id":round_id,"request_id":rid,"message_id":mid,"conversation_id":"conv-116","session_id":"sess-116","round":i,"status":"COMPLETED","round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}, ss)
 
     # Simulate Streamlit rerun narrowing the live object to Message 2 only.
     chat["conversation_record"] = {
         "conversation_id":"conv-116", "session_id":"sess-116",
         "messages":[{"message_id":"msg2","request_id":"req2","role":"user"}],
         "requests":[{"request_id":"req2","message_id":"msg2"}],
-        "rounds":[{"round_id":"conv-116:req2:r1","request_id":"req2","message_id":"msg2","round":1}],
+        "rounds":[{"round_id":"conv-116:req2:r1","request_id":"req2","message_id":"msg2","round":2,"round_identity_contract":"V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}],
     }
     chat["request_records"] = chat["conversation_record"]["requests"][:]
     chat["round_ledger"] = chat["conversation_record"]["rounds"][:]
@@ -37,7 +37,8 @@ def test_hotfix116_request_round_message_chain_survives_rerun():
     assert audit["message_1_request_mapping"] is True
     assert audit["message_2_request_mapping"] is True
     assert audit["request_1_round_1_mapping"] is True
-    assert audit["request_2_round_1_mapping"] is True
+    assert audit["request_2_round_2_mapping"] is True
+    assert audit["request_2_round_1_mapping"] is False
     assert audit["previous_request_reexecuted"] is False
     assert audit["two_message_isolation"] is True
     assert audit["canonical_transport_loaded"] is True

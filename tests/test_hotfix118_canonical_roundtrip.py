@@ -3,10 +3,10 @@ from conversation_v25_runtime import authoritative_audit
 
 
 def _append(chat, ss, n):
-    mid, rid, oid = f"m{n}", f"req{n}", f"round-{n}"
+    mid, rid, oid = f"m{n}", f"req{n}", f"c:req{n}:r{n}"
     canonical_upsert_message(chat, {"message_id": mid, "request_id": rid, "conversation_id": "c", "session_id": "s", "role": "user", "created_at": f"2026-09-2{n}T00:00:00Z"}, ss)
     canonical_upsert_request(chat, {"request_id": rid, "message_id": mid, "conversation_id": "c", "session_id": "s", "state": "COMPLETED"}, ss)
-    canonical_upsert_round(chat, {"round_id": oid, "request_id": rid, "message_id": mid, "conversation_id": "c", "session_id": "s", "round": 1, "status": "COMPLETED"}, ss)
+    canonical_upsert_round(chat, {"round_id": oid, "request_id": rid, "message_id": mid, "conversation_id": "c", "session_id": "s", "round": n, "status": "COMPLETED", "round_identity_contract": "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"}, ss)
     return mid, rid, oid
 
 
@@ -33,7 +33,8 @@ def test_hotfix118_full_roundtrip_survives_cleared_runtime_indexes():
     assert audit["message_1_request_mapping"] is True
     assert audit["message_2_request_mapping"] is True
     assert audit["request_1_round_1_mapping"] is True
-    assert audit["request_2_round_1_mapping"] is True
+    assert audit["request_2_round_2_mapping"] is True
+    assert audit["request_2_round_1_mapping"] is False
     assert audit["round_ids_unique"] is True
     assert audit["previous_request_reexecuted"] is False
     assert audit["two_message_isolation"] is True
