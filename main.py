@@ -19,6 +19,7 @@ from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _ca
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
 from v23_final_closure_audit import build_v23_final_closure_audit
+from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical
@@ -2748,6 +2749,30 @@ def run_app() -> None:
             if closure:
                 st.subheader("HOTFIX146 — V23 Final Closure Audit")
                 st.json(closure)
+
+            # HOTFIX151: mobile-friendly full-audit export. Streamlit's
+            # st.code widget provides a native Copy button, while
+            # st.download_button provides a reliable fallback for long reports.
+            audit_export = build_v23_audit_export(
+                platform_audit=report,
+                final_closure_audit=closure,
+                security_audit=st.session_state.get("last_security_audit"),
+                health_snapshot=st.session_state.get("last_health_snapshot"),
+                production_core_report=st.session_state.get("last_production_core_report"),
+                production_core_code=st.session_state.get("last_production_core_code"),
+            )
+            audit_export_text = serialize_v23_audit_export(audit_export)
+            st.divider()
+            st.subheader("📋 HOTFIX151 — Full V23 Audit Export")
+            st.caption("لنسخ التقرير كاملًا من الهاتف: اضغط زر النسخ أعلى مربع التقرير. أو استخدم زر التنزيل لإرسال ملف JSON كامل.")
+            st.download_button(
+                "💾 Download Full V23 Audit JSON",
+                data=audit_export_text,
+                file_name="V23_FULL_PLATFORM_AUDIT.json",
+                mime="application/json",
+                key="v23_full_audit_download",
+            )
+            st.code(audit_export_text, language="json")
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
 

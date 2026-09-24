@@ -1,0 +1,33 @@
+{
+  "hotfix": "HOTFIX151",
+  "baseline_archive": "HOTFIX150_V26_3_CANONICAL_REQUEST_ROUND_IDENTITY_BINDING_CLOSURE.zip",
+  "baseline_file_count": 408,
+  "final_file_count": 413,
+  "missing_baseline_files": [],
+  "modified_existing_files": [
+    "main.py"
+  ],
+  "added_files": [
+    "v23_audit_export.py",
+    "HOTFIX151_RELEASE_NOTES.md",
+    "VERSION_HOTFIX151.txt",
+    "tests/test_hotfix151_v23_audit_export.py",
+    "HOTFIX151_FILE_MANIFEST.json"
+  ],
+  "scope": "V23 full audit copy/download UX only",
+  "preserves_hotfix150_baseline": true,
+  "baseline_files_preserved_byte_for_byte_except_intended_main_py": true,
+  "semantics_unchanged": [
+    "secrets",
+    "models",
+    "free_cascade",
+    "provider_adapters",
+    "seat_count",
+    "counters",
+    "canonical_persistence",
+    "request_round_identity",
+    "bridge",
+    "synthesis",
+    "audit_execution"
+  ]
+}
