@@ -1641,7 +1641,15 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             ),
         }
         chat.setdefault("request_records", []).append(record)
-    canonical_upsert_request(chat, record, st.session_state)
+    canonical_request = canonical_upsert_request(chat, record, st.session_state)
+    # HOTFIX149: the canonical RequestRecord owns the conversation-scoped Round
+    # allocation.  Never derive the next Round from provider completion order.
+    if isinstance(canonical_request, dict):
+        record["canonical_round_base"] = int(canonical_request.get("canonical_round_base") or 1)
+        if canonical_request.get("canonical_round_allocation_contract"):
+            record["canonical_round_allocation_contract"] = canonical_request["canonical_round_allocation_contract"]
+        if canonical_request.get("canonical_round_span"):
+            record["canonical_round_span"] = int(canonical_request["canonical_round_span"])
     canonical_upsert_message(chat, {
         "message_id": current_user_message_id,
         "conversation_id": chat.get("conversation_id"),
@@ -1657,17 +1665,23 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
     chat["audit_events"] = [e for e in chat.get("audit_events", []) if e.get("request_id") != request_id]
     all_results: list[dict] = []
     total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
-    # HOTFIX126: round identity is conversation-scoped, not reset to r1 for every
-    # new Request. The provider still executes exactly `total_rounds` rounds for
-    # this Request, but the authoritative RoundRecord receives the next monotonic
-    # conversation ordinal from the canonical ledger. This makes Message 2 ->
-    # Request 2 -> Round 2 provable from Application-Owned Runtime State itself.
-    round_base = _authoritative_round_base(chat)
+    # HOTFIX149: Round identity is allocated at Request creation and persisted on
+    # the canonical RequestRecord.  This is the critical boundary: execution may
+    # complete out of order, but Request N keeps its originally allocated Round
+    # ordinal.  `_authoritative_round_base(chat)` remains a legacy compatibility
+    # helper only; it is no longer the source of a new Request's Round identity.
+    round_base = int(record.get("canonical_round_base") or 0)
+    if round_base <= 0:
+        canonical_record = next((x for x in chat.get("conversation_record", {}).get("requests", [])
+                                 if isinstance(x, dict) and str(x.get("request_id") or "") == request_id), None)
+        round_base = int((canonical_record or {}).get("canonical_round_base") or 0)
+    if round_base <= 0:
+        raise RuntimeError("CANONICAL_REQUEST_ROUND_ALLOCATION_MISSING")
     try:
         lifecycle.record("REQUEST_START", round_id=0, status="RUNNING")
         lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds), "conversation_round_base": str(round_base)})
         for local_round_no in range(1, total_rounds + 1):
-            round_no = round_base + local_round_no
+            round_no = round_base + local_round_no - 1
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
             runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no, st.session_state)
