@@ -1,0 +1,21 @@
+{
+  "release": "HOTFIX147",
+  "version": "V23.0.0-HOTFIX147-V23-SECURITY-REGRESSION-CLOSURE",
+  "base_zip": "HOTFIX146_V23_FINAL_CLOSURE_AUDIT_FINAL_VERIFIED.zip",
+  "source_pytest_returncode": 0,
+  "zip_pytest_returncode": 0,
+  "preserved_core_files_byte_identical": true,
+  "canonical_persistence_changed": false,
+  "message_request_contract_changed": false,
+  "request_round_contract_changed": false,
+  "round_sequence_changed": false,
+  "hotfix123_2_preserved": true,
+  "hotfix129_preserved": true,
+  "hotfix130_preserved": true,
+  "fail_closed": true,
+  "release_scope": [
+    "raw payload security false-positive closure",
+    "HOTFIX130 regression API closure",
+    "UI/canonical counter semantic separation"
+  ]
+}

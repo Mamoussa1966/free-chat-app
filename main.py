@@ -1019,6 +1019,36 @@ def _hotfix128_result_semantics(result: dict) -> dict:
     return out
 
 
+def _authoritative_ui_projection(chat: dict | None, ui_results: list[dict] | None = None) -> dict:
+    """Expose UI projection counts without making the UI an authority.
+
+    Canonical Message/Request/Round identity remains owned by the application
+    ConversationRecord. Visible messages may include provider/system artifacts.
+    """
+    chat = chat if isinstance(chat, dict) else {}
+    messages = chat.get("messages") if isinstance(chat.get("messages"), list) else []
+    rows = [r for r in (ui_results or []) if isinstance(r, dict)]
+    return {
+        "message_count": len(messages),
+        "result_rows": len(rows),
+        "message_count_authoritative": False,
+        "authoritative_counter_source": "V26_3_CANONICAL_CONVERSATION_STORE",
+        "ui_message_count_may_include_provider_or_system_artifacts": True,
+        "separate_from_canonical_message_count": True,
+    }
+
+
+def _format_authoritative_counter_summary(counters: dict | None) -> str:
+    """Format canonical counters only; never promote UI counts to authority."""
+    c = counters if isinstance(counters, dict) else {}
+    return (
+        f"canonical_message_count={c.get('canonical_message_count', 'NOT_PROVEN')} "
+        f"canonical_request_count={c.get('canonical_request_count', 'NOT_PROVEN')} "
+        f"canonical_round_count={c.get('canonical_round_count', 'NOT_PROVEN')} "
+        f"counter_semantics_consistent={c.get('counter_semantics_consistent', 'NOT_PROVEN')}"
+    )
+
+
 def _public_result(result: dict) -> dict:
     """Return the UI-safe result persisted in session state. Raw provider payloads stay transient."""
     public = _hotfix128_result_semantics(result)
@@ -2680,7 +2710,7 @@ def run_app() -> None:
                 st.session_state.get("last_security_audit"),
                 st.session_state.get("last_production_core_report"),
             )
-            # HOTFIX146: fresh, observational final-closure report. This layer
+            # HOTFIX147: fresh, observational final-closure report. This layer
             # never mutates canonical persistence or provider execution.
             st.session_state.last_v23_final_closure_audit = build_v23_final_closure_audit(
                 chat,
@@ -2701,7 +2731,7 @@ def run_app() -> None:
             st.json(report)
             closure = st.session_state.get("last_v23_final_closure_audit") or {}
             if closure:
-                st.subheader("HOTFIX146 — V23 Final Closure Audit")
+                st.subheader("HOTFIX147 — V23 Final Closure Audit")
                 st.json(closure)
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
