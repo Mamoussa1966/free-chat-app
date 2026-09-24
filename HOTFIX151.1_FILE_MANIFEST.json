@@ -1,0 +1,20 @@
+{
+  "release": "HOTFIX151.1",
+  "baseline": "HOTFIX151_V23_FULL_AUDIT_COPY_DOWNLOAD_UX.zip",
+  "baseline_file_count": 413,
+  "final_file_count": 416,
+  "missing_baseline_files": [],
+  "modified_existing_files": [
+    "main.py"
+  ],
+  "added_files": [
+    "HOTFIX151.1_RELEASE_NOTES.md",
+    "VERSION_HOTFIX151.1.txt",
+    "HOTFIX151.1_FILE_MANIFEST.json"
+  ],
+  "scope": "Dedicated mobile full-audit copy control; no audit logic changes.",
+  "verification": {
+    "main_py_compile": "PASS",
+    "pytest": "515 passed"
+  }
+}

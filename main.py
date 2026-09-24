@@ -2772,6 +2772,38 @@ def run_app() -> None:
                 mime="application/json",
                 key="v23_full_audit_download",
             )
+            # HOTFIX151.1: standalone mobile copy control. The copy action is
+            # executed inside a small browser component so the user does not
+            # need to select a huge Streamlit code block manually.
+            _audit_copy_html = f"""
+            <div style="font-family: sans-serif; width: 100%;">
+              <button id="copyAudit" style="width:100%; padding:12px; font-size:16px; cursor:pointer;">📋 نسخ التقرير كاملًا</button>
+              <div id="copyStatus" style="margin-top:8px; font-size:14px;"></div>
+              <textarea id="auditText" readonly style="position:absolute; left:-9999px; top:0; width:1px; height:1px; opacity:0;"></textarea>
+            </div>
+            <script>
+              const auditText = document.getElementById('auditText');
+              auditText.value = {json.dumps(audit_export_text, ensure_ascii=False)};
+              const status = document.getElementById('copyStatus');
+              document.getElementById('copyAudit').addEventListener('click', async () => {{
+                try {{
+                  await navigator.clipboard.writeText(auditText.value);
+                  status.textContent = '✅ تم نسخ التقرير كاملًا إلى الحافظة';
+                  return;
+                }} catch (e) {{}}
+                try {{
+                  auditText.focus();
+                  auditText.select();
+                  auditText.setSelectionRange(0, auditText.value.length);
+                  const ok = document.execCommand('copy');
+                  status.textContent = ok ? '✅ تم نسخ التقرير كاملًا إلى الحافظة' : '⚠️ تعذر النسخ؛ استخدم زر التنزيل أدناه';
+                }} catch (e) {{
+                  status.textContent = '⚠️ تعذر النسخ؛ استخدم زر التنزيل أدناه';
+                }}
+              }});
+            </script>
+            """
+            components_html(_audit_copy_html, height=75, scrolling=False)
             st.code(audit_export_text, language="json")
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
