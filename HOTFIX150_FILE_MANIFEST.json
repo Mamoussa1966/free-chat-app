@@ -1,0 +1,38 @@
+{
+  "release": "HOTFIX150_V26_3_CANONICAL_REQUEST_ROUND_IDENTITY_BINDING_CLOSURE",
+  "baseline": "HOTFIX149_V26_3_LIVE_CANONICAL_COUNTER_RUNTIME_CLOSURE_FINAL_VERIFIED.zip",
+  "baseline_file_count": 403,
+  "final_file_count": 408,
+  "preserved_baseline_files": 403,
+  "missing_existing_files": [],
+  "added_files": [
+    "HOTFIX150_RELEASE_NOTES.md",
+    "HOTFIX150_RUNTIME_IDENTITY_BINDING_GATE.py",
+    "VERSION_HOTFIX150.txt",
+    "tests/test_hotfix150_v26_3_request_round_identity_binding.py",
+    "HOTFIX150_FILE_MANIFEST.json"
+  ],
+  "modified_existing_files": [
+    "conversation_v25_runtime.py"
+  ],
+  "scope_guards": {
+    "secrets": "UNCHANGED",
+    "models": "UNCHANGED",
+    "free_cascade": "UNCHANGED",
+    "provider_adapters": "UNCHANGED",
+    "seat_count": "UNCHANGED",
+    "synthesis": "UNCHANGED",
+    "ui_labels": "UNCHANGED",
+    "canonical_message_count": "UNCHANGED",
+    "canonical_request_count": "UNCHANGED",
+    "canonical_round_count": "UNCHANGED",
+    "hotfix147_148_rewritten": "NO",
+    "baseline_files_removed": false
+  },
+  "runtime_path": "TURN 1 -> persist -> Streamlit rerun -> TURN 2 -> persist -> Streamlit rerun -> reload canonical store -> rebuild indexes -> authoritative audit",
+  "regression_fixture": "Observed Request/Round inversion retained as a persisted canonical fixture; expected authoritative result is NOT_PROVEN.",
+  "tests": {
+    "full_pytest": "513 passed",
+    "runtime_gate": "4 passed"
+  }
+}
