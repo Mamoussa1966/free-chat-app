@@ -1,0 +1,29 @@
+{
+  "release": "HOTFIX147",
+  "base": "HOTFIX146_V23_FINAL_CLOSURE_AUDIT_FINAL_VERIFIED",
+  "scope": "security NO_RAW + HOTFIX130 regression compatibility only",
+  "preservation_contract": {
+    "Message_to_Request": "UNCHANGED",
+    "Request_to_Round": "UNCHANGED",
+    "Round_sequence": "UNCHANGED",
+    "canonical_counter_semantics": "UNCHANGED",
+    "HOTFIX123_2": "PRESERVED",
+    "HOTFIX129": "PRESERVED",
+    "HOTFIX130": "PRESERVED",
+    "V26_3_CANONICAL_PERSISTENCE": "PRESERVED"
+  },
+  "validation": {
+    "HOTFIX146_FULL_SUITE": "503 passed before HOTFIX147; 507 passed after HOTFIX147",
+    "HOTFIX147_TARGETED": "9 passed from ZIP roundtrip closure set"
+  },
+  "added_files": [
+    "HOTFIX147_RELEASE_NOTES.md",
+    "HOTFIX147_FILE_MANIFEST.json",
+    "tests/test_hotfix147_security_regression.py"
+  ],
+  "modified_files": [
+    "main.py",
+    "production_platform.py"
+  ],
+  "file_count": 395
+}

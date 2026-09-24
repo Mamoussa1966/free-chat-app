@@ -156,11 +156,23 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         "AUTHORITATIVE_METRICS": bool(record and record.get("request_metrics")),
     }
     forbidden = json.dumps(chat, ensure_ascii=False, default=str)
+    def _has_nonempty_field(value: Any, names: set[str]) -> bool:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key).strip().lower() in names and item not in (None, "", [], {}, False):
+                    return True
+                if _has_nonempty_field(item, names):
+                    return True
+        elif isinstance(value, (list, tuple)):
+            return any(_has_nonempty_field(item, names) for item in value)
+        return False
+
     forbidden_hits = {
         "API_KEYS": bool(re.search(r"\b(?:AIza[A-Za-z0-9_-]{20,}|(?:sk|xai)-[A-Za-z0-9._-]{16,})\b", forbidden)),
         "AUTH_HEADERS": bool(re.search(r"(?i)\b(?:authorization|x-api-key|x-goog-api-key)\s*[:=]", forbidden)),
-        "RAW_PROVIDER_PAYLOADS": "raw_provider_payload" in forbidden,
-        "SENSITIVE_DIAGNOSTICS": "attempt_diagnostics" in forbidden,
+        # HOTFIX147: sanitized/redacted field names are allowed; retained raw values are not.
+        "RAW_PROVIDER_PAYLOADS": _has_nonempty_field(chat, {"raw_provider_payload", "raw_payload", "provider_payload", "response_body"}),
+        "SENSITIVE_DIAGNOSTICS": _has_nonempty_field(chat, {"attempt_diagnostics", "sensitive_diagnostics", "internal_diagnostics", "debug_payload"}),
     }
     ok = all(required.values()) and not any(forbidden_hits.values())
     return {"status": "PASS" if ok else "FAIL", "required_artifacts": required, "forbidden_data": forbidden_hits, "messages": len(messages), "request_records": len(records)}
@@ -477,7 +489,22 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
         raw = json.dumps(chat, ensure_ascii=False, default=str)
         if re.search(r"(?i)(api[_ -]?key|authorization|x-api-key|x-goog-api-key)\s*[:=]", raw):
             checks["NO_CREDENTIALS_IN_CHAT_STATE"] = False
-        if "raw_provider_payload" in raw:
+        # HOTFIX147: the field name itself is not retained provider data.
+        # Fail closed only when a forbidden raw-payload field carries a non-empty
+        # value, including when nested inside persisted request/result records.
+        def _contains_raw_payload_value(value: Any) -> bool:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    k = str(key).strip().lower()
+                    if k in {"raw_provider_payload", "raw_payload", "provider_payload", "response_body"}:
+                        if item not in (None, "", [], {}, False):
+                            return True
+                    if _contains_raw_payload_value(item):
+                        return True
+            elif isinstance(value, (list, tuple)):
+                return any(_contains_raw_payload_value(item) for item in value)
+            return False
+        if _contains_raw_payload_value(chat):
             checks["NO_RAW_PROVIDER_PAYLOADS_IN_HISTORY"] = False
         # Application-owned runtime evidence overrides any stale/header PASS.
         # A failed continuation gate or bridge isolation proof is a security failure.

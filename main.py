@@ -1441,6 +1441,51 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     return [results[seat.key] for seat in seats]
 
 
+def _authoritative_ui_projection(chat: dict, request_id: str) -> dict:
+    """HOTFIX147/HOTFIX130 compatibility API.
+
+    UI counters are a presentation projection of the persisted authoritative
+    request record. They are never derived from rendered message rows, agent
+    prose, or the latest-request projection.
+    """
+    chat = chat if isinstance(chat, dict) else {}
+    rid = str(request_id or "").strip()
+    records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
+    record = next((r for r in records if str(r.get("request_id") or "") == rid), None)
+    if not record:
+        return {"configured": 0, "requested": 0, "executed": 0, "success": 0,
+                "dispatch_rejected": 0, "provider_error": 0, "not_configured": 0,
+                "cascade_attempts": 0, "request_id": rid}
+    metrics = record.get("request_metrics") if isinstance(record.get("request_metrics"), dict) else {}
+    results = record.get("results") if isinstance(record.get("results"), list) else []
+    statuses = [str(r.get("status") or "").upper() for r in results if isinstance(r, dict)]
+    return {
+        "configured": int(metrics.get("configured_seats", sum(1 for r in results if r.get("model_candidates_configured") is True and r.get("request_routed") is True))),
+        "requested": int(metrics.get("requested_seats", sum(1 for r in results if r.get("request_routed") is True))),
+        "executed": int(metrics.get("executed_seats", sum(1 for r in results if r.get("runtime_execution_events")))),
+        "success": int(metrics.get("successful_seats", statuses.count("SUCCESS"))),
+        "dispatch_rejected": statuses.count("DISPATCH_REJECTED"),
+        "provider_error": statuses.count("PROVIDER_ERROR"),
+        "not_configured": statuses.count("NOT_CONFIGURED"),
+        "cascade_attempts": int(metrics.get("total_cascade_attempts", sum(len(r.get("runtime_execution_events") or []) for r in results if isinstance(r, dict)))),
+        "request_id": rid,
+    }
+
+
+def _format_authoritative_counter_summary(counters: dict) -> str:
+    """Format semantic counters without a generic failed/successful aggregate."""
+    return " · ".join([
+        f"CONFIGURED {int(counters.get('configured', 0))}",
+        f"REQUESTED {int(counters.get('requested', 0))}",
+        f"EXECUTED {int(counters.get('executed', 0))}",
+        f"SUCCESS {int(counters.get('success', 0))}",
+        f"DISPATCH_REJECTED {int(counters.get('dispatch_rejected', 0))}",
+        f"PROVIDER_ERROR {int(counters.get('provider_error', 0))}",
+        f"NOT_CONFIGURED {int(counters.get('not_configured', 0))}",
+        f"CASCADE_ATTEMPTS {int(counters.get('cascade_attempts', 0))}",
+    ])
+
+
 def _authoritative_request_metrics(request_id: str, round_results: list[dict], audit_events: list[dict]) -> dict:
     """HOTFIX127: authoritative accounting from actual runtime execution events only.
 
@@ -2709,22 +2754,3 @@ def run_app() -> None:
 
 if __name__ == "__main__":
     run_app()
-
-
-def _authoritative_ui_projection(canonical_store):
-    return {
-        "authoritative_counter_source":"CANONICAL_IDENTITY_RECORDS",
-        "canonical_message_count": canonical_store.get("persisted_message_count",0),
-        "canonical_request_count": canonical_store.get("persisted_request_count",0),
-        "canonical_round_count": canonical_store.get("persisted_round_count",0),
-        "counter_semantics_consistent": canonical_store.get("counter_semantics_consistent", False),
-    }
-
-def _format_authoritative_counter_summary(proj):
-    return (
-        f"messages={proj.get('canonical_message_count',0)} "
-        f"requests={proj.get('canonical_request_count',0)} "
-        f"rounds={proj.get('canonical_round_count',0)} "
-        f"source={proj.get('authoritative_counter_source','UNKNOWN')}"
-    )
-

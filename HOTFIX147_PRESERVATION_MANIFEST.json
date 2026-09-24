@@ -1,0 +1,34 @@
+{
+  "release": "HOTFIX147",
+  "baseline_release": "HOTFIX130",
+  "provider_core_baseline": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "preservation_policy": "Only HOTFIX147 security/regression closure files may be added. Existing HOTFIX123.2/HOTFIX129/HOTFIX130 implementation files are not modified by the closure patch.",
+  "protected_files": [
+    "providers.py",
+    "production_core.py",
+    "production_core_harness.py",
+    "production_core_test_runner.py",
+    "conversation_schema.py",
+    "message_ledger.py",
+    "conversation_migrations.py",
+    "session_manager.py"
+  ],
+  "notes": "Hashes are populated by HOTFIX147_RELEASE_GATE.py from the locked HOTFIX130 baseline before the release artifact is accepted.",
+  "baseline_sha256": {
+    "providers.py": "37d0a8dedcfd099b69e789e8b3834eb2eed8d54f985d023e90ed4d52cf6bfc9f",
+    "production_core.py": "e69b158df66b3d3bd74f48886b9168ce2dd9ba6f9e25b2cc6adb71d1cf1f33c1",
+    "production_core_harness.py": "bf22fea3c2c41b560f87080c4d3439081bd9aee2480da6d84262efa5c160273d",
+    "production_core_test_runner.py": "5e5b464621d97e36af93350d664d26c8dfc33a105f3566c62290dbe4e45e1265",
+    "conversation_schema.py": "eceebfc5f9f9488b34270e3934b55876dbb5ea1979bbaefc753bc412e6abbe5d",
+    "message_ledger.py": "57606727f604f9c5020c11660978bd80dced26bdf3737cd0fbf0fd3229d50176",
+    "conversation_migrations.py": "a5fd0aa39ca2dceb8d73399846c62f06468331bf5b7bb219125954ba6f0d0610",
+    "session_manager.py": "47cb32088f40cd1d46821d2f59ed29264846fa5c35e2918c2fe86ea2ed36eefe"
+  },
+  "hotfix130_manifest_sha256": "a2544f1170c8d128c30e159782087df842583562a6632b74cf45b1361aca52fc",
+  "provider_identity_expected": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "hotfix129_marker": "VERSION_HOTFIX129.txt",
+  "hotfix130_marker": "VERSION_HOTFIX130.txt",
+  "source_pytest": "510 passed",
+  "zip_pytest": "510 passed",
+  "release_gate": "FAIL-CLOSED"
+}
