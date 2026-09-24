@@ -1,27 +1,77 @@
 from main import _authoritative_ui_projection, _format_authoritative_counter_summary
 
 
-def test_authoritative_ui_projection_is_non_authoritative():
-    projection = _authoritative_ui_projection({
+def _record():
+    return {
+        "request_id": "HF147-HF130-RID",
+        "results": [
+            {"status": "SUCCESS", "seat": "gemini"},
+            {"status": "SUCCESS", "seat": "deepseek"},
+            {"status": "DISPATCH_REJECTED", "seat": "claude"},
+            {"status": "DISPATCH_REJECTED", "seat": "grok"},
+            {"status": "NOT_CONFIGURED", "seat": "chatgpt"},
+            {"status": "NOT_CONFIGURED", "seat": "kimi"},
+        ],
+        "request_metrics": {
+            "configured_seats": 4,
+            "requested_seats": 4,
+            "executed_seats": 2,
+            "successful_seats": 2,
+            "total_cascade_attempts": 2,
+        },
+    }
+
+
+def test_hotfix130_authoritative_counter_compatibility_api_exists():
+    counters = _authoritative_ui_projection(
+        {"messages": [{"role": "assistant", "content": "six UI rows"}], "request_records": [_record()]},
+        "HF147-HF130-RID",
+    )
+    assert counters == {
+        "configured": 4,
+        "requested": 4,
+        "executed": 2,
+        "success": 2,
+        "dispatch_rejected": 2,
+        "provider_error": 0,
+        "not_configured": 2,
+        "cascade_attempts": 2,
+        "request_id": "HF147-HF130-RID",
+    }
+
+
+def test_hotfix130_authoritative_counter_never_uses_ui_message_count_or_prose():
+    chat = {
         "messages": [
-            {"role": "user", "message_id": "m1"},
-            {"role": "assistant", "message_id": "a1"},
-        ]
-    }, [{"status": "SUCCESS"}])
-    assert projection["message_count"] == 2
-    assert projection["result_rows"] == 1
-    assert projection["message_count_authoritative"] is False
-    assert projection["authoritative_counter_source"] == "V26_3_CANONICAL_CONVERSATION_STORE"
+            {"role": "assistant", "content": "SUCCESS 999999"},
+            {"role": "assistant", "content": "DISPATCH_REJECTED 999999"},
+        ],
+        "request_records": [_record()],
+    }
+    counters = _authoritative_ui_projection(chat, "HF147-HF130-RID")
+    assert counters["configured"] == 4
+    assert counters["requested"] == 4
+    assert counters["executed"] == 2
+    assert counters["success"] == 2
+    assert counters["dispatch_rejected"] == 2
+    assert counters["not_configured"] == 2
+    assert counters["cascade_attempts"] == 2
 
 
-def test_authoritative_counter_summary_uses_canonical_fields():
-    summary = _format_authoritative_counter_summary({
-        "canonical_message_count": 2,
-        "canonical_request_count": 2,
-        "canonical_round_count": 2,
-        "counter_semantics_consistent": True,
-    })
-    assert "canonical_message_count=2" in summary
-    assert "canonical_request_count=2" in summary
-    assert "canonical_round_count=2" in summary
-    assert "counter_semantics_consistent=True" in summary
+def test_hotfix130_counter_summary_preserves_semantic_labels():
+    summary = _format_authoritative_counter_summary(
+        {
+            "configured": 4,
+            "requested": 4,
+            "executed": 2,
+            "success": 2,
+            "dispatch_rejected": 2,
+            "provider_error": 0,
+            "not_configured": 2,
+            "cascade_attempts": 2,
+        }
+    )
+    assert "DISPATCH_REJECTED 2" in summary
+    assert "NOT_CONFIGURED 2" in summary
+    assert "failed" not in summary.lower()
+    assert "successful" not in summary.lower()
