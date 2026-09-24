@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any
 
-PLATFORM_VERSION = "V23.0.0-HOTFIX147-V23-SECURITY-REGRESSION-CLOSURE"
+PLATFORM_VERSION = "V23.0.0-RELEASE-CANDIDATE"
 CORE_BASELINE = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 MAX_CONTEXT_CHARS = 30000
 MIN_CONTEXT_CHARS = 6000
@@ -156,21 +156,11 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         "AUTHORITATIVE_METRICS": bool(record and record.get("request_metrics")),
     }
     forbidden = json.dumps(chat, ensure_ascii=False, default=str)
-    def has_nonempty_field(obj, names):
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if str(k).lower() in names and v not in (None, "", [], {}):
-                    return True
-                if has_nonempty_field(v, names):
-                    return True
-        elif isinstance(obj, list):
-            return any(has_nonempty_field(x, names) for x in obj)
-        return False
     forbidden_hits = {
         "API_KEYS": bool(re.search(r"\b(?:AIza[A-Za-z0-9_-]{20,}|(?:sk|xai)-[A-Za-z0-9._-]{16,})\b", forbidden)),
         "AUTH_HEADERS": bool(re.search(r"(?i)\b(?:authorization|x-api-key|x-goog-api-key)\s*[:=]", forbidden)),
-        "RAW_PROVIDER_PAYLOADS": has_nonempty_field(chat, {"raw_provider_payload", "raw_payload", "response_body", "provider_payload"}),
-        "SENSITIVE_DIAGNOSTICS": has_nonempty_field(chat, {"attempt_diagnostics", "sensitive_diagnostics", "internal_diagnostics", "debug_payload"}),
+        "RAW_PROVIDER_PAYLOADS": "raw_provider_payload" in forbidden,
+        "SENSITIVE_DIAGNOSTICS": "attempt_diagnostics" in forbidden,
     }
     ok = all(required.values()) and not any(forbidden_hits.values())
     return {"status": "PASS" if ok else "FAIL", "required_artifacts": required, "forbidden_data": forbidden_hits, "messages": len(messages), "request_records": len(records)}
@@ -469,25 +459,6 @@ def provider_health_snapshot(seats: list[Any], credentials: dict[str, Any], mode
     return rows
 
 
-def _contains_nonempty_forbidden_field(obj: Any, forbidden_keys: set[str]) -> bool:
-    """Detect persisted forbidden fields structurally, not by substring search.
-
-    User/provider prose may legitimately contain audit labels such as
-    NO_RAW_PROVIDER_PAYLOADS_IN_HISTORY. A substring search therefore creates
-    false Security FAILs. Only an actual non-empty application-owned field is
-    evidence of persisted forbidden data.
-    """
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if str(key).lower() in forbidden_keys and value not in (None, "", [], {}):
-                return True
-            if _contains_nonempty_forbidden_field(value, forbidden_keys):
-                return True
-    elif isinstance(obj, list):
-        return any(_contains_nonempty_forbidden_field(x, forbidden_keys) for x in obj)
-    return False
-
-
 def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
     checks = {
         "NO_CREDENTIALS_IN_CHAT_STATE": True,
@@ -504,16 +475,9 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
     }
     for chat in chats or []:
         raw = json.dumps(chat, ensure_ascii=False, default=str)
-        # Security evidence is structural. Never interpret user/provider prose
-        # or UI labels as persisted secrets/payloads.
-        if _contains_nonempty_forbidden_field(chat, {
-            "api_key", "apikey", "authorization", "auth_header",
-            "x_api_key", "x-goog-api-key", "secret", "token", "password",
-        }) or re.search(r"(?i)\b(?:AIza[A-Za-z0-9_-]{20,}|(?:sk|xai)-[A-Za-z0-9._-]{16,})\b", raw):
+        if re.search(r"(?i)(api[_ -]?key|authorization|x-api-key|x-goog-api-key)\s*[:=]", raw):
             checks["NO_CREDENTIALS_IN_CHAT_STATE"] = False
-        if _contains_nonempty_forbidden_field(chat, {
-            "raw_provider_payload", "raw_payload", "response_body", "provider_payload"
-        }):
+        if "raw_provider_payload" in raw:
             checks["NO_RAW_PROVIDER_PAYLOADS_IN_HISTORY"] = False
         # Application-owned runtime evidence overrides any stale/header PASS.
         # A failed continuation gate or bridge isolation proof is a security failure.
