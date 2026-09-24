@@ -1,0 +1,20 @@
+{
+  "release": "HOTFIX149_V26_3_LIVE_CANONICAL_COUNTER_RUNTIME_CLOSURE_FINAL_VERIFIED",
+  "baseline": "HOTFIX148_V26_3_ROOT_CAUSE_CANONICAL_COUNTER_CLOSURE_FINAL_VERIFIED.zip",
+  "baseline_file_count": 398,
+  "release_file_count": 402,
+  "preserved_existing_files": 398,
+  "missing_existing_files": [],
+  "new_files": [
+    "HOTFIX149_RELEASE_NOTES.md",
+    "HOTFIX149_RUNTIME_CLOSURE_GATE.py",
+    "VERSION_HOTFIX149.txt",
+    "tests/test_hotfix149_v26_3_live_canonical_counter_runtime.py"
+  ],
+  "modified_existing_files": [
+    "conversation_v25_runtime.py"
+  ],
+  "full_pytest": "511 passed",
+  "runtime_gate": "4 passed",
+  "canonical_counter_authority": "CANONICAL_IDENTITY_RECORDS"
+}

@@ -70,7 +70,7 @@ def canonical_history_hash(record: dict) -> str:
             for x in record.get("messages", []) if isinstance(x, dict) and x.get("message_id")
         ],
         "requests": [
-            {k: x.get(k) for k in ("request_id", "conversation_id", "session_id", "message_id", "created_at", "state", "canonical_round_base", "canonical_round_allocation_contract", "canonical_round_span")}
+            {k: x.get(k) for k in ("request_id", "conversation_id", "session_id", "message_id", "created_at", "state")}
             for x in record.get("requests", []) if isinstance(x, dict) and x.get("request_id")
         ],
         "rounds": [
@@ -364,58 +364,10 @@ def canonical_upsert_request(chat: dict, request: dict, session_state=None) -> d
     row["request_id"] = rid
     existing = next((x for x in rec["requests"] if isinstance(x, dict) and str(x.get("request_id") or "") == rid), None)
     if existing is None:
-        # HOTFIX149: allocate the conversation-scoped Round ordinal at the
-        # authoritative Request-creation boundary, not when provider execution
-        # happens.  Provider/harness completion order is intentionally allowed to
-        # differ from user-turn order; Round identity must not follow that order.
-        # The allocation is persisted on the RequestRecord and reused by every
-        # later execution/commit for this Request.
-        if not row.get("canonical_round_base"):
-            # Request creation order is the authoritative allocator.  Existing
-            # RequestRecords already reserve a contiguous Round span even when
-            # their RoundRecords have not yet been written (or when completion
-            # order is reversed), so allocation cannot depend on `rounds` list
-            # contents alone.
-            reserved_end = 0
-            for prior in rec.get("requests", []):
-                if not isinstance(prior, dict):
-                    continue
-                try:
-                    base = int(prior.get("canonical_round_base") or 0)
-                    span = max(1, int(prior.get("canonical_round_span") or prior.get("rounds") or 1))
-                except (TypeError, ValueError):
-                    continue
-                if base > 0:
-                    reserved_end = max(reserved_end, base + span - 1)
-            requested_rounds = max(1, int(row.get("rounds") or 1))
-            row["canonical_round_base"] = reserved_end + 1
-            row["canonical_round_allocation_contract"] = "V26.3.21-REQUEST-CREATION-MONOTONIC-ROUND/v1"
-            row["canonical_round_span"] = requested_rounds
         rec["requests"].append(copy.deepcopy(row))
         existing = rec["requests"][-1]
     else:
-        # Existing RequestRecords are immutable with respect to their allocated
-        # Round base.  A rerun must never recalculate the base from current
-        # provider completion order or list ordering.
-        if not existing.get("canonical_round_base"):
-            numbers = []
-            for candidate in rec.get("rounds", []):
-                if not isinstance(candidate, dict):
-                    continue
-                if str(candidate.get("request_id") or "") != rid:
-                    continue
-                try:
-                    n = int(candidate.get("round") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if n > 0:
-                    numbers.append(n)
-            if numbers:
-                existing["canonical_round_base"] = min(numbers)
-                existing["canonical_round_allocation_contract"] = "V26.3.21-REQUEST-CREATION-MONOTONIC-ROUND/v1"
         for k, v in row.items():
-            if k in {"canonical_round_base", "canonical_round_allocation_contract", "canonical_round_span"} and existing.get(k):
-                continue
             if v not in (None, "", [], {}):
                 existing[k] = copy.deepcopy(v)
     commit_canonical_record(chat, session_state)

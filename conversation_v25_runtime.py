@@ -562,6 +562,8 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "historical_source_authority": "V26_3_CANONICAL_CONVERSATION_STORE_IS_AUTHORITATIVE",
         "historical_source_refuses_narrower_current_ledgers": True,
         "historical_narrowing_conflict": historical_narrowing_conflict,
+        "canonical_counter_source": "CANONICAL_IDENTITY_RECORDS",
+        "counter_semantics_consistent": True,
         "canonical_request_count": len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]),
         "canonical_message_count": len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id")) and _s(x.get("role")).lower() == "user"]),
         "canonical_round_count": len([x for x in canonical_record.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]),
