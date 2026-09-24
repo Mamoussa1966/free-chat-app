@@ -1,0 +1,30 @@
+{
+  "release": "HOTFIX148",
+  "name": "HOTFIX148_V26_3_ROOT_CAUSE_CANONICAL_COUNTER_CLOSURE_FINAL_VERIFIED",
+  "baseline": "HOTFIX147_V23_SECURITY_REGRESSION_CLOSURE(1).zip",
+  "baseline_file_count": 395,
+  "release_file_count": 398,
+  "added_files": [
+    "HOTFIX148_RELEASE_NOTES.md",
+    "tests/test_hotfix148_v26_3_canonical_counter_root_cause.py",
+    "HOTFIX148_FILE_MANIFEST.json"
+  ],
+  "modified_files": [
+    "conversation_v25_runtime.py"
+  ],
+  "root_cause": "Authoritative V26.3 historical audit canonical_message_count used raw canonical messages list length instead of HOTFIX130 identity-bearing user MessageRecord semantics.",
+  "canonical_message_semantics": "IDENTITY_BEARING_USER_MESSAGE_RECORDS_ONLY",
+  "preserved": [
+    "HOTFIX123.2",
+    "HOTFIX129",
+    "HOTFIX130",
+    "HOTFIX147",
+    "Message-to-Request chain",
+    "Request-to-Round chain",
+    "Round sequence",
+    "No Local Engine",
+    "No Paid fallback",
+    "No automatic model selection"
+  ],
+  "validation": "509 passed"
+}
