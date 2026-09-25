@@ -358,7 +358,10 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         if str(event.get("type") or "").upper() == "CONTINUATION_GATE" and str(event.get("requested_request_id") or "") == str(request_id or ""):
             continuation_audit = dict(event)
             break
-    continuation_status = "PASS" if (not continuation_audit or (continuation_audit.get("mode") == "READ_ONLY" and continuation_audit.get("provider_execution", 0) == 0 and continuation_audit.get("cascade", 0) == 0 and continuation_audit.get("new_round", 0) == 0 and continuation_audit.get("new_bridge", 0) == 0 and continuation_audit.get("actual_request_id") == request_id)) else "FAIL"
+    if not continuation_audit:
+        continuation_status = "NOT_REQUESTED"
+    else:
+        continuation_status = "PASS" if (continuation_audit.get("mode") == "READ_ONLY" and continuation_audit.get("provider_execution", 0) == 0 and continuation_audit.get("cascade", 0) == 0 and continuation_audit.get("new_round", 0) == 0 and continuation_audit.get("new_bridge", 0) == 0 and continuation_audit.get("actual_request_id") == request_id) else "FAIL"
     if bridge is None:
         # HOTFIX125: no Bridge was requested => Bridge is NOT_REQUESTED, not FAIL.
         # But an explicitly requested Bridge Test with no authoritative audit is a
@@ -438,7 +441,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     else:
         bridge_checks["UNIQUE_BRIDGE_ID"] = True
     bridge_gate_ok = bridge_status in {"PASS", "NOT_REQUESTED"}
-    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, continuation_status, round_identity_status)) and bridge_gate_ok and identity_match and bridge_identity_status == "PASS"
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, round_identity_status)) and continuation_status in {"PASS", "NOT_REQUESTED"} and bridge_gate_ok and identity_match and bridge_identity_status == "PASS"
     return {
         "schema": "v23-platform-audit/v1",
         "status": "PASS" if overall else "FAIL",

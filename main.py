@@ -15,14 +15,14 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
 from v23_final_closure_audit import build_v23_final_closure_audit
 from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
-from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical
+from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_audit_preflight
 from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
@@ -44,7 +44,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 from release_identity import deployed_release_identity, assert_deployed_release_identity
 
 APP_VERSION = PROVIDER_VERSION
-DISPLAY_VERSION = HOTFIX_RELEASE_VERSION
+DISPLAY_VERSION = CURRENT_HOTFIX_RELEASE_VERSION
 HOTFIX_VERSION = "HOTFIX144"
 PLATFORM_RELEASE_VERSION = "V25.0-CONVERSATION-LEDGER-MESSAGE-RUNTIME"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -1663,7 +1663,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
     # this Request, but the authoritative RoundRecord receives the next monotonic
     # conversation ordinal from the canonical ledger. This makes Message 2 ->
     # Request 2 -> Round 2 provable from Application-Owned Runtime State itself.
-    round_base = _authoritative_round_base(chat)
+    request_row_for_round_base = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), {})
+    round_base = int(request_row_for_round_base.get("canonical_round_base") or _authoritative_round_base(chat))
     try:
         lifecycle.record("REQUEST_START", round_id=0, status="RUNNING")
         lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds), "conversation_round_base": str(round_base)})
@@ -2572,7 +2573,8 @@ def run_app() -> None:
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
         chat["request_ids"].append(fingerprint)
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
-        chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID"})
+        canonical_round_base = _authoritative_round_base(chat)
+        chat["request_records"].append({"request_id": request_id, "fingerprint": fingerprint, "rounds": rounds, "canonical_round_base": canonical_round_base, "created_at": _now(), "identity_authority": "RUNTIME_REQUEST_ID", "canonical_request_ordinal": len(chat.get("request_records", [])) + 1})
         record0 = next(r for r in chat["request_records"] if r.get("request_id") == request_id)
         attach_request_identity(record0, chat, user_message_id, request_id)
         # V26.3.8: RequestRecord is inserted into the canonical ConversationRecord
@@ -2601,7 +2603,7 @@ def run_app() -> None:
         chat["messages"].append(user_message)
         canonical_upsert_message(chat, {"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": user_message.get("created_at")}, st.session_state)
         persist_identity(chat, st.session_state, message={"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": user_message.get("created_at")})
-        record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"))
+        record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"), request_id=request_id)
         update_memory(chat, user_message_id, prompt, (chat.get("conversation_context") or {}).get("digest", ""))
         timeline_event(chat, request_id, user_message_id, "MESSAGE_CREATED", role="user")
         if voice_audio is not None:
@@ -2717,6 +2719,11 @@ def run_app() -> None:
         with action_run:
             if st.button("▶️ Run full V23 platform audit", key="v23_platform_audit_actionbar", use_container_width=True):
                 chat = _active_chat()
+                # HOTFIX152: Canonical Audit Preflight is mandatory. Full Audit
+                # must consume the same canonical runtime history that survived
+                # Streamlit reruns, never the narrowed current-request projection.
+                preflight = canonical_audit_preflight(chat, st.session_state)
+                st.session_state.last_v23_canonical_audit_preflight = preflight
                 latest = chat.get("request_records", [])[-1] if chat.get("request_records") else {}
                 continuation_snapshot = st.session_state.get("last_continuation_audit") or {}
                 rid = str(continuation_snapshot.get("requested_request_id") or latest.get("request_id") or "")
@@ -2732,6 +2739,7 @@ def run_app() -> None:
                     st.session_state.get("last_security_audit"),
                     st.session_state.get("last_production_core_report"),
                 )
+                st.session_state.last_v23_platform_audit["canonical_audit_preflight"] = preflight
                 # HOTFIX146: fresh, observational final-closure report. This
                 # layer never mutates canonical persistence or provider execution.
                 st.session_state.last_v23_final_closure_audit = build_v23_final_closure_audit(
