@@ -2683,8 +2683,75 @@ def run_app() -> None:
     v25_audit = authoritative_audit(chat, st.session_state)
     v25_audit["v26_3_persistence"] = persistence_audit(chat, st.session_state)
     with st.expander("🧭 HOTFIX118 — Authoritative Historical Conversation Audit", expanded=True):
+        # HOTFIX155: dedicated Copy + Print controls for the complete HOTFIX118
+        # authoritative audit payload. These controls are presentation-only and
+        # never mutate canonical persistence, counters, provider execution, or audit truth.
+        hotfix118_export_text = json.dumps(v25_audit, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+        hotfix118_action_copy, hotfix118_action_print = st.columns([1, 1])
+
+        with hotfix118_action_copy:
+            copy_payload = json.dumps(hotfix118_export_text, ensure_ascii=False)
+            copy_html = f"""
+            <div style="font-family:sans-serif;width:100%;">
+              <button id="copy-hotfix118" style="width:100%;height:38px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">📋 نسخ HOTFIX118</button>
+              <div id="copy-hotfix118-status" style="font-size:11px;margin-top:3px;text-align:center;min-height:14px;"></div>
+            </div>
+            <script>
+            (() => {{
+              const payload = {copy_payload};
+              const button = document.getElementById('copy-hotfix118');
+              const status = document.getElementById('copy-hotfix118-status');
+              const ok = () => {{ status.textContent = '✓ تم نسخ تقرير HOTFIX118 بالكامل'; }};
+              const fail = () => {{ status.textContent = 'تعذر النسخ — استخدم تحديد/نسخ النص الظاهر'; }};
+              button.addEventListener('click', async () => {{
+                try {{
+                  if (navigator.clipboard && window.isSecureContext) {{
+                    await navigator.clipboard.writeText(payload);
+                    ok(); return;
+                  }}
+                }} catch (e) {{}}
+                try {{
+                  const ta = document.createElement('textarea');
+                  ta.value = payload;
+                  ta.setAttribute('readonly', '');
+                  ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.top = '0';
+                  document.body.appendChild(ta); ta.focus(); ta.select();
+                  const copied = document.execCommand('copy');
+                  document.body.removeChild(ta);
+                  if (copied) {{ ok(); return; }}
+                }} catch (e) {{}}
+                fail();
+              }});
+            }})();
+            </script>
+            """
+            components_html(copy_html, height=58, scrolling=False)
+
+        with hotfix118_action_print:
+            print_payload = html.escape(hotfix118_export_text)
+            print_html = f"""
+            <div style="font-family:sans-serif;width:100%;">
+              <button id="print-hotfix118" style="width:100%;height:38px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">🖨️ طباعة HOTFIX118</button>
+            </div>
+            <script>
+            (() => {{
+              const button = document.getElementById('print-hotfix118');
+              button.addEventListener('click', () => {{
+                const report = {json.dumps(print_payload, ensure_ascii=False)};
+                const w = window.open('', '_blank', 'noopener,noreferrer');
+                if (!w) {{ window.print(); return; }}
+                w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>HOTFIX118 — Authoritative Historical Conversation Audit</title><style>body{{font-family:monospace;white-space:pre-wrap;word-break:break-word;margin:24px;font-size:12px;line-height:1.45}}@media print{{body{{margin:12mm}}}}</style></head><body>' + report + '</body></html>');
+                w.document.close();
+                w.focus();
+                setTimeout(() => w.print(), 250);
+              }});
+            }})();
+            </script>
+            """
+            components_html(print_html, height=58, scrolling=False)
+
         st.json(v25_audit)
-        st.caption("مصدر الحقيقة: Application-Owned Runtime Records فقط؛ Agent prose غير مستخدم للهوية أو العدادات.")
+        st.caption("مصدر الحقيقة: Application-Owned Runtime Records فقط؛ Agent prose غير مستخدم للهوية أو العدادات. HOTFIX155: النسخ والطباعة يستخدمان نفس payload الكامل المعروض.")
     with st.expander("🧭 Conversation Runtime / Provenance", expanded=False):
         st.json(runtime_audit)
         syn = st.session_state.get("last_synthesis") or {}

@@ -150,3 +150,11 @@ Built directly from the complete previous release artifact. The complete file tr
 # HOTFIX132
 
 Authoritative result / identity / bridge-prose isolation. Provider prose is never a source of structured execution state or Request ID, and bridge values are redacted from agent prose.
+
+
+# HOTFIX155
+
+- Added Copy and Print controls directly inside the HOTFIX118 Authoritative Historical Conversation Audit section.
+- Copy serializes the complete application-owned HOTFIX118 audit payload; it does not read agent prose or alter canonical records.
+- Print opens the same complete serialized payload in a print-ready document.
+- No provider, cascade, identity, persistence, security, or audit truth logic changed.
