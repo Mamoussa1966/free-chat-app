@@ -104,7 +104,7 @@ def test_missing_continuation_evidence_is_not_pass():
     report = build_v23_platform_audit(
         c, "missing-request", {"chars": 0, "digest": ""}, [], {"status": "PASS", "checks": {}}, {"gate": "PASS"}
     )
-    assert report["continuation_runtime_gate"]["status"] == "NOT_REQUESTED"
+    assert report["continuation_runtime_gate"]["status"] == "NOT_PROVEN"
 
 
 def test_record_message_accepts_legacy_request_id_parameter():
