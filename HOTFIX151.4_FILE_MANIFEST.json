@@ -1,0 +1,15 @@
+{
+  "version": "HOTFIX151.4",
+  "baseline": "HOTFIX151.3",
+  "file_count": 424,
+  "missing_baseline_files": [],
+  "modified_existing_files": [
+    "main.py"
+  ],
+  "new_files": [
+    "HOTFIX151.4_RELEASE_NOTES.md",
+    "VERSION_HOTFIX151.4.txt",
+    "tests/test_hotfix151_4_single_audit_heading.py",
+    "HOTFIX151.4_FILE_MANIFEST.json"
+  ]
+}

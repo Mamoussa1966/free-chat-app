@@ -2708,10 +2708,10 @@ def run_app() -> None:
         st.json({"mode": "HOTFIX141_ABC", "requests": harness_report, "authoritative_source": "APPLICATION_OWNED_REQUEST_RECORDS"})
 
     with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=True):
-        # HOTFIX151.3: exactly one adjacent action bar.  The action bar is
-        # rendered before the report so Run/Copy/Download remain one stable
-        # control surface across Streamlit reruns.
-        st.subheader("🔐 V23 Security / Context / Platform Audit")
+        # HOTFIX151.4: the expander label IS the single V23 audit heading.
+        # Do not render a second inner subheader; doing so produced two
+        # visually identical audit headings, one above the action bar and
+        # one beside it. The three controls remain one adjacent action bar.
         action_run, action_copy, action_download = st.columns([1.25, 1.25, 1.25])
 
         with action_run:
