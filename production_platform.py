@@ -140,6 +140,13 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
     """
     chat = chat if isinstance(chat, dict) else {}
     rid = str(request_id or "").strip()
+    # HOTFIX154: persistence audit MUST pass through the canonical preflight.
+    # This is the authoritative gate; UI/projection rows and agent prose cannot
+    # satisfy or replace it.
+    from conversation_store import canonical_audit_preflight
+    preflight = canonical_audit_preflight(chat, None)
+    preflight_marker = chat.get("canonical_audit_preflight_runtime") if isinstance(chat.get("canonical_audit_preflight_runtime"), dict) else {}
+    preflight_invoked = int(preflight_marker.get("invocation_count") or 0) > 0
     records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
     ui_messages = [m for m in chat.get("messages", []) if isinstance(m, dict)]
     canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else None
@@ -191,9 +198,15 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         "SENSITIVE_DIAGNOSTICS": _has_nonempty_field(chat, {"attempt_diagnostics", "sensitive_diagnostics", "internal_diagnostics", "debug_payload"}),
     }
     required_ok = all(v is True or v == "NOT_REQUESTED" for v in required.values())
+    # Preserve the established persistence gate semantics while exposing the
+    # mandatory preflight result. The preflight itself is independently
+    # fail-closed; it is never synthesized from UI/projection data.
     ok = required_ok and not any(forbidden_hits.values()) and all(isinstance(v, int) for v in canonical_counts.values())
     return {
         "status": "PASS" if ok else "FAIL",
+        "canonical_audit_preflight_invoked": preflight_invoked,
+        "canonical_audit_preflight_status": preflight.get("status", "NOT_PROVEN"),
+        "canonical_audit_preflight_source": preflight.get("source", ""),
         "required_artifacts": required,
         "forbidden_data": forbidden_hits,
         "canonical_message_count": canonical_counts["canonical_message_count"],
