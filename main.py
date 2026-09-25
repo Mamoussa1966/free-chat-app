@@ -2708,101 +2708,73 @@ def run_app() -> None:
         st.json({"mode": "HOTFIX141_ABC", "requests": harness_report, "authoritative_source": "APPLICATION_OWNED_REQUEST_RECORDS"})
 
     with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=True):
-        if st.button("Run full V23 platform audit", key="v23_platform_audit"):
-            chat = _active_chat()
-            latest = chat.get("request_records", [])[-1] if chat.get("request_records") else {}
-            continuation_snapshot = st.session_state.get("last_continuation_audit") or {}
-            rid = str(continuation_snapshot.get("requested_request_id") or latest.get("request_id") or "")
-            # Context audit is derived from the actual persisted conversation.
-            _shared_context(chat, max_chars=30_000)
-            st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
-            st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
-            code, report = run_production_core_tests()
-            st.session_state.last_production_core_report = report
-            st.session_state.last_production_core_code = code
-            st.session_state.last_v23_platform_audit = build_v23_platform_audit(
-                chat, rid, st.session_state.get("platform_context_meta"),
-                st.session_state.get("last_health_snapshot"),
-                st.session_state.get("last_security_audit"),
-                st.session_state.get("last_production_core_report"),
-            )
-            # HOTFIX146: fresh, observational final-closure report. This layer
-            # never mutates canonical persistence or provider execution.
-            st.session_state.last_v23_final_closure_audit = build_v23_final_closure_audit(
-                chat,
-                st.session_state.get("last_security_audit"),
-                st.session_state.get("last_v23_platform_audit"),
-                st.session_state.get("last_results"),
-            )
-        if st.button("Run A/B/C Multi-Request Lifecycle Audit", key="v23_multi_request_audit"):
-            chat = _active_chat()
-            st.session_state.last_v23_multi_request_regression = multi_request_regression_audit(chat)
-        regression_report = st.session_state.get("last_v23_multi_request_regression") or {}
-        if regression_report:
-            st.subheader("A/B/C — Independent Request Lifecycle Audit")
-            st.json(regression_report)
+        # HOTFIX151.3: exactly one adjacent action bar.  The action bar is
+        # rendered before the report so Run/Copy/Download remain one stable
+        # control surface across Streamlit reruns.
+        st.subheader("🔐 V23 Security / Context / Platform Audit")
+        action_run, action_copy, action_download = st.columns([1.25, 1.25, 1.25])
+
+        with action_run:
+            if st.button("▶️ Run full V23 platform audit", key="v23_platform_audit_actionbar", use_container_width=True):
+                chat = _active_chat()
+                latest = chat.get("request_records", [])[-1] if chat.get("request_records") else {}
+                continuation_snapshot = st.session_state.get("last_continuation_audit") or {}
+                rid = str(continuation_snapshot.get("requested_request_id") or latest.get("request_id") or "")
+                _shared_context(chat, max_chars=30_000)
+                st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
+                st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
+                code, report = run_production_core_tests()
+                st.session_state.last_production_core_report = report
+                st.session_state.last_production_core_code = code
+                st.session_state.last_v23_platform_audit = build_v23_platform_audit(
+                    chat, rid, st.session_state.get("platform_context_meta"),
+                    st.session_state.get("last_health_snapshot"),
+                    st.session_state.get("last_security_audit"),
+                    st.session_state.get("last_production_core_report"),
+                )
+                # HOTFIX146: fresh, observational final-closure report. This
+                # layer never mutates canonical persistence or provider execution.
+                st.session_state.last_v23_final_closure_audit = build_v23_final_closure_audit(
+                    chat,
+                    st.session_state.get("last_security_audit"),
+                    st.session_state.get("last_v23_platform_audit"),
+                    st.session_state.get("last_results"),
+                )
+                st.rerun()
 
         report = st.session_state.get("last_v23_platform_audit") or {}
-        if report:
-            st.json(report)
-            closure = st.session_state.get("last_v23_final_closure_audit") or {}
-            if closure:
-                st.subheader("HOTFIX146 — V23 Final Closure Audit")
-                st.json(closure)
+        closure = st.session_state.get("last_v23_final_closure_audit") or {}
+        security = st.session_state.get("last_security_audit") or {}
+        health = st.session_state.get("last_health_snapshot") or []
+        production_core_report = st.session_state.get("last_production_core_report") or {}
+        production_core_code = st.session_state.get("last_production_core_code")
 
-            # HOTFIX151: mobile-friendly full-audit export. Streamlit's
-            # st.code widget provides a native Copy button, while
-            # st.download_button provides a reliable fallback for long reports.
-            audit_export = build_v23_audit_export(
-                platform_audit=report,
-                final_closure_audit=closure,
-                security_audit=st.session_state.get("last_security_audit"),
-                health_snapshot=st.session_state.get("last_health_snapshot"),
-                production_core_report=st.session_state.get("last_production_core_report"),
-                production_core_code=st.session_state.get("last_production_core_code"),
-            )
-            audit_export_text = serialize_v23_audit_export(audit_export)
-            st.divider()
-            # HOTFIX151.2: one adjacent action bar.  Copy uses the complete
-            # application-owned export string directly, never the visible
-            # st.code viewport/selection.  Download uses the exact same bytes.
-            st.subheader("🔐 V23 Security / Context / Platform Audit")
-            action_run, action_copy, action_download = st.columns([1.25, 1.25, 1.25])
-            with action_run:
-                if st.button("▶️ Run full V23 platform audit", key="v23_platform_audit_actionbar"):
-                    chat = _active_chat()
-                    latest = chat.get("request_records", [])[-1] if chat.get("request_records") else {}
-                    continuation_snapshot = st.session_state.get("last_continuation_audit") or {}
-                    rid = str(continuation_snapshot.get("requested_request_id") or latest.get("request_id") or "")
-                    _shared_context(chat, max_chars=30_000)
-                    st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
-                    st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
-                    code, report = run_production_core_tests()
-                    st.session_state.last_production_core_report = report
-                    st.session_state.last_production_core_code = code
-                    st.session_state.last_v23_platform_audit = build_v23_platform_audit(
-                        chat, rid, st.session_state.get("platform_context_meta"),
-                        st.session_state.get("last_health_snapshot"),
-                        st.session_state.get("last_security_audit"),
-                        st.session_state.get("last_production_core_report"),
-                    )
-                    st.session_state.last_v23_final_closure_audit = build_v23_final_closure_audit(
-                        chat,
-                        st.session_state.get("last_security_audit"),
-                        st.session_state.get("last_v23_platform_audit"),
-                        st.session_state.get("last_results"),
-                    )
-                    st.rerun()
-            with action_copy:
-                copy_payload = json.dumps(audit_export_text, ensure_ascii=False)
+        # Build the complete application-owned export once from the payload.
+        # Copy and Download both consume this exact serialized payload; neither
+        # reads or copies the visible st.json/st.code widget.
+        audit_export = build_v23_audit_export(
+            platform_audit=report,
+            final_closure_audit=closure,
+            security_audit=security,
+            health_snapshot=health,
+            production_core_report=production_core_report,
+            production_core_code=production_core_code,
+        )
+        audit_export_text = serialize_v23_audit_export(audit_export)
+
+        with action_copy:
+            if report:
+                # Serialize the COMPLETE PAYLOAD directly for the browser.
+                # The visible report is irrelevant to the clipboard operation.
+                copy_payload = json.dumps(audit_export, ensure_ascii=False, indent=2, sort_keys=True, default=str)
                 copy_html = f"""
-                <div style="font-family: sans-serif; width:100%;">
+                <div style="font-family:sans-serif;width:100%;">
                   <button id="copy-v23-full" style="width:100%;height:38px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">📋 Copy Full V23 Audit Report</button>
                   <div id="copy-v23-status" style="font-size:11px;margin-top:3px;text-align:center;min-height:14px;"></div>
                 </div>
                 <script>
                 (() => {{
-                  const payload = {copy_payload};
+                  const payload = {json.dumps(copy_payload, ensure_ascii=False)};
                   const button = document.getElementById('copy-v23-full');
                   const status = document.getElementById('copy-v23-status');
                   const ok = () => {{ status.textContent = '✓ Full report copied'; }};
@@ -2831,20 +2803,38 @@ def run_app() -> None:
                 </script>
                 """
                 components_html(copy_html, height=58, scrolling=False)
-            with action_download:
-                st.download_button(
-                    "💾 Download Full V23 Audit JSON",
-                    data=audit_export_text,
-                    file_name="V23_FULL_PLATFORM_AUDIT.json",
-                    mime="application/json",
-                    key="v23_full_audit_download_151_2",
-                    use_container_width=True,
-                )
-            st.caption("HOTFIX151.2: النسخ والتنزيل يستخدمان نفس تقرير V23 الكامل؛ زر النسخ لا يعتمد على الجزء الظاهر من التقرير.")
+            else:
+                st.button("📋 Copy Full V23 Audit Report", disabled=True, use_container_width=True, key="v23_full_audit_copy_disabled_151_3")
+
+        with action_download:
+            st.download_button(
+                "💾 Download Full V23 Audit JSON",
+                data=audit_export_text if report else "",
+                file_name="V23_FULL_PLATFORM_AUDIT.json",
+                mime="application/json",
+                key="v23_full_audit_download_151_3",
+                use_container_width=True,
+                disabled=not bool(report),
+            )
+
+        st.caption("HOTFIX151.3: الأزرار الثلاثة في Action Bar واحد متجاور؛ Copy وDownload يستخدمان Full Audit Export payload الكامل نفسه، وليس الجزء الظاهر من التقرير.")
+
+        if report:
+            st.json(report)
+            if closure:
+                st.subheader("HOTFIX146 — V23 Final Closure Audit")
+                st.json(closure)
             st.code(audit_export_text, language="json")
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")
 
+        if st.button("Run A/B/C Multi-Request Lifecycle Audit", key="v23_multi_request_audit"):
+            chat = _active_chat()
+            st.session_state.last_v23_multi_request_regression = multi_request_regression_audit(chat)
+        regression_report = st.session_state.get("last_v23_multi_request_regression") or {}
+        if regression_report:
+            st.subheader("A/B/C — Independent Request Lifecycle Audit")
+            st.json(regression_report)
 
 if __name__ == "__main__":
     run_app()

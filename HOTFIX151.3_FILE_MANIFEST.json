@@ -1,0 +1,16 @@
+{
+  "baseline": "HOTFIX151.2",
+  "contract": {
+    "adjacent_action_bar": true,
+    "buttons": [
+      "Run full V23 platform audit",
+      "Copy Full V23 Audit Report",
+      "Download Full V23 Audit JSON"
+    ],
+    "copy_not_from_visible_report": true,
+    "copy_source": "COMPLETE_AUDIT_EXPORT_PAYLOAD",
+    "download_source": "COMPLETE_AUDIT_EXPORT_TEXT"
+  },
+  "hotfix": "HOTFIX151.3",
+  "scope": "FULL_AUDIT_ACTION_BAR_TRUE_PAYLOAD_COPY"
+}
