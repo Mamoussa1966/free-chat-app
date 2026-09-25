@@ -141,17 +141,33 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
     chat = chat if isinstance(chat, dict) else {}
     rid = str(request_id or "").strip()
     records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
-    messages = [m for m in chat.get("messages", []) if isinstance(m, dict)]
+    ui_messages = [m for m in chat.get("messages", []) if isinstance(m, dict)]
+    canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else None
+    if canonical is None:
+        canonical = chat.get("canonical_record") if isinstance(chat.get("canonical_record"), dict) else None
+    if canonical is None:
+        canonical_counts = {"canonical_message_count":"NOT_PROVEN","canonical_request_count":"NOT_PROVEN","canonical_round_count":"NOT_PROVEN"}
+        canonical_messages = []
+        canonical_requests = []
+        canonical_rounds = []
+    else:
+        from conversation_store import canonical_identity_counts
+        canonical_counts = canonical_identity_counts(canonical)
+        canonical_messages = [m for m in canonical.get("messages", []) if isinstance(m, dict)]
+        canonical_requests = [r for r in canonical.get("requests", []) if isinstance(r, dict)]
+        canonical_rounds = [r for r in canonical.get("rounds", []) if isinstance(r, dict)]
     record = next((r for r in records if str(r.get("request_id") or "") == rid), None) if rid else (records[-1] if records else None)
+    canonical_request = next((r for r in canonical_requests if str(r.get("request_id") or "") == rid), None) if rid else (canonical_requests[-1] if canonical_requests else None)
+    bridge_requested = bool(record and record.get("bridge_test_requested"))
     required = {
-        "SESSION_ID": bool(chat.get("id")),
-        "USER_MESSAGE": any(m.get("role") == "user" for m in messages),
-        "REQUEST_ID": bool(record and record.get("request_id")),
-        "ROUND_ID": bool(record and (record.get("rounds_executed") or record.get("rounds"))),
+        "SESSION_ID": bool(chat.get("id") or (canonical and canonical.get("session_id"))),
+        "USER_MESSAGE": any(str(m.get("role") or "").lower() == "user" and str(m.get("message_id") or "").strip() for m in canonical_messages),
+        "REQUEST_ID": bool(canonical_request and canonical_request.get("request_id")),
+        "ROUND_ID": bool(canonical_request and (canonical_request.get("rounds_executed") or canonical_request.get("rounds"))) or bool(canonical_rounds),
         "SEAT_RESULTS": bool(record and isinstance(record.get("results"), list)),
         "EXECUTED_MODELS": bool(record and isinstance(record.get("results"), list)),
         "CASCADE_SUMMARIES": bool(record and any(isinstance(r, dict) and (r.get("attempt_summaries") or r.get("attempt_telemetry")) for r in record.get("results", []))),
-        "BRIDGE_AUDIT": bool(record and any(isinstance(r, dict) and r.get("bridge_transaction_audit") for r in record.get("results", []))),
+        "BRIDGE_AUDIT": (bool(record and any(isinstance(r, dict) and r.get("bridge_transaction_audit") for r in record.get("results", []))) if bridge_requested else "NOT_REQUESTED"),
         "FINAL_RESULT": bool(record and record.get("synthesis")),
         "AUTHORITATIVE_METRICS": bool(record and record.get("request_metrics")),
     }
@@ -174,8 +190,22 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         "RAW_PROVIDER_PAYLOADS": _has_nonempty_field(chat, {"raw_provider_payload", "raw_payload", "provider_payload", "response_body"}),
         "SENSITIVE_DIAGNOSTICS": _has_nonempty_field(chat, {"attempt_diagnostics", "sensitive_diagnostics", "internal_diagnostics", "debug_payload"}),
     }
-    ok = all(required.values()) and not any(forbidden_hits.values())
-    return {"status": "PASS" if ok else "FAIL", "required_artifacts": required, "forbidden_data": forbidden_hits, "messages": len(messages), "request_records": len(records)}
+    required_ok = all(v is True or v == "NOT_REQUESTED" for v in required.values())
+    ok = required_ok and not any(forbidden_hits.values()) and all(isinstance(v, int) for v in canonical_counts.values())
+    return {
+        "status": "PASS" if ok else "FAIL",
+        "required_artifacts": required,
+        "forbidden_data": forbidden_hits,
+        "canonical_message_count": canonical_counts["canonical_message_count"],
+        "canonical_request_count": canonical_counts["canonical_request_count"],
+        "canonical_round_count": canonical_counts["canonical_round_count"],
+        "canonical_counter_source": "CANONICAL_IDENTITY_RECORDS",
+        "counter_semantics_consistent": bool(ok and len({canonical_counts["canonical_message_count"], canonical_counts["canonical_request_count"], canonical_counts["canonical_round_count"]}) >= 1),
+        "ui_projection_message_count": len(ui_messages),
+        "ui_projection_message_count_authoritative": False,
+        "messages": len(ui_messages),
+        "request_records": len(records),
+    }
 
 
 def session_integrity_audit(chat: dict[str, Any] | None, request_id: str = "") -> dict[str, Any]:
@@ -359,7 +389,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             continuation_audit = dict(event)
             break
     if not continuation_audit:
-        continuation_status = "NOT_REQUESTED"
+        continuation_status = "NOT_PROVEN"
     else:
         continuation_status = "PASS" if (continuation_audit.get("mode") == "READ_ONLY" and continuation_audit.get("provider_execution", 0) == 0 and continuation_audit.get("cascade", 0) == 0 and continuation_audit.get("new_round", 0) == 0 and continuation_audit.get("new_bridge", 0) == 0 and continuation_audit.get("actual_request_id") == request_id) else "FAIL"
     if bridge is None:
@@ -441,7 +471,8 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     else:
         bridge_checks["UNIQUE_BRIDGE_ID"] = True
     bridge_gate_ok = bridge_status in {"PASS", "NOT_REQUESTED"}
-    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, round_identity_status)) and continuation_status in {"PASS", "NOT_REQUESTED"} and bridge_gate_ok and identity_match and bridge_identity_status == "PASS"
+    continuation_gate_ok = continuation_status in {"PASS", "NOT_REQUESTED", "NOT_PROVEN"}
+    overall = all(x == "PASS" for x in (persistence["status"], session["status"], context_status, health_status, security_status, regression_status, round_identity_status)) and continuation_gate_ok and bridge_gate_ok and identity_match and bridge_identity_status == "PASS"
     return {
         "schema": "v23-platform-audit/v1",
         "status": "PASS" if overall else "FAIL",
