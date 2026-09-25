@@ -2763,47 +2763,84 @@ def run_app() -> None:
             )
             audit_export_text = serialize_v23_audit_export(audit_export)
             st.divider()
-            st.subheader("📋 HOTFIX151 — Full V23 Audit Export")
-            st.caption("لنسخ التقرير كاملًا من الهاتف: اضغط زر النسخ أعلى مربع التقرير. أو استخدم زر التنزيل لإرسال ملف JSON كامل.")
-            st.download_button(
-                "💾 Download Full V23 Audit JSON",
-                data=audit_export_text,
-                file_name="V23_FULL_PLATFORM_AUDIT.json",
-                mime="application/json",
-                key="v23_full_audit_download",
-            )
-            # HOTFIX151.1: standalone mobile copy control. The copy action is
-            # executed inside a small browser component so the user does not
-            # need to select a huge Streamlit code block manually.
-            _audit_copy_html = f"""
-            <div style="font-family: sans-serif; width: 100%;">
-              <button id="copyAudit" style="width:100%; padding:12px; font-size:16px; cursor:pointer;">📋 نسخ التقرير كاملًا</button>
-              <div id="copyStatus" style="margin-top:8px; font-size:14px;"></div>
-              <textarea id="auditText" readonly style="position:absolute; left:-9999px; top:0; width:1px; height:1px; opacity:0;"></textarea>
-            </div>
-            <script>
-              const auditText = document.getElementById('auditText');
-              auditText.value = {json.dumps(audit_export_text, ensure_ascii=False)};
-              const status = document.getElementById('copyStatus');
-              document.getElementById('copyAudit').addEventListener('click', async () => {{
-                try {{
-                  await navigator.clipboard.writeText(auditText.value);
-                  status.textContent = '✅ تم نسخ التقرير كاملًا إلى الحافظة';
-                  return;
-                }} catch (e) {{}}
-                try {{
-                  auditText.focus();
-                  auditText.select();
-                  auditText.setSelectionRange(0, auditText.value.length);
-                  const ok = document.execCommand('copy');
-                  status.textContent = ok ? '✅ تم نسخ التقرير كاملًا إلى الحافظة' : '⚠️ تعذر النسخ؛ استخدم زر التنزيل أدناه';
-                }} catch (e) {{
-                  status.textContent = '⚠️ تعذر النسخ؛ استخدم زر التنزيل أدناه';
-                }}
-              }});
-            </script>
-            """
-            components_html(_audit_copy_html, height=75, scrolling=False)
+            # HOTFIX151.2: one adjacent action bar.  Copy uses the complete
+            # application-owned export string directly, never the visible
+            # st.code viewport/selection.  Download uses the exact same bytes.
+            st.subheader("🔐 V23 Security / Context / Platform Audit")
+            action_run, action_copy, action_download = st.columns([1.25, 1.25, 1.25])
+            with action_run:
+                if st.button("▶️ Run full V23 platform audit", key="v23_platform_audit_actionbar"):
+                    chat = _active_chat()
+                    latest = chat.get("request_records", [])[-1] if chat.get("request_records") else {}
+                    continuation_snapshot = st.session_state.get("last_continuation_audit") or {}
+                    rid = str(continuation_snapshot.get("requested_request_id") or latest.get("request_id") or "")
+                    _shared_context(chat, max_chars=30_000)
+                    st.session_state.last_health_snapshot = provider_health_snapshot(get_seats(), credentials, model_candidates)
+                    st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
+                    code, report = run_production_core_tests()
+                    st.session_state.last_production_core_report = report
+                    st.session_state.last_production_core_code = code
+                    st.session_state.last_v23_platform_audit = build_v23_platform_audit(
+                        chat, rid, st.session_state.get("platform_context_meta"),
+                        st.session_state.get("last_health_snapshot"),
+                        st.session_state.get("last_security_audit"),
+                        st.session_state.get("last_production_core_report"),
+                    )
+                    st.session_state.last_v23_final_closure_audit = build_v23_final_closure_audit(
+                        chat,
+                        st.session_state.get("last_security_audit"),
+                        st.session_state.get("last_v23_platform_audit"),
+                        st.session_state.get("last_results"),
+                    )
+                    st.rerun()
+            with action_copy:
+                copy_payload = json.dumps(audit_export_text, ensure_ascii=False)
+                copy_html = f"""
+                <div style="font-family: sans-serif; width:100%;">
+                  <button id="copy-v23-full" style="width:100%;height:38px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">📋 Copy Full V23 Audit Report</button>
+                  <div id="copy-v23-status" style="font-size:11px;margin-top:3px;text-align:center;min-height:14px;"></div>
+                </div>
+                <script>
+                (() => {{
+                  const payload = {copy_payload};
+                  const button = document.getElementById('copy-v23-full');
+                  const status = document.getElementById('copy-v23-status');
+                  const ok = () => {{ status.textContent = '✓ Full report copied'; }};
+                  const fail = () => {{ status.textContent = 'Copy blocked — use Download Full V23 Audit JSON'; }};
+                  button.addEventListener('click', async () => {{
+                    try {{
+                      if (navigator.clipboard && window.isSecureContext) {{
+                        await navigator.clipboard.writeText(payload);
+                        ok(); return;
+                      }}
+                    }} catch (e) {{}}
+                    try {{
+                      const ta = document.createElement('textarea');
+                      ta.value = payload;
+                      ta.setAttribute('readonly', '');
+                      ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.top = '0';
+                      document.body.appendChild(ta);
+                      ta.focus(); ta.select();
+                      const copied = document.execCommand('copy');
+                      document.body.removeChild(ta);
+                      if (copied) {{ ok(); return; }}
+                    }} catch (e) {{}}
+                    fail();
+                  }});
+                }})();
+                </script>
+                """
+                components_html(copy_html, height=58, scrolling=False)
+            with action_download:
+                st.download_button(
+                    "💾 Download Full V23 Audit JSON",
+                    data=audit_export_text,
+                    file_name="V23_FULL_PLATFORM_AUDIT.json",
+                    mime="application/json",
+                    key="v23_full_audit_download_151_2",
+                    use_container_width=True,
+                )
+            st.caption("HOTFIX151.2: النسخ والتنزيل يستخدمان نفس تقرير V23 الكامل؛ زر النسخ لا يعتمد على الجزء الظاهر من التقرير.")
             st.code(audit_export_text, language="json")
         else:
             st.info("اضغط Run full V23 platform audit لإنتاج تقرير runtime فعلي؛ لا يتم عرض NOT_RUN كأنه PASS.")

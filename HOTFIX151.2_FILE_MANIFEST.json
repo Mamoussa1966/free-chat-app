@@ -1,0 +1,30 @@
+{
+  "hotfix": "HOTFIX151.2",
+  "baseline_archive": "HOTFIX151_V23_FULL_AUDIT_COPY_DOWNLOAD_UX.zip",
+  "baseline_file_count": 413,
+  "final_file_count": 417,
+  "missing_baseline_files": [],
+  "modified_existing_files": [
+    "main.py"
+  ],
+  "added_files": [
+    "HOTFIX151.2_RELEASE_NOTES.md",
+    "VERSION_HOTFIX151.2.txt",
+    "tests/test_hotfix151_2_full_audit_action_bar.py"
+  ],
+  "scope": "V23 full audit action bar / true full-report copy only",
+  "preserves_hotfix151_baseline": true,
+  "semantics_unchanged": [
+    "secrets",
+    "models",
+    "free_cascade",
+    "provider_adapters",
+    "seat_count",
+    "counters",
+    "canonical_persistence",
+    "request_round_identity",
+    "bridge",
+    "synthesis",
+    "audit_execution"
+  ]
+}
