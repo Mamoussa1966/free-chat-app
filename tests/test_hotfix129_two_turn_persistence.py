@@ -94,5 +94,9 @@ def test_hotfix129_one_turn_cannot_fabricate_round_two(monkeypatch):
     assert audit["canonical_message_count"] == 1
     assert audit["canonical_request_count"] == 1
     assert audit["canonical_round_count"] == 1
+    # HOTFIX157: a single persisted Message→Request→Round lifecycle is a
+    # complete valid audit window. The absent second request remains NOT_PROVEN,
+    # but the actual one-turn canonical chain is now provable and may PASS.
     assert audit["request_2_round_2_mapping"] == "NOT_PROVEN"
-    assert audit["overall_authoritative_status"] == "NOT_PROVEN"
+    assert audit["canonical_request_round_binding_proven"] is True
+    assert audit["overall_authoritative_status"] == "PASS"
