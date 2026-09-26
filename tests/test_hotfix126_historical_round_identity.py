@@ -32,11 +32,11 @@ def _seed_two_message_history():
 
 def test_hotfix126_authoritative_round_base_comes_from_canonical_ledger():
     chat, ss = _seed_two_message_history()
-    assert _authoritative_round_base(chat) == 0
-    begin_round(chat, "m1", "req1", 1, ss)
     assert _authoritative_round_base(chat) == 1
-    begin_round(chat, "m2", "req2", 2, ss)
+    begin_round(chat, "m1", "req1", 1, ss)
     assert _authoritative_round_base(chat) == 2
+    begin_round(chat, "m2", "req2", 2, ss)
+    assert _authoritative_round_base(chat) == 3
     rounds = chat["conversation_record"]["rounds"]
     assert [r["round"] for r in rounds] == [1, 2]
     assert [r["round_id"].rsplit(":r", 1)[1] for r in rounds] == ["1", "2"]

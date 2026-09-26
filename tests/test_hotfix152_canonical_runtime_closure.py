@@ -62,8 +62,8 @@ def test_request_creation_owns_canonical_round_base_and_order_survives_narrow_re
     c, ss = chat(), SS()
     add_turn(c, ss, 1)
     add_turn(c, ss, 2)
-    assert c["conversation_record"]["requests"][0]["canonical_round_base"] == 0
-    assert c["conversation_record"]["requests"][1]["canonical_round_base"] == 1
+    assert c["conversation_record"]["requests"][0]["canonical_round_base"] == 1
+    assert c["conversation_record"]["requests"][1]["canonical_round_base"] == 2
 
     c["conversation_record"] = {
         "conversation_id": c["conversation_id"], "session_id": c["session_id"],
