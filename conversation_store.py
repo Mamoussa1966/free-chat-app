@@ -117,6 +117,39 @@ def canonical_create_lifecycle(chat: dict, message: dict, request: dict, round_r
         _chat_rebind_alias(chat)
         raise
 
+def _restore_saved_identity_order(target: list, saved: list, identity_key: str) -> list:
+    """Restore canonical historical order from the committed snapshot.
+
+    Streamlit reruns may leave a narrowed current list (for example Request 2)
+    while the committed snapshot still contains [Request 1, Request 2].  The
+    committed snapshot is the authoritative sequence; never let the narrowed
+    runtime list determine historical ordering. Existing identity rows are
+    merged by immutable ID, then emitted in saved canonical order followed by
+    genuinely new rows.
+    """
+    current_by_id = {str(x.get(identity_key) or ""): x for x in target if isinstance(x, dict) and str(x.get(identity_key) or "")}
+    ordered = []
+    seen = set()
+    for item in saved if isinstance(saved, list) else []:
+        if not isinstance(item, dict):
+            continue
+        ident = str(item.get(identity_key) or "")
+        if not ident or ident in seen:
+            continue
+        row = current_by_id.pop(ident, None)
+        if row is None:
+            row = copy.deepcopy(item)
+        else:
+            for k, v in item.items():
+                if v not in (None, "", [], {}):
+                    row[k] = copy.deepcopy(v)
+        ordered.append(row)
+        seen.add(ident)
+    # Preserve any current-only records after the committed historical prefix.
+    ordered.extend(current_by_id.values())
+    return ordered
+
+
 def commit_canonical_record(chat: dict, session_state=None) -> dict:
     """Commit the complete canonical ConversationRecord at a lifecycle boundary.
 
@@ -149,22 +182,8 @@ def commit_canonical_record(chat: dict, session_state=None) -> dict:
             saved = existing["record"]
             for key, ident in (("messages", "message_id"), ("requests", "request_id"), ("rounds", "round_id")):
                 target = rec.setdefault(key, [])
-                by_id = {str(x.get(ident) or ""): x for x in target if isinstance(x, dict) and str(x.get(ident) or "")}
                 incoming = saved.get(key, []) if isinstance(saved.get(key), list) else []
-                for item in incoming:
-                    if not isinstance(item, dict):
-                        continue
-                    iid = str(item.get(ident) or "")
-                    if not iid:
-                        continue
-                    old = by_id.get(iid)
-                    if old is None:
-                        target.append(copy.deepcopy(item))
-                        by_id[iid] = target[-1]
-                    else:
-                        for k, v in item.items():
-                            if v not in (None, "", [], {}):
-                                old[k] = copy.deepcopy(v)
+                rec[key] = _restore_saved_identity_order(target, incoming, ident)
             _chat_rebind_alias(chat)
         # HOTFIX118: build the complete candidate snapshot first, validate it,
         # then replace the transport bucket in one assignment. This prevents a
@@ -312,22 +331,135 @@ def _chat_rebind_alias(chat: dict) -> None:
 
 
 def rebuild_runtime_indexes_from_canonical(chat: dict, session_state=None) -> dict:
-    """Rebuild compatibility/runtime indexes strictly from the hydrated canonical record.
-
-    This is an index rebuild, not a second persistence source and not an audit
-    reconstruction. The canonical ConversationRecord remains the sole historical
-    owner of Message/Request/Round identity.
-    """
+    """Rebuild all compatibility/runtime indexes strictly from canonical history."""
     hydrate_canonical_record(chat, session_state)
     rec = _canonical_record(chat)
-
-    # Strict replacement: REBUILD means compatibility indexes are derived only
-    # from the hydrated canonical record. A narrowed current runtime must never
-    # be merged back into the historical indexes during audit.
-    chat["message_ledger"] = copy.deepcopy([x for x in rec.get("messages", []) if isinstance(x, dict)])[-1000:]
-    chat["request_records"] = copy.deepcopy([x for x in rec.get("requests", []) if isinstance(x, dict)])[-1000:]
-    chat["round_ledger"] = copy.deepcopy([x for x in rec.get("rounds", []) if isinstance(x, dict)])[-2000:]
+    messages = [copy.deepcopy(x) for x in rec.get("messages", []) if isinstance(x, dict)]
+    requests = [copy.deepcopy(x) for x in rec.get("requests", []) if isinstance(x, dict)]
+    rounds = [copy.deepcopy(x) for x in rec.get("rounds", []) if isinstance(x, dict)]
+    chat["message_ledger"] = messages[-1000:]
+    chat["request_records"] = requests[-1000:]
+    chat["round_ledger"] = rounds[-2000:]
+    # Explicitly expose the rebuilt canonical runtime indexes so V26.3.9/V26.3.13
+    # can prove hydration rebuilt the runtime projection rather than merely loaded
+    # a blob. These are compatibility indexes, never a second source of truth.
+    chat["canonical_runtime_indexes"] = {
+        "message_ids": [str(x.get("message_id")) for x in messages if str(x.get("message_id") or "")],
+        "request_ids": [str(x.get("request_id")) for x in requests if str(x.get("request_id") or "")],
+        "round_ids": [str(x.get("round_id")) for x in rounds if str(x.get("round_id") or "")],
+        "request_sequence": [str(x.get("request_id")) for x in requests if str(x.get("request_id") or "")],
+        "round_sequence": [str(x.get("round_id")) for x in rounds if str(x.get("round_id") or "")],
+        "source": "V26_3_CANONICAL_CONVERSATION_STORE",
+    }
     return chat
+
+
+def canonical_identity_counts(record: dict) -> dict:
+    """Return canonical Message/Request/Round counts from one identity record set.
+
+    Contract: canonical messages are identity-bearing USER MessageRecords only;
+    canonical requests require request_id; canonical rounds require round_id.
+    UI/projection lists are never consulted.
+    """
+    if not isinstance(record, dict):
+        return {
+            "canonical_message_count": "NOT_PROVEN",
+            "canonical_request_count": "NOT_PROVEN",
+            "canonical_round_count": "NOT_PROVEN",
+        }
+    messages = record.get("messages") if isinstance(record.get("messages"), list) else []
+    requests = record.get("requests") if isinstance(record.get("requests"), list) else []
+    rounds = record.get("rounds") if isinstance(record.get("rounds"), list) else []
+    return {
+        "canonical_message_count": len([x for x in messages if isinstance(x, dict) and str(x.get("message_id") or "").strip() and str(x.get("role") or "").lower() == "user"]),
+        "canonical_request_count": len([x for x in requests if isinstance(x, dict) and str(x.get("request_id") or "").strip()]),
+        "canonical_round_count": len([x for x in rounds if isinstance(x, dict) and str(x.get("round_id") or "").strip()]),
+    }
+
+
+def canonical_audit_preflight(chat: dict, session_state=None) -> dict:
+    """Canonical Audit Preflight: the mandatory application-owned audit gate.
+
+    HOTFIX154 contract: every persistence/audit path that claims canonical
+    authority must invoke this function. Invocation is observable outside the
+    canonical identity record, while all counters still come exclusively from
+    canonical Message/Request/Round identity records.
+    """
+    ensure_store(chat)
+    marker = chat.get("canonical_audit_preflight_runtime")
+    if not isinstance(marker, dict):
+        marker = {}
+    marker["invocation_count"] = int(marker.get("invocation_count") or 0) + 1
+    marker["last_invocation_source"] = "APPLICATION_OWNED_AUDIT_GATE"
+    chat["canonical_audit_preflight_runtime"] = marker
+    snapshot = load_canonical_snapshot(chat, session_state)
+    # Structural/audit callers may already hold the same canonical record in
+    # the conversation object without a Session-State transport bucket. Reuse
+    # that single record; never fall back to UI/current-request projections.
+    if snapshot is None:
+        rec0 = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else None
+        if isinstance(rec0, dict) and rec0.get("canonical_store_contract") == "V26_3_CANONICAL_CONVERSATION_STORE" and all(isinstance(rec0.get(k), list) for k in ("messages", "requests", "rounds")):
+            snapshot = {
+                "conversation_id": str(chat.get("conversation_id") or rec0.get("conversation_id") or ""),
+                "session_id": str(chat.get("session_id") or rec0.get("session_id") or ""),
+                "messages": copy.deepcopy(rec0.get("messages", [])),
+                "requests": copy.deepcopy(rec0.get("requests", [])),
+                "rounds": copy.deepcopy(rec0.get("rounds", [])),
+                "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+                "canonical_store_revision": int(rec0.get("canonical_store_revision") or 0),
+                "canonical_history_hash": canonical_history_hash(rec0),
+            }
+    if snapshot is None:
+        return {
+            "status": "NOT_PROVEN",
+            "source": "V26_3_CANONICAL_CONVERSATION_STORE",
+            "canonical_store_loaded": False,
+            "canonical_message_count": "NOT_PROVEN",
+            "canonical_request_count": "NOT_PROVEN",
+            "canonical_round_count": "NOT_PROVEN",
+            "canonical_runtime_indexes_rebuilt": False,
+            "identity_chain_valid": False,
+        }
+    # Audit/preflight is observational. Preserve existing runtime/UI projection
+    # fields because rebuilding compatibility indexes must never erase the
+    # current request execution record while merely proving canonical history.
+    projection_backup = {
+        key: copy.deepcopy(chat.get(key))
+        for key in ("messages", "request_records", "message_ledger", "round_ledger", "canonical_runtime_indexes")
+        if key in chat
+    }
+    hydrate_canonical_record(chat, session_state)
+    rebuild_runtime_indexes_from_canonical(chat, session_state)
+    rec = _canonical_record(chat)
+    integrity = validate_canonical_chain(rec)
+    counts = canonical_identity_counts(rec)
+    indexes = chat.get("canonical_runtime_indexes") if isinstance(chat.get("canonical_runtime_indexes"), dict) else {}
+    index_ok = all(isinstance(indexes.get(k), list) for k in ("message_ids", "request_ids", "round_ids"))
+    chain_ok = bool(integrity.get("message_request_integrity") and integrity.get("request_round_integrity") and integrity.get("round_ids_unique"))
+    count_values = [counts[k] for k in ("canonical_message_count", "canonical_request_count", "canonical_round_count")]
+    identity_counts_valid = all(isinstance(v, int) and v >= 0 for v in count_values)
+    evidence_present = bool(identity_counts_valid and sum(count_values) > 0)
+    counter_semantics_consistent = bool(evidence_present and all(
+        isinstance(x, dict) for x in rec.get("messages", []) if isinstance(rec.get("messages"), list)
+    ))
+    result = {
+        "status": "PASS" if index_ok and chain_ok and evidence_present else "NOT_PROVEN" if not evidence_present else "FAIL",
+        "source": "V26_3_CANONICAL_CONVERSATION_STORE",
+        "canonical_store_loaded": True,
+        **counts,
+        "canonical_runtime_indexes_rebuilt": index_ok,
+        "identity_chain_valid": chain_ok,
+        "canonical_counter_source": "CANONICAL_IDENTITY_RECORDS",
+        "counter_semantics_consistent": counter_semantics_consistent,
+        "ui_projection_consulted": False,
+        "history_hash": integrity.get("history_hash"),
+        "request_sequence": indexes.get("request_sequence", []),
+        "round_sequence": indexes.get("round_sequence", []),
+    }
+    for key, value in projection_backup.items():
+        chat[key] = value
+    return result
+
 
 def canonical_upsert_message(chat: dict, message: dict, session_state=None) -> dict:
     """Create/update a MessageRecord in the canonical ConversationRecord before dispatch."""
@@ -362,12 +494,36 @@ def canonical_upsert_request(chat: dict, request: dict, session_state=None) -> d
         raise ValueError("canonical RequestRecord requires request_id")
     row = dict(request)
     row["request_id"] = rid
+    # Request creation owns the immutable conversation round allocation.
+    # Callers may provide the value (the production orchestrator does), but
+    # direct canonical writers receive the same deterministic contract.
+    if row.get("canonical_round_base") in (None, ""):
+        bases = []
+        for existing_round in rec.get("rounds", []):
+            try:
+                n = int(existing_round.get("round") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if n > 0:
+                bases.append(n)
+        row["canonical_round_base"] = max(bases, default=0)
+    if row.get("canonical_request_ordinal") in (None, ""):
+        row["canonical_request_ordinal"] = len([x for x in rec.get("requests", []) if isinstance(x, dict) and str(x.get("request_id") or "")]) + 1
     existing = next((x for x in rec["requests"] if isinstance(x, dict) and str(x.get("request_id") or "") == rid), None)
     if existing is None:
         rec["requests"].append(copy.deepcopy(row))
         existing = rec["requests"][-1]
     else:
+        old_mid = str(existing.get("message_id") or "")
+        new_mid = str(row.get("message_id") or "")
+        if old_mid and new_mid and old_mid != new_mid:
+            existing["identity_conflict"] = True
         for k, v in row.items():
+            if k == "message_id" and old_mid and new_mid and old_mid != new_mid:
+                continue
+            if k == "canonical_round_base" and existing.get(k) not in (None, "") and v not in (None, "") and int(existing.get(k)) != int(v):
+                existing["identity_conflict"] = True
+                continue
             if v not in (None, "", [], {}):
                 existing[k] = copy.deepcopy(v)
     commit_canonical_record(chat, session_state)
@@ -387,7 +543,14 @@ def canonical_upsert_round(chat: dict, round_row: dict, session_state=None) -> d
         rec["rounds"].append(copy.deepcopy(row))
         existing = rec["rounds"][-1]
     else:
+        for identity_key in ("request_id", "message_id", "conversation_id", "session_id", "round"):
+            old_value = str(existing.get(identity_key) or "")
+            new_value = str(row.get(identity_key) or "")
+            if old_value and new_value and old_value != new_value:
+                existing["identity_conflict"] = True
         for k, v in row.items():
+            if k in {"request_id", "message_id", "conversation_id", "session_id", "round"} and existing.get(k) not in (None, "") and v not in (None, "") and str(existing.get(k)) != str(v):
+                continue
             if v not in (None, "", [], {}):
                 existing[k] = copy.deepcopy(v)
     commit_canonical_record(chat, session_state)

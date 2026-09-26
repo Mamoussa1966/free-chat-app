@@ -1,6 +1,6 @@
 from __future__ import annotations
 import copy
-from conversation_store import now, commit_canonical_record, hydrate_canonical_record
+from conversation_store import now, commit_canonical_record, hydrate_canonical_record, canonical_identity_counts
 
 SCHEMA = "v26.3.5-canonical-conversation-store-persistence/v5"
 MAX_MESSAGES = 1000
@@ -267,34 +267,11 @@ def hydrate_chat_identity(chat, session_state=None):
 
 
 def _canonical_identity_counts(bucket):
-    """Return the counts used by the authoritative V26.3 persistence contract.
-
-    The canonical ConversationRecord may contain assistant/provider-facing message
-    artifacts in addition to the two historical user MessageRecords.  Those artifacts
-    are not independent user turns and must never inflate the persistence contract's
-    message count.  Counts are therefore derived from the same identity-bearing rows
-    used by the authoritative historical audit, rather than from raw list lengths.
-    """
-    if not isinstance(bucket, dict):
-        return None
-    messages = [
-        x for x in bucket.get("messages", [])
-        if isinstance(x, dict)
-        and _s(x.get("message_id"))
-        and _s(x.get("role")).lower() == "user"
-    ]
-    requests = [
-        x for x in bucket.get("requests", [])
-        if isinstance(x, dict) and _s(x.get("request_id"))
-    ]
-    rounds = [
-        x for x in bucket.get("rounds", [])
-        if isinstance(x, dict) and _s(x.get("round_id"))
-    ]
+    """Compatibility wrapper over the ONE canonical counter contract."""
     return {
-        "message_count": len(messages),
-        "request_count": len(requests),
-        "round_count": len(rounds),
+        "message_count": canonical_identity_counts(bucket)["canonical_message_count"],
+        "request_count": canonical_identity_counts(bucket)["canonical_request_count"],
+        "round_count": canonical_identity_counts(bucket)["canonical_round_count"],
     }
 
 

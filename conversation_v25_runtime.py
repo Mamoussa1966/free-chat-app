@@ -499,13 +499,21 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     bridges = [x for x in chat.get("bridge_ledger_v24", []) if isinstance(x, dict)]
     synth = [x for x in chat.get("message_synthesis_ledger_v25", []) if isinstance(x, dict)]
 
-    latest = sorted(messages, key=lambda x: (_s(x.get("created_at")), _s(x.get("message_id"))))[-2:]
-    mids = [_s(x.get("message_id")) for x in latest]
+    # HOTFIX150: canonical request sequence is the historical turn selector.
+    # Each RequestRecord explicitly binds one message_id; its RoundRecord then
+    # binds the request to the canonical conversation round. No created_at or UI
+    # projection participates in identity reconstruction.
+    historical_request_records = [x for x in requests if _s(x.get("request_id"))]
+    selected_request_records = historical_request_records[-2:]
+    req_ids = [_s(x.get("request_id")) for x in selected_request_records]
+    mids = [_s(x.get("message_id")) for x in selected_request_records]
+    message_by_id = {_s(x.get("message_id")): x for x in messages if _s(x.get("message_id"))}
+    selected_messages = [message_by_id[mid] for mid in mids if mid in message_by_id and _s(message_by_id[mid].get("role")).lower() == "user"]
+    latest = selected_messages
     conv_ids = {_s(x.get("conversation_id")) for x in latest if _s(x.get("conversation_id"))}
     sess_ids = {_s(x.get("session_id")) for x in latest if _s(x.get("session_id"))}
     req_by_msg = {mid: [x for x in requests if _s(x.get("message_id")) == mid] for mid in mids}
-    req_ids = [_s(req_by_msg[mid][-1].get("request_id")) for mid in mids if req_by_msg[mid]]
-    historical_request_records = [x for x in requests if _s(x.get("request_id"))]
+
     narrower_request_count = len([x for x in chat.get("request_records", []) if isinstance(x, dict) and _s(x.get("request_id"))])
     historical_narrowing_conflict = (pre_rebuild_request_count > 0 and pre_rebuild_request_count < len(historical_request_records))
     persisted_request_ids = [_s(x.get("request_id")) for x in historical_request_records]
@@ -530,6 +538,16 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     b1 = sorted({_s(x.get("bridge_id")) for x in bridges if _s(x.get("request_id")) == r1 and _s(x.get("bridge_id"))}) if r1 else []
     b2 = sorted({_s(x.get("bridge_id")) for x in bridges if _s(x.get("request_id")) == r2 and _s(x.get("bridge_id"))}) if r2 else []
     srows = {_s(x.get("message_id")): x for x in synth}
+    selected_round_identity_rows = [
+        x for x in rounds
+        if _s(x.get("request_id")) in {r1, r2}
+        and _s(x.get("message_id")) in {m1, m2}
+    ]
+    def _round_num(row):
+        try:
+            return int(row.get("round"))
+        except (TypeError, ValueError):
+            return 0
 
     enough = len(mids) == 2 and len(req_ids) == 2 and len(set(req_ids)) == 2 and all(mids)
     request_isolation = "NOT_PROVEN"
@@ -564,6 +582,11 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "historical_narrowing_conflict": historical_narrowing_conflict,
         "canonical_counter_source": "CANONICAL_IDENTITY_RECORDS",
         "counter_semantics_consistent": True,
+        "canonical_request_round_binding_source": "CANONICAL_ROUND_RECORD_IDENTITY",
+        "canonical_request_round_binding_proven": bool(enough and all(
+            _s(x.get("request_id")) and _s(x.get("message_id")) and _round_num(x) > 0
+            for x in selected_round_identity_rows
+        )),
         "canonical_request_count": len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]),
         "canonical_message_count": len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id")) and _s(x.get("role")).lower() == "user"]),
         "canonical_round_count": len([x for x in canonical_record.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]),
@@ -740,12 +763,22 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     )
     audit["selected_round_sequence_contiguous"] = selected_sequence_contiguous if enough else "NOT_PROVEN"
     audit["canonical_round_sequence_base"] = selected_round_numbers[0] if enough and selected_round_numbers and selected_round_numbers[0] is not None else "NOT_PROVEN"
+    round_id_ordinal_consistent = bool(
+        enough
+        and all(
+            _s(x.get("round_id")).rsplit(":r", 1)[-1].isdigit()
+            and int(_s(x.get("round_id")).rsplit(":r", 1)[-1]) == _round_num(x)
+            for x in selected_round_identity_rows
+        )
+    ) if enough else False
+    audit["round_id_ordinal_consistent"] = round_id_ordinal_consistent if enough else "NOT_PROVEN"
     audit["canonical_round_sequence_proven"] = bool(
         enough
         and exact_request_binding
         and generic_round1_proven
         and generic_round2_proven
         and selected_sequence_contiguous
+        and round_id_ordinal_consistent
         and len({ _s(x.get("round_id")) for x in rounds }) == len(rounds) == 2
     ) if enough else "NOT_PROVEN"
     audit["canonical_round_identity_evidence"] = {
