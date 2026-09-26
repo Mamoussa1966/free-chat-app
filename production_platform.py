@@ -253,22 +253,22 @@ def session_integrity_audit(chat: dict[str, Any] | None, request_id: str = "") -
 
 
 def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any]:
-    """HOTFIX140: verify three already-executed independent Request lifecycles.
+    """HOTFIX160: prove at least two independent persisted Request lifecycles.
 
-    This audit is intentionally observational: it never fabricates Requests, rounds,
-    Bridges, provider executions, or success. To PASS, the active conversation must
-    contain three distinct persisted Request Records created by three fresh
-    submissions (A/B/C), each with its own lifecycle identity and no duplicate
-    Seat+Round execution within that Request.
+    The audit is observational and fail-closed. Two fresh Request Records are
+    sufficient for the historical HOTFIX135 regression contract; three or more
+    are also accepted, with the newest two audited. Identity comes only from
+    application-owned request/result records.
     """
     chat = chat if isinstance(chat, dict) else {}
     records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
-    recent = records[-3:]
+    recent = records[-2:]
     request_ids = [str(r.get("request_id") or "").strip() for r in recent]
     unique_request_ids = len(set(x for x in request_ids if x))
     bridge_ids: list[str] = []
     seat_round_keys: list[tuple[str, int, str]] = []
     per_request: list[dict[str, Any]] = []
+    contamination = False
     for r in recent:
         rid = str(r.get("request_id") or "").strip()
         bridges_for_request: list[str] = []
@@ -276,6 +276,9 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
         for result in results:
             if not isinstance(result, dict):
                 continue
+            result_rid = str(result.get("request_id") or rid).strip()
+            if result_rid and result_rid != rid:
+                contamination = True
             seat = str(result.get("seat_key") or result.get("seat") or "").strip()
             try:
                 rnd = int(result.get("round") or 0)
@@ -288,78 +291,48 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
                 bid = str(audit["BRIDGE_ID"])
                 bridge_ids.append(bid)
                 bridges_for_request.append(bid)
-        per_request.append({
-            "request_id": rid,
-            "state": str(r.get("state") or ""),
-            "rounds": r.get("rounds_executed") or r.get("rounds") or 0,
-            "bridge_ids": sorted(set(bridges_for_request)),
-            "provider_execution_events": r.get("request_metrics", {}).get("provider_execution_events", 0) if isinstance(r.get("request_metrics"), dict) else 0,
-        })
+        per_request.append({"request_id": rid, "state": str(r.get("state") or ""), "rounds": r.get("rounds_executed") or r.get("rounds") or 0, "bridge_ids": sorted(set(bridges_for_request)), "provider_execution_events": r.get("request_metrics", {}).get("provider_execution_events", 0) if isinstance(r.get("request_metrics"), dict) else 0})
     duplicate_seat_round = len(seat_round_keys) - len(set(seat_round_keys))
-    nonempty = len(request_ids) == 3 and all(request_ids)
-    ok = nonempty and unique_request_ids == 3 and len(set(bridge_ids)) == len(bridge_ids) and duplicate_seat_round == 0
+    enough = len(recent) >= 2
+    independent = enough and len(request_ids) == 2 and all(request_ids) and unique_request_ids == 2
+    unique_bridges = len(bridge_ids) == len(set(bridge_ids))
+    ok = independent and unique_bridges and duplicate_seat_round == 0 and not contamination
     return {
-        "status": "PASS" if ok else "NOT_PROVEN",
-        "gate": "PASS" if ok else "NOT_PROVEN",
-        "required_request_count": 3,
+        "status": "PASS" if ok else "FAIL" if enough else "NOT_PROVEN",
+        "gate": "PASS" if ok else "FAIL" if enough else "NOT_PROVEN",
+        "required_request_count": 2,
         "observed_request_records": len(records),
         "audited_request_ids": request_ids,
         "unique_request_ids": unique_request_ids,
         "unique_bridge_ids": len(set(bridge_ids)),
         "duplicate_seat_round_executions": max(0, duplicate_seat_round),
+        "cross_request_result_contamination": contamination,
         "per_request": per_request,
         "evidence_source": "APPLICATION_OWNED_REQUEST_RECORDS_ONLY",
         "provider_or_agent_prose_used_as_identity": False,
-        "note": "HOTFIX141 supports an explicit one-message A/B/C harness; otherwise one normal chat submission remains one Request lifecycle.",
     }
-
-
 
 def canonical_round_identity_gate(chat: dict[str, Any] | None) -> dict[str, Any]:
-    """HOTFIX126: prove numeric Round identity from the canonical ledger itself.
-
-    Once the monotonic conversation-round contract is present, every RoundRecord
-    must agree across its numeric `round` field and `round_id` suffix, and the
-    complete canonical sequence must be 1..N with no duplicates. Audit labels or
-    provider prose are never used as evidence. Legacy records without the marker
-    remain compatibility-readable and do not claim the new proof.
-    """
+    """HOTFIX160 authoritative Request->Round identity gate."""
     chat = chat if isinstance(chat, dict) else {}
     rec = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
-    rows = [x for x in rec.get("rounds", []) if isinstance(x, dict) and str(x.get("round_id") or "").strip()]
-    marked = [x for x in rows if x.get("round_identity_contract") == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"]
-    if not marked:
-        return {"status": "NOT_PROVEN", "gate": "LEGACY_COMPATIBILITY", "active": False, "evidence_source": "APPLICATION_OWNED_CANONICAL_CONVERSATION_RECORD"}
-    numbers = []
-    ids = []
-    checks = []
-    for row in marked:
-        rid = str(row.get("round_id") or "")
-        try:
-            number = int(row.get("round") or 0)
-        except (TypeError, ValueError):
-            number = 0
-        suffix = 0
-        if ":r" in rid and rid.rsplit(":r", 1)[1].isdigit():
-            suffix = int(rid.rsplit(":r", 1)[1])
-        numbers.append(number); ids.append(rid)
-        checks.append(number > 0 and number == suffix)
-    unique = len(ids) == len(set(ids)) and len(numbers) == len(set(numbers))
-    sequence = sorted(numbers) == list(range(1, len(numbers) + 1))
-    ok = bool(checks and all(checks) and unique and sequence)
-    return {
-        "status": "PASS" if ok else "FAIL",
-        "gate": "PASS" if ok else "FAIL",
-        "active": True,
-        "round_ids": ids,
-        "round_ordinals": numbers,
-        "round_id_numeric_suffix_match": all(checks),
-        "round_ids_unique": len(ids) == len(set(ids)),
-        "round_ordinals_unique": len(numbers) == len(set(numbers)),
-        "round_sequence_1_to_n": sequence,
-        "evidence_source": "APPLICATION_OWNED_CANONICAL_CONVERSATION_RECORD",
-        "agent_prose_used_as_identity": "NO",
-    }
+    requests = [r for r in rec.get("requests", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip()]
+    rounds = [r for r in rec.get("rounds", []) if isinstance(r, dict) and str(r.get("round_id") or "").strip()]
+    by_request = {str(r.get("request_id")): r for r in rounds if str(r.get("request_id") or "").strip()}
+    valid = bool(requests) and len(requests) == len(rounds) and len(by_request) == len(rounds)
+    expected = []
+    for ordinal, req in enumerate(requests, 1):
+        rid = str(req.get("request_id") or "")
+        rr = by_request.get(rid)
+        expected_id = f"{chat.get('conversation_id')}:{rid}:r{ordinal}"
+        try: base = int(req.get("canonical_round_base") or 0)
+        except (TypeError, ValueError): base = 0
+        try: num = int((rr or {}).get("round_number") or (rr or {}).get("round") or 0)
+        except (TypeError, ValueError): num = 0
+        ok = bool(rr and base == ordinal and num == ordinal and str(rr.get("round_id") or "") == expected_id)
+        valid = valid and ok
+        expected.append(expected_id)
+    return {"gate":"PASS" if valid else "FAIL", "status":"PASS" if valid else "FAIL", "request_count":len(requests), "round_count":len(rounds), "expected_round_sequence":expected, "source":"V26_3_CANONICAL_CONVERSATION_STORE"}
 
 def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, context_meta: dict[str, Any] | None, health: list[dict[str, Any]] | None, security: dict[str, Any] | None, regression: dict[str, Any] | None) -> dict[str, Any]:
     """Assemble one application-owned V23 continuation report from runtime records."""

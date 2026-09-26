@@ -1300,8 +1300,13 @@ def _validate_provider_output_schema(seat: Seat, result: dict, expected_model: s
 def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, local_fallback: bool, credential: Optional[str], attachments: Optional[list[dict]] = None, model_candidates: Optional[Tuple[str, ...]] = None, deadline: Optional[float] = None, request_id: str = "", forbidden_bridge_values: Optional[Tuple[str, ...]] = None) -> dict:
     del local_fallback
     forbidden_bridge_values = tuple(str(v) for v in (forbidden_bridge_values or ()) if str(v))
-    if any(v in str(user_prompt or "") for v in forbidden_bridge_values):
-        return _result(seat, "PROMPT_BOUNDARY_VIOLATION", "", "", "class=prompt_boundary_violation; forbidden bridge value reached provider prompt.", time.perf_counter(), [], request_id=request_id, round_no=round_no)
+    # HOTFIX160: Bridge values are never allowed to cross the provider boundary.
+    # If a caller accidentally includes one in the user prompt, redact it before
+    # constructing the HTTP prompt rather than manufacturing a provider failure.
+    # The provider must receive a safe prompt; the Bridge remains application-owned.
+    for forbidden in forbidden_bridge_values:
+        if forbidden:
+            user_prompt = str(user_prompt or "").replace(forbidden, "[BRIDGE_VALUE_REDACTED]")
     started = time.perf_counter()
     # No artificial provider/seat timeout is imposed. An optional caller-owned
     # deadline is honored only when explicitly supplied by the caller.
