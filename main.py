@@ -2580,9 +2580,12 @@ def run_app() -> None:
         prompt = (typed_prompt or "").strip()
         attachments = _submission_files(direct_files, folder_files)
     else:
-        # Do not execute a request merely because the user is typing or has picked
-        # files; execution is gated exclusively by the explicit Send action.
-        return
+        # HOTFIX156.1: idle composer state must continue rendering the app.
+        # The Send button exclusively gates request execution, but the rest of the
+        # conversation/audit UI must continue rendering on every Streamlit rerun.
+        # This is critical on mobile because every text-area edit causes a rerun.
+        prompt = ""
+        attachments = []
     if attachments is None:
         return
     if prompt or attachments:
