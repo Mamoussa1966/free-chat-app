@@ -4,9 +4,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "main.py"
 
 
-def test_hotfix151_3_has_exactly_one_adjacent_three_action_bar():
+def test_hotfix156_has_exactly_one_adjacent_four_action_bar():
     source = MAIN.read_text(encoding="utf-8")
-    assert source.count('st.columns([1.25, 1.25, 1.25])') == 1
+    assert source.count('st.columns([1.15, 1.15, 1.15, 1.15])') == 1
     assert source.count('Run full V23 platform audit') >= 1
     assert 'v23_platform_audit_actionbar' in source
     assert 'Copy Full V23 Audit Report' in source
