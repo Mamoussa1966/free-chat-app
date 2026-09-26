@@ -1633,10 +1633,13 @@ def _request_record(chat: dict, request_id: str) -> dict | None:
 
 
 def _authoritative_round_base(chat: dict) -> int:
-    """Return the highest numeric Round ordinal already committed by the canonical ledger.
+    """Allocate the next conversation Round ordinal at Request creation time.
 
-    This is deliberately derived only from application-owned ConversationRecord state;
-    UI labels, audit labels, provider prose, and the current request ledger are not used.
+    HOTFIX159 contract: ``canonical_round_base`` is the first Round number owned
+    by the Request, not the number of the last completed Round.  Therefore a
+    fresh conversation allocates base=1, the next Request allocates base=2, etc.
+    The value is derived only from the canonical ConversationRecord and is never
+    recalculated from completion order, UI state, provider results, or prose.
     """
     record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
     rows = record.get("rounds", []) if isinstance(record.get("rounds"), list) else []
@@ -1644,14 +1647,15 @@ def _authoritative_round_base(chat: dict) -> int:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        value = row.get("round")
-        try:
-            number = int(value)
-        except (TypeError, ValueError):
-            continue
-        if number > 0:
-            numbers.append(number)
-    return max(numbers, default=0)
+        for key in ("round_number", "round", "ordinal"):
+            try:
+                number = int(row.get(key))
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                numbers.append(number)
+                break
+    return max(numbers, default=0) + 1
 
 
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str, bridge_controls: list[tuple[str, str]] | None = None, continuation_request_id: str = "") -> list[dict]:
@@ -1729,7 +1733,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         lifecycle.record("REQUEST_START", round_id=0, status="RUNNING")
         lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds), "conversation_round_base": str(round_base)})
         for local_round_no in range(1, total_rounds + 1):
-            round_no = round_base + local_round_no
+            # HOTFIX159: canonical_round_base is the first ordinal for this Request.
+            # Do not add one again; this was the source of the historical 1→2 drift.
+            round_no = round_base + local_round_no - 1
             round_registry.claim_round(round_no)
             lifecycle.start_round(round_no)
             runtime_round_id = begin_round(chat, current_user_message_id, request_id, round_no, st.session_state)
