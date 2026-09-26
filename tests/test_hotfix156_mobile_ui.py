@@ -36,3 +36,12 @@ def test_hotfix156_does_not_change_provider_contract_literals():
     assert "Free Cascade #1→#10" in TEXT
     assert "capture_credentials" in TEXT
     assert "capture_model_candidates" in TEXT
+
+
+def test_hotfix156_idle_composer_does_not_hide_following_sections():
+    marker = 'elif send_clicked:'
+    start = TEXT.index(marker)
+    tail = TEXT[start:TEXT.index('if attachments is None:', start)]
+    assert 'return' not in tail
+    assert 'prompt = ""' in tail
+    assert 'attachments = []' in tail
