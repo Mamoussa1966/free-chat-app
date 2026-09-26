@@ -828,7 +828,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 def _init_state() -> None:
     ensure_persistence_store(st.session_state)
-    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}, "last_v23_final_closure_audit": {}}
+    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "input_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}, "last_v23_final_closure_audit": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -1054,6 +1054,66 @@ def _public_result(result: dict) -> dict:
     public.pop("error", None)
     public.pop("_bridge_application_state", None)
     return public
+
+def _render_section_actions(title: str, payload, key: str, download_name: str | None = None) -> None:
+    """HOTFIX156: mobile-friendly Copy / Print / Download controls for a section.
+
+    Presentation-only: payload is serialized from the application-owned object passed
+    by the caller; these controls never mutate runtime state or trigger execution.
+    """
+    if isinstance(payload, str):
+        export_text = payload
+    else:
+        export_text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+    safe_key = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(key))[:80]
+    button_copy = f"copy-section-{safe_key}"
+    button_print = f"print-section-{safe_key}"
+    copy_payload = json.dumps(export_text, ensure_ascii=False)
+    print_payload = html.escape(export_text)
+    print_title = html.escape(str(title), quote=True)
+    copy_html = f"""
+    <div style="display:flex;gap:6px;width:100%;font-family:sans-serif;">
+      <button id="{button_copy}" style="flex:1;min-height:40px;border:1px solid #bbb;border-radius:7px;background:#fff;cursor:pointer;font-size:14px;">📋 نسخ</button>
+      <button id="{button_print}" style="flex:1;min-height:40px;border:1px solid #bbb;border-radius:7px;background:#fff;cursor:pointer;font-size:14px;">🖨️ طباعة</button>
+      <span id="status-{safe_key}" style="display:none"></span>
+    </div>
+    <script>
+    (() => {{
+      const payload = {copy_payload};
+      const copyBtn = document.getElementById('{button_copy}');
+      const printBtn = document.getElementById('{button_print}');
+      const status = document.getElementById('status-{safe_key}');
+      const copied = () => {{ copyBtn.textContent='✓ تم النسخ'; setTimeout(()=>copyBtn.textContent='📋 نسخ',1400); }};
+      copyBtn.addEventListener('click', async () => {{
+        try {{
+          if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(payload); copied(); return; }}
+        }} catch(e) {{}}
+        try {{
+          const ta=document.createElement('textarea'); ta.value=payload; ta.setAttribute('readonly','');
+          ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.focus(); ta.select();
+          const ok=document.execCommand('copy'); document.body.removeChild(ta); if(ok) copied();
+        }} catch(e) {{}}
+      }});
+      printBtn.addEventListener('click', () => {{
+        const report = {json.dumps(print_payload, ensure_ascii=False)};
+        const w=window.open('', '_blank');
+        if(!w) {{ window.print(); return; }}
+        w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>{print_title}</title><style>body{{font-family:monospace;white-space:pre-wrap;word-break:break-word;margin:18px;font-size:12px;line-height:1.5}}@media print{{body{{margin:10mm}}}}</style></head><body>'+report+'</body></html>');
+        w.document.close(); w.focus(); setTimeout(()=>w.print(),250);
+      }});
+    }})();
+    </script>
+    """
+    components_html(copy_html, height=48, scrolling=False)
+    st.download_button(
+        "⬇️ Download",
+        data=export_text,
+        file_name=download_name or f"{safe_key}.txt",
+        mime="application/json" if (download_name or '').endswith('.json') else "text/plain",
+        key=f"download-section-{safe_key}",
+        use_container_width=True,
+    )
+
 
 def _render_live_cascade_telemetry(result: dict) -> None:
     """Render safe per-attempt telemetry immediately after one seat execution.
@@ -2291,6 +2351,7 @@ def _render_bridge_audit(results: list[dict]) -> None:
         f"BRIDGE_STATE_CONTAINS_VALUE = {audit.get('BRIDGE_STATE_CONTAINS_VALUE', 'NO')}",
     ]
     st.code("\n".join(lines), language="text")
+    _render_section_actions("Transactional Bridge — Proof Audit", "\n".join(lines), "transactional_bridge_proof", "Transactional_Bridge_Proof_Audit.txt")
     request_id = str(audit.get("request_id") or "").strip()
     if request_id:
         # HOTFIX123: render counters from the persisted request record, not the
@@ -2300,7 +2361,7 @@ def _render_bridge_audit(results: list[dict]) -> None:
         metrics = (record or {}).get("request_metrics") or {}
         if metrics:
             st.subheader("📊 Authoritative Request Audit")
-            st.code("\n".join([
+            authoritative_request_lines = [
                 f"REQUEST_ID = {metrics.get('request_id', request_id)}",
                 f"ROUND_IDS = {metrics.get('rounds', [])}",
                 f"UNIQUE_REQUEST_IDS = {metrics.get('unique_request_ids', 0)}",
@@ -2310,12 +2371,14 @@ def _render_bridge_audit(results: list[dict]) -> None:
                 f"PROVIDER_EXECUTION_EVENTS = {metrics.get('provider_execution_events', 0)}",
                 "COUNTER_SOURCE = REQUEST_RECORD / LIFECYCLE_AUDIT (CURRENT REQUEST TELEMETRY)",
                 "SEAT_GENERATED_PROSE_USED_AS_COUNTER_SOURCE = NO",
-            ]), language="text")
+            ]
+            st.code("\n".join(authoritative_request_lines), language="text")
+            _render_section_actions("Authoritative Request Audit", "\n".join(authoritative_request_lines), "authoritative_request_audit", "Authoritative_Request_Audit.txt")
 
     # HOTFIX134: expose explicit runtime-backed HOTFIX131 identity/prose checks.
     prose_audit = _hotfix131_runtime_prose_audit(results, request_id, audit)
     st.subheader("🔎 HOTFIX131 — Authoritative Identity / Bridge-Prose Isolation")
-    st.code("\n".join([
+    prose_lines = [
         f"AGENT_PROSE_REQUEST_ID_OVERRIDE = {prose_audit['AGENT_PROSE_REQUEST_ID_OVERRIDE']}",
         f"AGENT_PROSE_STATUS_OVERRIDE = {prose_audit['AGENT_PROSE_STATUS_OVERRIDE']}",
         f"AGENT_PROSE_RESULT_ROW_INJECTION = {prose_audit['AGENT_PROSE_RESULT_ROW_INJECTION']}",
@@ -2324,7 +2387,9 @@ def _render_bridge_audit(results: list[dict]) -> None:
         f"CONTROL_PROSE_LEAK = {prose_audit['CONTROL_PROSE_LEAK']}",
         f"AUTHORITATIVE_RUNTIME_IDENTITY = {prose_audit['AUTHORITATIVE_RUNTIME_IDENTITY']}",
         f"PROSE_ISOLATION_AUTHORITATIVE_GATE = {prose_audit['PROSE_ISOLATION_AUTHORITATIVE_GATE']}",
-    ]), language="text")
+    ]
+    _render_section_actions("HOTFIX131 — Authoritative Identity / Bridge-Prose Isolation", "\n".join(prose_lines), "hotfix131_prose_isolation", "HOTFIX131_Prose_Isolation_Audit.txt")
+    st.code("\n".join(prose_lines), language="text")
 
 def _ui_semantic_counters(results: list[dict]) -> dict:
     """HOTFIX129: state-specific UI counters; never collapse non-success states into `failed`.
@@ -2377,6 +2442,7 @@ def _render_diagnostics(results: list[dict], title: str = "🔎 نتائج ال�
         ])
         + " • Local Engine: غير مستخدم"
     )
+    _render_section_actions(title, {"counters": counters, "results": [_public_result(r) for r in (results or [])]}, f"diagnostics_{re.sub(r'[^a-zA-Z0-9]+','_',title)}", "Round_Diagnostics.json")
     # HOTFIX129: expose the complete semantic state breakdown when any
     # non-success state exists; no generic `success • failed` aggregation.
     if any(counters[k] for k in (
@@ -2405,6 +2471,7 @@ def _render_provider_diagnostics(results: list[dict]) -> None:
     if not results:
         return
     st.subheader("🧪 الفحص المستقل للمزودين")
+    _render_section_actions("الفحص المستقل للمزودين", [_public_result(r) for r in (results or [])], "provider_diagnostics", "Provider_Diagnostics.json")
     for result in results:
         _render_result_line(result, diagnostic_only=True)
 
@@ -2420,6 +2487,7 @@ def _render_production_core_validation() -> None:
     else:
         st.error("🔴 PRODUCTION CORE GATE: NO-GO")
     st.subheader("🧪 HOTFIX123 — Production Core Test Harness")
+    _render_section_actions("HOTFIX123 — Production Core Test Harness", report, "hotfix123_production_core", "HOTFIX123_Production_Core.json")
     st.code(render_production_core_report(report), language="text")
 
 
@@ -2431,7 +2499,12 @@ def _render_attachment_picker() -> list[dict]:
 
 
 def _submission_files(submission, folder_files: list[object]) -> list[dict] | None:
-    files = list(getattr(submission, "files", []) or []) if submission is not None else []
+    # HOTFIX156: accept both legacy st.chat_input submissions and the new
+    # mobile-friendly st.file_uploader list used with the multiline composer.
+    if isinstance(submission, (list, tuple)):
+        files = list(submission)
+    else:
+        files = list(getattr(submission, "files", []) or []) if submission is not None else []
     files.extend(folder_files)
     if not files:
         return []
@@ -2473,7 +2546,26 @@ def run_app() -> None:
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
-    submission = st.chat_input("اكتب موضوع النقاش أو أرفق صورة/ملف…", accept_file="multiple", file_type=None, max_upload_size=10, key="council_chat_input")
+
+    # HOTFIX156: mobile-first multiline composer. Streamlit's chat_input treats
+    # Enter as submit, which prevents ordinary line breaks on Android. A textarea
+    # makes Enter insert a newline; the explicit Send button owns submission.
+    input_key = f"council_message_input_{st.session_state.input_nonce}"
+    file_key = f"council_message_files_{st.session_state.input_nonce}"
+    typed_prompt = st.text_area(
+        "💬 رسالة المجلس",
+        placeholder="اكتب رسالتك هنا… اضغط Enter للانتقال إلى سطر جديد، ثم اضغط زر الإرسال.",
+        height=120,
+        key=input_key,
+    )
+    direct_files = st.file_uploader(
+        "📎 إرفاق ملفات / صور (اختياري)",
+        accept_multiple_files=True,
+        key=file_key,
+        help="يمكنك اختيار أكثر من ملف من الهاتف قبل الإرسال.",
+    )
+    send_clicked = st.button("📨 إرسال إلى المجلس", type="primary", use_container_width=True, key=f"send_message_{st.session_state.input_nonce}")
+
     prompt = ""
     attachments: list[dict] = []
     voice_audio = None
@@ -2481,12 +2573,16 @@ def run_app() -> None:
     voice_fingerprint = ""
     if voice_submission:
         transcript, voice_audio, voice_mime, voice_fingerprint = voice_submission
-        typed_prompt = (getattr(submission, "text", "") or "").strip() if submission is not None else ""
+        typed_prompt = (typed_prompt or "").strip()
         prompt = f"{typed_prompt}\n\n[تفريغ الرسالة الصوتية]:\n{transcript}" if typed_prompt and transcript else (typed_prompt or transcript)
-        attachments = _submission_files(submission, folder_files)
-    elif submission:
-        prompt = (getattr(submission, "text", "") or "").strip()
-        attachments = _submission_files(submission, folder_files)
+        attachments = _submission_files(direct_files, folder_files)
+    elif send_clicked:
+        prompt = (typed_prompt or "").strip()
+        attachments = _submission_files(direct_files, folder_files)
+    else:
+        # Do not execute a request merely because the user is typing or has picked
+        # files; execution is gated exclusively by the explicit Send action.
+        return
     if attachments is None:
         return
     if prompt or attachments:
@@ -2674,6 +2770,7 @@ def run_app() -> None:
         st.session_state.last_security_audit = security_audit(st.session_state.get("chats", []))
         st.session_state.folder_nonce += 1
         st.session_state.voice_nonce += 1
+        st.session_state.input_nonce += 1
         st.rerun()
     hydrate_canonical_record(chat, st.session_state)
     rebuild_runtime_indexes_from_canonical(chat, st.session_state)
@@ -2687,69 +2784,12 @@ def run_app() -> None:
         # authoritative audit payload. These controls are presentation-only and
         # never mutate canonical persistence, counters, provider execution, or audit truth.
         hotfix118_export_text = json.dumps(v25_audit, ensure_ascii=False, indent=2, sort_keys=True, default=str)
-        hotfix118_action_copy, hotfix118_action_print = st.columns([1, 1])
-
-        with hotfix118_action_copy:
-            copy_payload = json.dumps(hotfix118_export_text, ensure_ascii=False)
-            copy_html = f"""
-            <div style="font-family:sans-serif;width:100%;">
-              <button id="copy-hotfix118" style="width:100%;height:38px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">📋 نسخ HOTFIX118</button>
-              <div id="copy-hotfix118-status" style="font-size:11px;margin-top:3px;text-align:center;min-height:14px;"></div>
-            </div>
-            <script>
-            (() => {{
-              const payload = {copy_payload};
-              const button = document.getElementById('copy-hotfix118');
-              const status = document.getElementById('copy-hotfix118-status');
-              const ok = () => {{ status.textContent = '✓ تم نسخ تقرير HOTFIX118 بالكامل'; }};
-              const fail = () => {{ status.textContent = 'تعذر النسخ — استخدم تحديد/نسخ النص الظاهر'; }};
-              button.addEventListener('click', async () => {{
-                try {{
-                  if (navigator.clipboard && window.isSecureContext) {{
-                    await navigator.clipboard.writeText(payload);
-                    ok(); return;
-                  }}
-                }} catch (e) {{}}
-                try {{
-                  const ta = document.createElement('textarea');
-                  ta.value = payload;
-                  ta.setAttribute('readonly', '');
-                  ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.top = '0';
-                  document.body.appendChild(ta); ta.focus(); ta.select();
-                  const copied = document.execCommand('copy');
-                  document.body.removeChild(ta);
-                  if (copied) {{ ok(); return; }}
-                }} catch (e) {{}}
-                fail();
-              }});
-            }})();
-            </script>
-            """
-            components_html(copy_html, height=58, scrolling=False)
-
-        with hotfix118_action_print:
-            print_payload = html.escape(hotfix118_export_text)
-            print_html = f"""
-            <div style="font-family:sans-serif;width:100%;">
-              <button id="print-hotfix118" style="width:100%;height:38px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">🖨️ طباعة HOTFIX118</button>
-            </div>
-            <script>
-            (() => {{
-              const button = document.getElementById('print-hotfix118');
-              button.addEventListener('click', () => {{
-                const report = {json.dumps(print_payload, ensure_ascii=False)};
-                const w = window.open('', '_blank', 'noopener,noreferrer');
-                if (!w) {{ window.print(); return; }}
-                w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>HOTFIX118 — Authoritative Historical Conversation Audit</title><style>body{{font-family:monospace;white-space:pre-wrap;word-break:break-word;margin:24px;font-size:12px;line-height:1.45}}@media print{{body{{margin:12mm}}}}</style></head><body>' + report + '</body></html>');
-                w.document.close();
-                w.focus();
-                setTimeout(() => w.print(), 250);
-              }});
-            }})();
-            </script>
-            """
-            components_html(print_html, height=58, scrolling=False)
-
+        _render_section_actions(
+            "HOTFIX118 — Authoritative Historical Conversation Audit",
+            hotfix118_export_text,
+            "hotfix118_authoritative_audit",
+            "HOTFIX118_Authoritative_Historical_Conversation_Audit.json",
+        )
         st.json(v25_audit)
         st.caption("مصدر الحقيقة: Application-Owned Runtime Records فقط؛ Agent prose غير مستخدم للهوية أو العدادات. HOTFIX155: النسخ والطباعة يستخدمان نفس payload الكامل المعروض.")
     with st.expander("🧭 Conversation Runtime / Provenance", expanded=False):
@@ -2757,6 +2797,7 @@ def run_app() -> None:
         syn = st.session_state.get("last_synthesis") or {}
         if syn:
             st.caption(f"Synthesis source: {syn.get('successful_providers', [])} · provenance={syn.get('provenance_count', 0)}")
+        _render_section_actions("Conversation Runtime / Provenance", runtime_audit, "conversation_runtime_provenance", "Conversation_Runtime_Provenance.json")
 
     if st.session_state.last_diagnostics:
         st.divider()
@@ -2768,12 +2809,14 @@ def run_app() -> None:
         syn = st.session_state.get("last_synthesis") or {}
         if syn:
             st.subheader("🧠 Council Synthesis / Authoritative Result Set")
+            _render_section_actions("Council Synthesis / Authoritative Result Set", syn, "council_synthesis", "Council_Synthesis.json")
             st.json(syn)
     _render_production_core_validation()
     harness_report = st.session_state.get("last_hotfix141_harness") or []
     if harness_report:
         st.divider()
         st.subheader("HOTFIX141 — A/B/C Independent Lifecycle Harness")
+        _render_section_actions("HOTFIX141 — A/B/C Independent Lifecycle Harness", {"mode": "HOTFIX141_ABC", "requests": harness_report, "authoritative_source": "APPLICATION_OWNED_REQUEST_RECORDS"}, "hotfix141_abc", "HOTFIX141_ABC_Lifecycle_Audit.json")
         st.json({"mode": "HOTFIX141_ABC", "requests": harness_report, "authoritative_source": "APPLICATION_OWNED_REQUEST_RECORDS"})
 
     with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=True):
@@ -2781,7 +2824,7 @@ def run_app() -> None:
         # Do not render a second inner subheader; doing so produced two
         # visually identical audit headings, one above the action bar and
         # one beside it. The three controls remain one adjacent action bar.
-        action_run, action_copy, action_download = st.columns([1.25, 1.25, 1.25])
+        action_run, action_copy, action_print, action_download = st.columns([1.15, 1.15, 1.15, 1.15])
 
         with action_run:
             if st.button("▶️ Run full V23 platform audit", key="v23_platform_audit_actionbar", use_container_width=True):
@@ -2881,6 +2924,30 @@ def run_app() -> None:
             else:
                 st.button("📋 Copy Full V23 Audit Report", disabled=True, use_container_width=True, key="v23_full_audit_copy_disabled_151_3")
 
+        with action_print:
+            if report:
+                print_payload = html.escape(audit_export_text)
+                print_html = f"""
+                <div style="font-family:sans-serif;width:100%;">
+                  <button id="print-v23-full" style="width:100%;height:38px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;">🖨️ Print</button>
+                </div>
+                <script>
+                (() => {{
+                  const button=document.getElementById('print-v23-full');
+                  button.addEventListener('click',()=>{{
+                    const report={json.dumps(print_payload, ensure_ascii=False)};
+                    const w=window.open('', '_blank');
+                    if(!w){{window.print();return;}}
+                    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>V23 Full Platform Audit</title><style>body{{font-family:monospace;white-space:pre-wrap;word-break:break-word;margin:18px;font-size:12px;line-height:1.5}}@media print{{body{{margin:10mm}}}}</style></head><body>'+report+'</body></html>');
+                    w.document.close();w.focus();setTimeout(()=>w.print(),250);
+                  }});
+                }})();
+                </script>
+                """
+                components_html(print_html, height=58, scrolling=False)
+            else:
+                st.button("🖨️ Print", disabled=True, use_container_width=True, key="v23_full_audit_print_disabled_156")
+
         with action_download:
             st.download_button(
                 "💾 Download Full V23 Audit JSON",
@@ -2898,6 +2965,7 @@ def run_app() -> None:
             st.json(report)
             if closure:
                 st.subheader("HOTFIX146 — V23 Final Closure Audit")
+                _render_section_actions("HOTFIX146 — V23 Final Closure Audit", closure, "hotfix146_final_closure", "HOTFIX146_V23_Final_Closure.json")
                 st.json(closure)
             st.code(audit_export_text, language="json")
         else:
@@ -2909,6 +2977,7 @@ def run_app() -> None:
         regression_report = st.session_state.get("last_v23_multi_request_regression") or {}
         if regression_report:
             st.subheader("A/B/C — Independent Request Lifecycle Audit")
+            _render_section_actions("A/B/C — Independent Request Lifecycle Audit", regression_report, "abc_request_lifecycle", "ABC_Request_Lifecycle_Audit.json")
             st.json(regression_report)
 
 if __name__ == "__main__":
