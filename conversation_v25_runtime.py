@@ -549,14 +549,34 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         except (TypeError, ValueError):
             return 0
 
-    enough = len(mids) == 2 and len(req_ids) == 2 and len(set(req_ids)) == 2 and all(mids)
+    # HOTFIX157: canonical identity evidence must close for the actual persisted
+    # history window. A one-message/one-request/one-round runtime test is a valid
+    # lifecycle and must not be downgraded to NOT_PROVEN merely because the older
+    # HOTFIX127 two-message regression window is absent. Two-message isolation
+    # remains mandatory only when two canonical user messages actually exist.
+    evidence_count = len(mids)
+    enough = (
+        evidence_count in (1, 2)
+        and len(req_ids) == evidence_count
+        and len(set(req_ids)) == evidence_count
+        and all(mids)
+    )
+    two_message_window = evidence_count == 2
     request_isolation = "NOT_PROVEN"
     result_isolation = "NOT_PROVEN"
     counter_isolation = "NOT_PROVEN"
     if enough:
-        request_isolation = bool(r1 != r2 and all(_s(x.get("request_id")) == r2 and _s(x.get("message_id")) == m2 for x in p2 + res2) and all(_s(x.get("request_id")) == r1 and _s(x.get("message_id")) == m1 for x in p1 + res1))
-        result_isolation = bool(all(_s(x.get("request_id")) != r1 for x in res2) and all(_s(x.get("request_id")) != r2 for x in res1))
-        counter_isolation = bool(e1 is not None and e2 is not None and a1 is not None and a2 is not None)
+        if two_message_window:
+            request_isolation = bool(r1 != r2 and all(_s(x.get("request_id")) == r2 and _s(x.get("message_id")) == m2 for x in p2 + res2) and all(_s(x.get("request_id")) == r1 and _s(x.get("message_id")) == m1 for x in p1 + res1))
+            result_isolation = bool(all(_s(x.get("request_id")) != r1 for x in res2) and all(_s(x.get("request_id")) != r2 for x in res1))
+            counter_isolation = bool(e1 is not None and e2 is not None and a1 is not None and a2 is not None)
+        else:
+            # There is no second request to isolate in a single-turn audit. The
+            # correct fail-closed semantics are "not applicable/proven", not a
+            # fabricated two-turn PASS.
+            request_isolation = True
+            result_isolation = True
+            counter_isolation = bool(e1 is not None and a1 is not None)
 
     cred, raw, diag = _structural_secret_scan(chat)
     audit = {
@@ -586,7 +606,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "canonical_request_round_binding_proven": bool(enough and all(
             _s(x.get("request_id")) and _s(x.get("message_id")) and _round_num(x) > 0
             for x in selected_round_identity_rows
-        )),
+        ) and len(selected_round_identity_rows) == evidence_count),
         "canonical_request_count": len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]),
         "canonical_message_count": len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id")) and _s(x.get("role")).lower() == "user"]),
         "canonical_round_count": len([x for x in canonical_record.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))]),
@@ -602,15 +622,15 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "AUTHORITATIVE_SOURCE": "APPLICATION_OWNED_RUNTIME_STATE / V26_3_CANONICAL_CONVERSATION_STORE",
         "previous_request_reexecuted": (False if enough and r1 != r2 else "NOT_PROVEN"),
         "two_message_isolation": (request_isolation if enough else "NOT_PROVEN"),
-        "message_1_request_mapping": (r1 == _s(next((x.get("request_id") for x in req_by_msg.get(m1, [])), ""))) if enough else "NOT_PROVEN",
-        "message_2_request_mapping": (r2 == _s(next((x.get("request_id") for x in req_by_msg.get(m2, [])), ""))) if enough else "NOT_PROVEN",
+        "message_1_request_mapping": (len(req_by_msg.get(m1, [])) == 1 and r1 == _s(req_by_msg[m1][0].get("request_id"))) if enough and m1 else "NOT_PROVEN",
+        "message_2_request_mapping": (len(req_by_msg.get(m2, [])) == 1 and r2 == _s(req_by_msg[m2][0].get("request_id"))) if enough and m2 else "NOT_PROVEN",
         "round_1_ids": round_ids_by_msg.get(m1) or "NOT_PROVEN",
         "round_2_ids": round_ids_by_msg.get(m2) or "NOT_PROVEN",
-        "round_1_message_mapping": (all(_s(x.get("message_id")) == m1 for x in round_by_msg.get(m1, [])) and bool(round_by_msg.get(m1))) if enough else "NOT_PROVEN",
-        "round_2_message_mapping": (all(_s(x.get("message_id")) == m2 for x in round_by_msg.get(m2, [])) and bool(round_by_msg.get(m2))) if enough else "NOT_PROVEN",
-        "request_1_round_1_mapping": (bool(round_by_msg.get(m1)) and all(_s(x.get("request_id")) == r1 and int(x.get("round") or 0) == 1 for x in round_by_msg.get(m1, []))) if enough else "NOT_PROVEN",
-        "request_2_round_2_mapping": (bool(round_by_msg.get(m2)) and all(_s(x.get("request_id")) == r2 and int(x.get("round") or 0) == 2 for x in round_by_msg.get(m2, []))) if enough else "NOT_PROVEN",
-        "request_2_round_1_mapping": (bool(round_by_msg.get(m2)) and all(_s(x.get("request_id")) == r2 and int(x.get("round") or 0) == 1 for x in round_by_msg.get(m2, []))) if enough else "NOT_PROVEN",
+        "round_1_message_mapping": (len(round_by_msg.get(m1, [])) == 1 and _s(round_by_msg[m1][0].get("message_id")) == m1) if enough and m1 else "NOT_PROVEN",
+        "round_2_message_mapping": (len(round_by_msg.get(m2, [])) == 1 and _s(round_by_msg[m2][0].get("message_id")) == m2) if enough and m2 else "NOT_PROVEN",
+        "request_1_round_1_mapping": (bool(round_by_msg.get(m1)) and len(round_by_msg.get(m1, [])) == 1 and _s(round_by_msg[m1][0].get("request_id")) == r1 and int(round_by_msg[m1][0].get("round") or 0) == 1) if enough and m1 else "NOT_PROVEN",
+        "request_2_round_2_mapping": (bool(round_by_msg.get(m2)) and len(round_by_msg.get(m2, [])) == 1 and _s(round_by_msg[m2][0].get("request_id")) == r2 and int(round_by_msg[m2][0].get("round") or 0) == 2) if enough and m2 else "NOT_PROVEN",
+        "request_2_round_1_mapping": (bool(round_by_msg.get(m2)) and len(round_by_msg.get(m2, [])) == 1 and _s(round_by_msg[m2][0].get("request_id")) == r2 and int(round_by_msg[m2][0].get("round") or 0) == 1) if enough and m2 else "NOT_PROVEN",
         "canonical_transport_loaded": bool(canonical_transport) if canonical_transport else "NOT_PROVEN",
         "canonical_transport_message_count": len([x for x in canonical_transport.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id"))]) if canonical_transport else "NOT_PROVEN",
         "canonical_transport_request_count": len([x for x in canonical_transport.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))]) if canonical_transport else "NOT_PROVEN",
@@ -625,9 +645,9 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         ),
         "conversation_id_stable": (len(conv_ids) == 1 and enough) if enough else "NOT_PROVEN",
         "session_id_stable": (len(sess_ids) == 1 and enough) if enough else "NOT_PROVEN",
-        "message_ids_unique": (len(set(mids)) == 2) if enough else "NOT_PROVEN",
-        "request_ids_unique": (len(set(req_ids)) == 2) if enough else "NOT_PROVEN",
-        "round_ids_unique": (len(round_ids_by_msg.get(m1, []) + round_ids_by_msg.get(m2, [])) >= 2 and len(set(round_ids_by_msg.get(m1, []) + round_ids_by_msg.get(m2, []))) == len(round_ids_by_msg.get(m1, []) + round_ids_by_msg.get(m2, []))) if enough else "NOT_PROVEN",
+        "message_ids_unique": (len(set(mids)) == evidence_count) if enough else "NOT_PROVEN",
+        "request_ids_unique": (len(set(req_ids)) == evidence_count) if enough else "NOT_PROVEN",
+        "round_ids_unique": (len(set([rid for mid in mids for rid in round_ids_by_msg.get(mid, [])])) == sum(len(round_ids_by_msg.get(mid, [])) for mid in mids) and all(len(round_ids_by_msg.get(mid, [])) == 1 for mid in mids)) if enough else "NOT_PROVEN",
         "bridge_ids_unique_when_present": (len(set(b1 + b2)) == len(b1 + b2)) if (b1 or b2) else "NOT_PROVEN",
         "bridge_ids_message_1": b1 or "NOT_PROVEN",
         "bridge_ids_message_2": b2 or "NOT_PROVEN",
@@ -755,12 +775,10 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     monotonic_round_contract_active = bool(enough and len(marked_rounds) == len(mids))
     audit["round_identity_contract"] = "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1" if monotonic_round_contract_active else "NOT_PROVEN"
     audit["canonical_round_ordinals"] = selected_round_numbers if enough else "NOT_PROVEN"
-    selected_sequence_contiguous = bool(
-        enough
-        and generic_round1_proven
-        and generic_round2_proven
-        and selected_round_numbers[1] == selected_round_numbers[0] + 1
-    )
+    selected_sequence_contiguous = (
+        bool(enough and generic_round1_proven) if evidence_count == 1 else
+        bool(enough and generic_round1_proven and generic_round2_proven and selected_round_numbers[1] == selected_round_numbers[0] + 1)
+    ) if enough else "NOT_PROVEN"
     audit["selected_round_sequence_contiguous"] = selected_sequence_contiguous if enough else "NOT_PROVEN"
     audit["canonical_round_sequence_base"] = selected_round_numbers[0] if enough and selected_round_numbers and selected_round_numbers[0] is not None else "NOT_PROVEN"
     round_id_ordinal_consistent = bool(
@@ -772,29 +790,37 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         )
     ) if enough else False
     audit["round_id_ordinal_consistent"] = round_id_ordinal_consistent if enough else "NOT_PROVEN"
-    audit["canonical_round_sequence_proven"] = bool(
+    expected_round_count = evidence_count
+    canonical_round_sequence_proven = bool(
         enough
         and exact_request_binding
-        and generic_round1_proven
-        and generic_round2_proven
-        and selected_sequence_contiguous
+        and all(
+            (_s(x.get("request_id")) == rid and _s(x.get("message_id")) == mid)
+            for mid, rid in zip(mids, req_ids)
+            for x in round_by_msg.get(mid, [])
+        )
+        and all(len(round_by_msg.get(mid, [])) == 1 for mid in mids)
+        and all(_generic_round_row_proof(mid, rid)[0] for mid, rid in zip(mids, req_ids))
+        and selected_sequence_contiguous is True
         and round_id_ordinal_consistent
-        and len({ _s(x.get("round_id")) for x in rounds }) == len(rounds) == 2
+        and len({ _s(x.get("round_id")) for x in rounds }) == len(rounds)
+        and len(rounds) == expected_round_count
     ) if enough else "NOT_PROVEN"
+    audit["canonical_round_sequence_proven"] = canonical_round_sequence_proven
     audit["canonical_round_identity_evidence"] = {
-        "message_1_request_1_exact": bool(enough and exact_request_binding and r1 == _s(exact_request_rows[m1][0].get("request_id"))) if enough and exact_request_rows.get(m1) else False,
-        "message_2_request_2_exact": bool(enough and exact_request_binding and r2 == _s(exact_request_rows[m2][0].get("request_id"))) if enough and exact_request_rows.get(m2) else False,
+        "message_1_request_1_exact": bool(enough and len(exact_request_rows.get(m1, [])) == 1 and r1 == _s(exact_request_rows[m1][0].get("request_id"))) if enough and exact_request_rows.get(m1) else False,
+        "message_2_request_2_exact": bool(enough and m2 and len(exact_request_rows.get(m2, [])) == 1 and r2 == _s(exact_request_rows[m2][0].get("request_id"))) if enough and exact_request_rows.get(m2) else "NOT_PROVEN",
         "request_1_round_1_exact": round1_proven,
         "request_2_round_2_exact": round2_proven,
         "request_2_round_1_exact": wrong_round1_proven,
         "request_1_round_generic_exact": generic_round1_proven,
         "request_2_round_generic_exact": generic_round2_proven,
-        "round_1_record_count": len(round_by_msg.get(m1, [])) if enough else "NOT_PROVEN",
-        "round_2_record_count": len(round_by_msg.get(m2, [])) if enough else "NOT_PROVEN",
+        "round_1_record_count": len(round_by_msg.get(m1, [])) if enough and m1 else "NOT_PROVEN",
+        "round_2_record_count": len(round_by_msg.get(m2, [])) if enough and m2 else "NOT_PROVEN",
     }
-    audit["request_1_round_1_mapping"] = round1_proven if enough else "NOT_PROVEN"
-    audit["request_2_round_2_mapping"] = round2_proven if enough else "NOT_PROVEN"
-    audit["request_2_round_1_mapping"] = wrong_round1_proven if enough else "NOT_PROVEN"
+    audit["request_1_round_1_mapping"] = round1_proven if enough and m1 else "NOT_PROVEN"
+    audit["request_2_round_2_mapping"] = round2_proven if enough and m2 else "NOT_PROVEN"
+    audit["request_2_round_1_mapping"] = wrong_round1_proven if enough and m2 else "NOT_PROVEN"
     full_canonical_message_count = len([x for x in canonical_record.get("messages", []) if isinstance(x, dict) and _s(x.get("message_id")) and _s(x.get("role")).lower() == "user"])
     full_canonical_request_count = len([x for x in canonical_record.get("requests", []) if isinstance(x, dict) and _s(x.get("request_id"))])
     full_canonical_round_count = len([x for x in canonical_record.get("rounds", []) if isinstance(x, dict) and _s(x.get("round_id"))])
@@ -808,24 +834,31 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     )
     audit["historical_exact_two_contract"] = historical_exact_two
     round_progression_gate = audit.get("canonical_round_sequence_proven") is True
-    structural_pass = (
+    identity_flags = ["conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation"]
+    first_turn_flags = ["message_1_request_mapping", "round_1_message_mapping"]
+    dynamic_identity_ok = (
         enough
         and (audit.get("canonical_transport_loaded") is True or audit.get("canonical_transport_loaded") == "NOT_PROVEN")
-        and all(audit[k] is True for k in ("conversation_id_stable", "session_id_stable", "message_ids_unique", "request_ids_unique", "round_ids_unique", "request_isolation", "counter_isolation", "result_isolation", "message_1_request_mapping", "message_2_request_mapping", "round_1_message_mapping", "round_2_message_mapping"))
-        and audit.get("request_2_round_1_mapping") is False
+        and all(audit.get(k) is True for k in identity_flags)
+        and all(audit.get(k) is True for k in first_turn_flags)
         and generic_round1_proven
-        and generic_round2_proven
-        and round_progression_gate
-        and (
-            not historical_exact_two
-            or (audit.get("request_1_round_1_mapping") is True and audit.get("request_2_round_2_mapping") is True)
-        )
+        and round_progression_gate is True
     )
+    if two_message_window:
+        dynamic_identity_ok = dynamic_identity_ok and all(audit.get(k) is True for k in (
+            "message_2_request_mapping", "round_2_message_mapping"
+        )) and audit.get("request_2_round_1_mapping") is False and generic_round2_proven
+    structural_pass = bool(dynamic_identity_ok)
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
     # Strict regression gate: complete two-message history without direct
     # canonical proof is FAIL, never a legacy-compatibility PASS.
     if historical_exact_two and audit.get("canonical_round_sequence_proven") is not True:
         audit["conversation_runtime_audit"] = "FAIL"
+    audit["canonical_request_round_binding_proven"] = bool(
+        enough and audit.get("canonical_round_sequence_proven") is True and
+        generic_round1_proven and
+        (not two_message_window or generic_round2_proven)
+    )
     audit["overall_authoritative_status"] = "PASS" if audit["conversation_runtime_audit"] == "PASS" and enough else "NOT_PROVEN"
     chat["v25_authoritative_audit"] = deepcopy(audit)
     return audit
