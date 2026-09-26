@@ -1117,7 +1117,12 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
         match = re.search(r"(?:^|[;\s])class=([A-Za-z0-9_:-]+)", str(error), flags=re.IGNORECASE)
         if match:
             safe_classification = _canonical_error_classification(match.group(1))
-    if status == "NO_FREE_MODEL_CONFIGURED":
+    if status == "SUCCESS":
+        # HOTFIX157: the result-level classification must be canonicalized from
+        # the actual successful execution state. Leaving this empty caused the
+        # public projection to rewrite a real HTTP-200 success as UNKNOWN.
+        safe_classification = "SUCCESS"
+    elif status == "NO_FREE_MODEL_CONFIGURED":
         safe_classification = "NOT_CONFIGURED"
     elif status == "NOT_CONFIGURED":
         safe_classification = "NOT_CONFIGURED"
@@ -1192,7 +1197,10 @@ def _result(seat: Seat, status: str, model: str, content: str, error: Optional[s
                 "attempt_id": str(item.get("attempt_id") or ""),
                 "request_id": str(item.get("request_id") or request_id or ""),
                 "round": int(item.get("round", round_no) or round_no),
-                "classification": _canonical_error_classification(str(item.get("classification") or "UNKNOWN")),
+                "classification": (
+                    "SUCCESS" if str(item.get("classification") or "").upper() == "SUCCESS"
+                    else _canonical_error_classification(str(item.get("classification") or "UNKNOWN"))
+                ),
                 "cascade_action": str(item.get("cascade_action") or "").upper(),
                 "execution_time": float(item.get("execution_time", item.get("latency", 0.0)) or 0.0),
                 "status": "SUCCESS" if str(item.get("final_result") or "").upper() == "SUCCESS" else "FAILED",

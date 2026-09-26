@@ -2417,7 +2417,15 @@ def _ui_semantic_counters(results: list[dict]) -> dict:
         "not_configured": statuses.count("NOT_CONFIGURED"),
         "request_created": statuses.count("REQUEST_CREATED"),
         "not_executed": statuses.count("NOT_EXECUTED"),
-        "execution_started": statuses.count("EXECUTION_STARTED"),
+        # HOTFIX157: execution_started is a runtime-event counter, never a
+        # result-status label. A successful provider result does not need to
+        # advertise a synthetic EXECUTION_STARTED status; its persisted
+        # runtime_execution_events are the canonical evidence.
+        "execution_started": sum(
+            1 for r in rows
+            for e in (r.get("runtime_execution_events") or [])
+            if isinstance(e, dict) and e.get("execution_started") is True
+        ),
         "cascade_attempts": sum(
             len([e for e in (r.get("runtime_execution_events") or [])
                  if isinstance(e, dict) and e.get("execution_started") is True])
