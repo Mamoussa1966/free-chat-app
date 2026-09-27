@@ -125,7 +125,13 @@ def persist_identity(chat, session_state, *, message=None, request=None, round_r
     if isinstance(message, dict):
         canonical_upsert_message(chat, message, session_state)
     if isinstance(request, dict):
-        canonical_upsert_request(chat, request, session_state)
+        # Historical hydration/reconciliation must not allocate a new canonical
+        # round ordinal merely because a legacy RequestRecord lacks one. Real
+        # Request creation paths allocate explicitly before this writer runs.
+        request_payload = dict(request)
+        if "canonical_round_base" not in request_payload and "canonical_round_allocation_deferred" not in request_payload:
+            request_payload["canonical_round_allocation_deferred"] = True
+        canonical_upsert_request(chat, request_payload, session_state)
     if isinstance(round_row, dict):
         canonical_upsert_round(chat, round_row, session_state)
     commit_canonical_record(chat, session_state)

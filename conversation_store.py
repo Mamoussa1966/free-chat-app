@@ -586,6 +586,7 @@ def canonical_upsert_request(chat: dict, request: dict, session_state=None) -> d
     if not rid:
         raise ValueError("canonical RequestRecord requires request_id")
     row = dict(request)
+    defer_round_allocation = bool(row.pop("canonical_round_allocation_deferred", False))
     row["request_id"] = rid
     # Request creation owns the immutable conversation round allocation.
     # Callers may provide the value (the production orchestrator does), but
@@ -598,32 +599,43 @@ def canonical_upsert_request(chat: dict, request: dict, session_state=None) -> d
         supplied_base = int(row.get("canonical_round_base") or 0)
     except (TypeError, ValueError):
         supplied_base = 0
-    if supplied_base <= 0:
-        bases = []
+    if supplied_base <= 0 and not defer_round_allocation:
+        # HOTFIX160: Request creation owns the ordinal.  Prefer the canonical
+        # Request identity sequence itself; Round records are only a secondary
+        # compatibility source for legacy hydrated records.  Completion order,
+        # UI counters, provider result order, and prose are never consulted.
+        request_ordinals = []
         for existing_request in rec.get("requests", []):
-            if not isinstance(existing_request, dict):
+            if not isinstance(existing_request, dict) or not str(existing_request.get("request_id") or "").strip():
                 continue
             try:
                 n = int(existing_request.get("canonical_round_base") or 0)
             except (TypeError, ValueError):
                 n = 0
             if n > 0:
-                bases.append(n)
-        if not bases:
+                request_ordinals.append(n)
+        if request_ordinals:
+            row["canonical_round_base"] = max(request_ordinals) + 1
+        else:
+            # Fresh canonical store: the first Request is always ordinal 1.
+            # For a legacy store with rounds but no request bases, use the
+            # observed canonical ordinal only as a one-time migration fallback.
+            round_ordinals = []
             for existing_round in rec.get("rounds", []):
                 if not isinstance(existing_round, dict):
                     continue
-                for key in ("round_number", "round", "ordinal"):
+                for key in ("canonical_round_base", "round_number", "round", "ordinal"):
                     try:
                         n = int(existing_round.get(key) or 0)
                     except (TypeError, ValueError):
                         continue
                     if n > 0:
-                        bases.append(n)
+                        round_ordinals.append(n)
                         break
-        row["canonical_round_base"] = max(bases, default=0) + 1
+            row["canonical_round_base"] = max(round_ordinals, default=0) + 1
     if row.get("canonical_request_ordinal") in (None, ""):
         row["canonical_request_ordinal"] = len([x for x in rec.get("requests", []) if isinstance(x, dict) and str(x.get("request_id") or "")]) + 1
+    row.setdefault("canonical_round_allocation_contract", "V26.3.21-REQUEST-CREATION-MONOTONIC-ROUND/v1")
     existing = next((x for x in rec["requests"] if isinstance(x, dict) and str(x.get("request_id") or "") == rid), None)
     if existing is None:
         rec["requests"].append(copy.deepcopy(row))
