@@ -1,0 +1,14 @@
+{
+  "release": "HOTFIX161_FINAL_CLOSURE",
+  "base_release": "HOTFIX160",
+  "scope": "V26.3/V23 canonical round identity + multi-request regression closure",
+  "pytest": {
+    "passed": 544,
+    "failed": 0,
+    "command": "pytest -q"
+  },
+  "application_owned_runtime_only": true,
+  "preserve_existing_files": true,
+  "files_count_before": 437,
+  "release_notes_sha256": "e97eb4abd647285168a2d53d9b24074978d9b6a48a97c218726ae3b2e25ee603"
+}

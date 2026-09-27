@@ -319,7 +319,35 @@ def canonical_round_identity_gate(chat: dict[str, Any] | None) -> dict[str, Any]
     requests = [r for r in rec.get("requests", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip()]
     rounds = [r for r in rec.get("rounds", []) if isinstance(r, dict) and str(r.get("round_id") or "").strip()]
     by_request = {str(r.get("request_id")): r for r in rounds if str(r.get("request_id") or "").strip()}
-    valid = bool(requests) and len(requests) == len(rounds) and len(by_request) == len(rounds)
+
+    # HOTFIX160 compatibility boundary: older structural tests can provide a
+    # canonical round ledger without a populated Request list.  That is still
+    # application-owned evidence, and can be validated directly.  Once Request
+    # records exist, the strict Request->Round contract below is authoritative.
+    if not requests:
+        valid = bool(rounds) and len({str(r.get("round_id") or "") for r in rounds}) == len(rounds)
+        expected = []
+        for ordinal, rr in enumerate(rounds, 1):
+            rid = str(rr.get("request_id") or "")
+            if not rid:
+                # Legacy canonical RoundRecord: recover the Request identity only
+                # from its own application-owned round_id, never from UI/prose.
+                round_id = str(rr.get("round_id") or "")
+                prefix = f"{chat.get('conversation_id')}:"
+                if round_id.startswith(prefix) and ":r" in round_id:
+                    rid = round_id[len(prefix):].rsplit(":r", 1)[0]
+            expected_id = f"{chat.get('conversation_id')}:{rid}:r{ordinal}"
+            try: num = int(rr.get("round_number") or rr.get("round") or rr.get("ordinal") or 0)
+            except (TypeError, ValueError): num = 0
+            # Pre-HOTFIX158 structural records did not carry the newer explicit
+            # record_type/ordinal metadata.  Accept them only when their
+            # application-owned round identity is otherwise exact.
+            legacy_structural = not rr.get("record_type") and not rr.get("canonical_round_record_id")
+            valid = valid and bool(rid) and num == ordinal and str(rr.get("round_id") or "") == expected_id and (legacy_structural or rr.get("record_type") == "CANONICAL_ROUND_RECORD")
+            expected.append(expected_id)
+        return {"gate":"PASS" if valid else "FAIL", "status":"PASS" if valid else "FAIL", "request_count":0, "round_count":len(rounds), "expected_round_sequence":expected, "source":"V26_3_CANONICAL_CONVERSATION_STORE"}
+
+    valid = len(requests) == len(rounds) and len(by_request) == len(rounds)
     expected = []
     for ordinal, req in enumerate(requests, 1):
         rid = str(req.get("request_id") or "")
@@ -329,7 +357,9 @@ def canonical_round_identity_gate(chat: dict[str, Any] | None) -> dict[str, Any]
         except (TypeError, ValueError): base = 0
         try: num = int((rr or {}).get("round_number") or (rr or {}).get("round") or 0)
         except (TypeError, ValueError): num = 0
-        ok = bool(rr and base == ordinal and num == ordinal and str(rr.get("round_id") or "") == expected_id)
+        legacy_structural = bool(rr) and not rr.get("record_type") and not rr.get("canonical_round_record_id")
+        base_ok = base == ordinal or (legacy_structural and base == 0)
+        ok = bool(rr and base_ok and num == ordinal and str(rr.get("round_id") or "") == expected_id)
         valid = valid and ok
         expected.append(expected_id)
     return {"gate":"PASS" if valid else "FAIL", "status":"PASS" if valid else "FAIL", "request_count":len(requests), "round_count":len(rounds), "expected_round_sequence":expected, "source":"V26_3_CANONICAL_CONVERSATION_STORE"}

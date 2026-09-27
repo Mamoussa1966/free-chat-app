@@ -1633,13 +1633,12 @@ def _request_record(chat: dict, request_id: str) -> dict | None:
 
 
 def _authoritative_round_base(chat: dict) -> int:
-    """Allocate the next conversation Round ordinal at Request creation time.
+    """Return the next Round ordinal from the canonical Round ledger.
 
-    HOTFIX159 contract: ``canonical_round_base`` is the first Round number owned
-    by the Request, not the number of the last completed Round.  Therefore a
-    fresh conversation allocates base=1, the next Request allocates base=2, etc.
-    The value is derived only from the canonical ConversationRecord and is never
-    recalculated from completion order, UI state, provider results, or prose.
+    Request creation itself owns and persists ``canonical_round_base``. This
+    helper is used by the orchestrator only as a fallback for a Request record
+    that has not yet carried that immutable value; therefore it must not count
+    the current Request as an already-created Round.
     """
     record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
     rows = record.get("rounds", []) if isinstance(record.get("rounds"), list) else []

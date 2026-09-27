@@ -1,10 +1,9 @@
 # HOTFIX160 — V26.3/V23 CANONICAL ROUND IDENTITY + MULTI-REQUEST REGRESSION CLOSURE
 
-- Request creation owns canonical_round_base; first two requests allocate 1 then 2.
-- Legacy zero/shifted round identities are normalized from canonical request order.
-- Canonical RoundRecord is materialized with record_type=CANONICAL_ROUND_RECORD.
-- message_ledger.record_message accepts round_id without creating a second identity source.
-- Hydration/runtime indexes remain application-owned and rebuilt from canonical history.
-- Bridge values are redacted at the provider boundary rather than injected into HTTP prompts.
-- HOTFIX135 multi-request audit accepts two independent Requests and detects cross-request contamination/reuse.
-- No Local Engine, no Paid fallback, and no implicit model selection are introduced.
+- Request creation now owns `canonical_round_base` from canonical Request identity records.
+- Fresh requests allocate Round 1, then Round 2, without completion-order/UI-counter dependence.
+- Canonical Round records are materialized before provider execution with immutable `round_number`, `ordinal`, `record_type`, `canonical_round_record_id`, and `canonical_identity_key`.
+- Legacy one-round-per-request histories are normalized from canonical Request creation order only.
+- Multi-request isolation remains Request-scoped; Request IDs, Round IDs, and Bridge IDs are never reused across requests.
+- Historical compatibility audit paths accept canonical Round-only evidence when no canonical Request list exists, while the full Request→Round contract remains strict whenever Request records are present.
+- No Local Engine, no paid fallback, no implicit model discovery, and no provider model-list mutation.
