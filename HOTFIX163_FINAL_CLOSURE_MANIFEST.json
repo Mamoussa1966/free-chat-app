@@ -1,0 +1,10 @@
+{
+  "release": "HOTFIX163",
+  "base": "HOTFIX161/162",
+  "purpose": "FINAL_REGRESSION_CLOSURE",
+  "test_mutation": false,
+  "implicit_model_discovery": false,
+  "credential_packaging": false,
+  "required_example_files": [".streamlit/secrets.toml.example"],
+  "acceptance": "FAILED = 0"
+}
