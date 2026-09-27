@@ -158,3 +158,14 @@ Authoritative result / identity / bridge-prose isolation. Provider prose is neve
 - Copy serializes the complete application-owned HOTFIX118 audit payload; it does not read agent prose or alter canonical records.
 - Print opens the same complete serialized payload in a print-ready document.
 - No provider, cascade, identity, persistence, security, or audit truth logic changed.
+
+# HOTFIX160 — Canonical Round Identity + Multi-Request Regression Closure
+
+- Request creation owns immutable `canonical_round_base` before provider dispatch.
+- Canonical `Message → Request → Round` identity is application-owned and persisted before execution.
+- Hydration rebuilds compatibility indexes strictly from the canonical conversation store.
+- V25 round-id compatibility is preserved without using agent prose or UI counters as identity evidence.
+- HOTFIX135 multi-request isolation remains fail-closed and application-owned.
+- Gemini has no implicit model catalog when its explicit Free-model Secret is absent.
+- HOTFIX117 bridge prompt boundary remains protected through the `forbidden_bridge_values` provider boundary.
+- Legacy release files are preserved; no runtime secrets are packaged.

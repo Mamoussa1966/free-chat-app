@@ -316,6 +316,13 @@ class SharedContextBridge:
                 "",
                 base,
             )
+            # HOTFIX161/162: redact committed Bridge values from the actual
+            # target prompt as well. Shared context may contain the original
+            # diagnostic text, so key-name redaction alone is insufficient.
+            for record in self._values.values():
+                value = str(record.get("value") or "") if isinstance(record, dict) else ""
+                if len(value) >= 8:
+                    base = base.replace(value, "[REDACTED_BRIDGE_VALUE]")
             base = re.sub(r"\bBRIDGE_[A-Z0-9_]+\b", "[REDACTED_BRIDGE_KEY]", base)
         return base[-self.max_chars:]
 
@@ -1640,9 +1647,35 @@ def _authoritative_round_base(chat: dict) -> int:
     that has not yet carried that immutable value; therefore it must not count
     the current Request as an already-created Round.
     """
+    # HOTFIX161/162: allocation is owned by Request creation, not by round
+    # completion order. Prefer already-created canonical Request ordinals, then
+    # the compatibility request ledger, and use Round records only as a legacy
+    # migration fallback. Provider results/UI counters are never consulted.
     record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
-    rows = record.get("rounds", []) if isinstance(record.get("rounds"), list) else []
+    requests = record.get("requests", []) if isinstance(record.get("requests"), list) else []
     numbers = []
+    for row in requests:
+        if not isinstance(row, dict):
+            continue
+        try:
+            number = int(row.get("canonical_round_base") or 0)
+        except (TypeError, ValueError):
+            number = 0
+        if number > 0:
+            numbers.append(number)
+    if not numbers:
+        for row in chat.get("request_records", []) if isinstance(chat.get("request_records"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                number = int(row.get("canonical_round_base") or 0)
+            except (TypeError, ValueError):
+                number = 0
+            if number > 0:
+                numbers.append(number)
+    if numbers:
+        return max(numbers) + 1
+    rows = record.get("rounds", []) if isinstance(record.get("rounds"), list) else []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -1727,7 +1760,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
     # conversation ordinal from the canonical ledger. This makes Message 2 ->
     # Request 2 -> Round 2 provable from Application-Owned Runtime State itself.
     request_row_for_round_base = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), {})
-    round_base = int(request_row_for_round_base.get("canonical_round_base") or _authoritative_round_base(chat))
+    canonical_request_for_round_base = next((r for r in (chat.get("conversation_record", {}).get("requests", []) if isinstance(chat.get("conversation_record"), dict) and isinstance(chat.get("conversation_record", {}).get("requests"), list) else []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), {})
+    round_base = int(request_row_for_round_base.get("canonical_round_base") or canonical_request_for_round_base.get("canonical_round_base") or _authoritative_round_base(chat))
     try:
         lifecycle.record("REQUEST_START", round_id=0, status="RUNNING")
         lifecycle.record("ROUTING", round_id=0, status="ROUTED", metadata={"rounds": str(total_rounds), "conversation_round_base": str(round_base)})

@@ -201,7 +201,14 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
     # Preserve the established persistence gate semantics while exposing the
     # mandatory preflight result. The preflight itself is independently
     # fail-closed; it is never synthesized from UI/projection data.
-    ok = required_ok and not any(forbidden_hits.values()) and all(isinstance(v, int) for v in canonical_counts.values())
+    counts_are_int = all(isinstance(v, int) for v in canonical_counts.values())
+    persisted_counts_match = bool(
+        counts_are_int
+        and int(canonical_counts["canonical_message_count"]) == len([m for m in canonical_messages if str(m.get("message_id") or "").strip() and str(m.get("role") or "").lower() == "user"])
+        and int(canonical_counts["canonical_request_count"]) == len(canonical_requests)
+        and int(canonical_counts["canonical_round_count"]) == len(canonical_rounds)
+    )
+    ok = required_ok and not any(forbidden_hits.values()) and counts_are_int and persisted_counts_match and preflight.get("status") == "PASS"
     return {
         "status": "PASS" if ok else "FAIL",
         "canonical_audit_preflight_invoked": preflight_invoked,
@@ -213,7 +220,10 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         "canonical_request_count": canonical_counts["canonical_request_count"],
         "canonical_round_count": canonical_counts["canonical_round_count"],
         "canonical_counter_source": "CANONICAL_IDENTITY_RECORDS",
-        "counter_semantics_consistent": bool(ok and len({canonical_counts["canonical_message_count"], canonical_counts["canonical_request_count"], canonical_counts["canonical_round_count"]}) >= 1),
+        "persisted_message_count": canonical_counts["canonical_message_count"],
+        "persisted_request_count": canonical_counts["canonical_request_count"],
+        "persisted_round_count": canonical_counts["canonical_round_count"],
+        "counter_semantics_consistent": bool(ok and persisted_counts_match),
         "ui_projection_message_count": len(ui_messages),
         "ui_projection_message_count_authoritative": False,
         "messages": len(ui_messages),
@@ -296,7 +306,14 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
     enough = len(recent) >= 2
     independent = enough and len(request_ids) == 2 and all(request_ids) and unique_request_ids == 2
     unique_bridges = len(bridge_ids) == len(set(bridge_ids))
-    ok = independent and unique_bridges and duplicate_seat_round == 0 and not contamination
+    checks = {
+        "REQUEST_COUNT": enough,
+        "REQUEST_ID_INDEPENDENCE": independent,
+        "RESULT_REQUEST_ID_ISOLATION": not contamination,
+        "BRIDGE_ID_REQUEST_ISOLATION": unique_bridges,
+        "SEAT_ROUND_EXECUTION_ISOLATION": duplicate_seat_round == 0,
+    }
+    ok = all(checks.values())
     return {
         "status": "PASS" if ok else "FAIL" if enough else "NOT_PROVEN",
         "gate": "PASS" if ok else "FAIL" if enough else "NOT_PROVEN",
@@ -310,6 +327,7 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
         "per_request": per_request,
         "evidence_source": "APPLICATION_OWNED_REQUEST_RECORDS_ONLY",
         "provider_or_agent_prose_used_as_identity": False,
+        "checks": checks,
     }
 
 def canonical_round_identity_gate(chat: dict[str, Any] | None) -> dict[str, Any]:
