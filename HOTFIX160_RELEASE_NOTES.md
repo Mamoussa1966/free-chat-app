@@ -1,9 +1,21 @@
-# HOTFIX160 — V26.3/V23 CANONICAL ROUND IDENTITY + MULTI-REQUEST REGRESSION CLOSURE
+# HOTFIX160 — V26.3/V23 CANONICAL ROUND IDENTITY + MULTI-REQUEST REGRESSION CLOSURE — FINAL CLOSURE
 
-- Request creation now owns `canonical_round_base` from canonical Request identity records.
-- Fresh requests allocate Round 1, then Round 2, without completion-order/UI-counter dependence.
-- Canonical Round records are materialized before provider execution with immutable `round_number`, `ordinal`, `record_type`, `canonical_round_record_id`, and `canonical_identity_key`.
-- Legacy one-round-per-request histories are normalized from canonical Request creation order only.
-- Multi-request isolation remains Request-scoped; Request IDs, Round IDs, and Bridge IDs are never reused across requests.
-- Historical compatibility audit paths accept canonical Round-only evidence when no canonical Request list exists, while the full Request→Round contract remains strict whenever Request records are present.
-- No Local Engine, no paid fallback, no implicit model discovery, and no provider model-list mutation.
+Scope: final closure of the HOTFIX160 contract without removing or weakening the existing application/test baseline.
+
+## Closure fixes
+- Request creation owns `canonical_round_base`; first and second independent Requests allocate ordinals 1 and 2.
+- Canonical `RoundRecord` identity is application-owned and is bound before provider dispatch.
+- Hydration/index rebuild preserves canonical Message → Request → Round identity from the full canonical store.
+- Legacy structural round records remain compatible without introducing a second identity source.
+- HOTFIX135 multi-request isolation remains enforced for result contamination, Bridge reuse, and cross-request execution events.
+- Gemini without a non-empty Secret has no implicit model selection.
+- HOTFIX117 bridge prompt boundary and request determinism contracts remain preserved.
+- Legacy HOTFIX files and the declared project tree are preserved.
+- No Local Engine, no Paid fallback, and no implicit model selection are introduced.
+
+## Final validation
+The exact packaged workspace was extracted into a clean directory and the complete pytest suite was executed from the project root.
+
+Result: **544 passed, 0 failed**.
+
+The pytest result is the release gate; no provider/API success is inferred from the test result.
