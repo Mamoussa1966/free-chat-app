@@ -686,6 +686,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         round_id = _s(row.get("round_id"))
         try:
             numeric = int(row.get("round"))
+            ordinal = int(row.get("ordinal"))
         except (TypeError, ValueError):
             return False, row
         suffix = None
@@ -700,7 +701,11 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
             and row_cid == _s(chat.get("conversation_id"))
             and row_sid == _s(chat.get("session_id"))
             and numeric == ordinal_expected
+            and ordinal == ordinal_expected
             and suffix == ordinal_expected
+            and _s(row.get("record_type")) == "CANONICAL_ROUND_RECORD"
+            and _s(row.get("canonical_round_record_id")) == round_id
+            and _s(row.get("canonical_identity_key")) == f"{_s(chat.get('conversation_id'))}:{rid_expected}:r{ordinal_expected}"
             and contract == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"
         )
         return proven, row
@@ -724,7 +729,24 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
 
     round1_proven, round1_row = _round_row_proof(m1, r1, 1) if enough else (False, None)
     round2_proven, round2_row = _round_row_proof(m2, r2, 2) if enough else (False, None)
-    wrong_round1_proven, _ = _round_row_proof(m2, r2, 1) if enough else (False, None)
+    # Compatibility diagnostic: this field answers whether the persisted row
+    # is literally labelled as request-2/round-1. It is intentionally separate
+    # from the HOTFIX158 exact proof, which requires immutable `ordinal`.
+    wrong_round1_proven = False
+    if enough and m2:
+        _wrong_rows = round_by_msg.get(m2, [])
+        if len(_wrong_rows) == 1:
+            _wrong = _wrong_rows[0]
+            try:
+                _wrong_round = int(_wrong.get("round"))
+            except (TypeError, ValueError):
+                _wrong_round = 0
+            wrong_round1_proven = bool(
+                _s(_wrong.get("message_id")) == m2
+                and _s(_wrong.get("request_id")) == r2
+                and _s(_wrong.get("conversation_id")) == _s(chat.get("conversation_id"))
+                and _wrong_round == 1
+            )
 
     def _generic_round_row_proof(mid: str, rid_expected: str) -> tuple[bool, dict | None]:
         rows = round_by_msg.get(mid, [])
@@ -734,6 +756,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         round_id = _s(row.get("round_id"))
         try:
             numeric = int(row.get("round"))
+            ordinal = int(row.get("ordinal"))
         except (TypeError, ValueError):
             return False, row
         suffix = None
@@ -747,7 +770,11 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
             and _s(row.get("conversation_id")) == _s(chat.get("conversation_id"))
             and _s(row.get("session_id")) == _s(chat.get("session_id"))
             and numeric >= 1
+            and ordinal == numeric
             and suffix == numeric
+            and _s(row.get("record_type")) == "CANONICAL_ROUND_RECORD"
+            and _s(row.get("canonical_round_record_id")) == round_id
+            and _s(row.get("canonical_identity_key")) == f"{_s(chat.get('conversation_id'))}:{rid_expected}:r{numeric}"
             and _s(row.get("round_identity_contract")) == "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1"
         )
         return proven, row
@@ -762,7 +789,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
             selected_round_numbers.append(None)
             continue
         try:
-            numeric = int(rows[0].get("round"))
+            numeric = int(rows[0].get("ordinal"))
         except (TypeError, ValueError):
             numeric = None
         selected_round_numbers.append(numeric)
@@ -786,10 +813,45 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         and all(
             _s(x.get("round_id")).rsplit(":r", 1)[-1].isdigit()
             and int(_s(x.get("round_id")).rsplit(":r", 1)[-1]) == _round_num(x)
+            and (
+                (int(x.get("ordinal")) == _round_num(x))
+                if str(x.get("ordinal") or "").strip()
+                else False
+            )
+            and _s(x.get("record_type")) == "CANONICAL_ROUND_RECORD"
+            and _s(x.get("canonical_round_record_id")) == _s(x.get("round_id"))
             for x in selected_round_identity_rows
         )
     ) if enough else False
     audit["round_id_ordinal_consistent"] = round_id_ordinal_consistent if enough else "NOT_PROVEN"
+    # HOTFIX158: expose the actual canonical RoundRecord used by the proof.
+    canonical_round_evidence_rows = []
+    for mid, rid in zip(mids, req_ids):
+        rows = round_by_msg.get(mid, [])
+        if len(rows) != 1:
+            continue
+        row = rows[0]
+        try:
+            ordinal_value = int(row.get("ordinal"))
+        except (TypeError, ValueError):
+            ordinal_value = None
+        canonical_round_evidence_rows.append({
+            "round_id": _s(row.get("round_id")),
+            "conversation_id": _s(row.get("conversation_id")),
+            "request_id": _s(row.get("request_id")),
+            "message_id": _s(row.get("message_id")),
+            "ordinal": ordinal_value,
+            "round": row.get("round"),
+            "record_type": _s(row.get("record_type")),
+            "canonical_round_record_id": _s(row.get("canonical_round_record_id")),
+            "canonical_identity_key": _s(row.get("canonical_identity_key")),
+            "identity_contract": _s(row.get("round_identity_contract")),
+            "exact_request_binding": _s(row.get("request_id")) == rid,
+            "exact_conversation_binding": _s(row.get("conversation_id")) == _s(chat.get("conversation_id")),
+            "exact_ordinal_binding": ordinal_value == (1 if len(canonical_round_evidence_rows) == 0 else 2),
+        })
+    audit["canonical_round_record_materialized"] = bool(len(canonical_round_evidence_rows) == evidence_count and evidence_count in (1, 2))
+    audit["canonical_round_record_evidence"] = canonical_round_evidence_rows
     expected_round_count = evidence_count
     canonical_round_sequence_proven = bool(
         enough
@@ -805,6 +867,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         and round_id_ordinal_consistent
         and len({ _s(x.get("round_id")) for x in rounds }) == len(rounds)
         and len(rounds) == expected_round_count
+        and bool(audit.get("canonical_round_record_materialized"))
     ) if enough else "NOT_PROVEN"
     audit["canonical_round_sequence_proven"] = canonical_round_sequence_proven
     audit["canonical_round_identity_evidence"] = {

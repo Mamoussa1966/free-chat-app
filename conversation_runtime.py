@@ -116,6 +116,9 @@ def register_message(chat: dict[str, Any], message: dict[str, Any]) -> dict[str,
 
 def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no: int, session_state=None) -> str:
     ensure_conversation_state(chat)
+    round_no = int(round_no)
+    if round_no < 1:
+        raise ValueError("canonical round number must be >= 1")
     round_id = f"{chat['conversation_id']}:{request_id}:r{int(round_no)}"
     row = {
         "round_id": round_id,
@@ -124,6 +127,15 @@ def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no
         "message_id": str(message_id),
         "request_id": str(request_id),
         "round": int(round_no),
+        "round_number": int(round_no),
+        "canonical_round_base": int(round_no),
+        # HOTFIX158: materialize an explicit canonical RoundRecord identity.
+        # `round` remains the compatibility field; `ordinal` is the immutable
+        # conversation-round ordinal consumed by the authoritative audit.
+        "ordinal": int(round_no),
+        "record_type": "CANONICAL_ROUND_RECORD",
+        "canonical_round_record_id": round_id,
+        "canonical_identity_key": f"{chat['conversation_id']}:{request_id}:r{int(round_no)}",
         "round_identity_contract": "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1",
         "status": "STARTED",
         "created_at": utc_now(),
