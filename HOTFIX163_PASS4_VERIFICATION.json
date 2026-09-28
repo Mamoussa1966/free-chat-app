@@ -1,0 +1,21 @@
+{
+  "release": "HOTFIX163-PASS4-13-FAILURE-ROOT-CAUSE-CLOSURE",
+  "base": "HOTFIX163_PASS3_REGRESSION_CLOSURE_FINAL",
+  "file_count": 472,
+  "required_files": {
+    ".streamlit/secrets.toml.example": true
+  },
+  "canonical_contract_preserved": true,
+  "test_command": "pytest -q",
+  "test_result": "551 passed, 0 failed",
+  "audit_9_canonical_counts": "2 messages / 2 requests / 2 rounds",
+  "audit_9_counter_semantics_consistent": true,
+  "legacy_audit_9_failures": 13,
+  "legacy_modules_not_present_in_materialized_base": [
+    "tests/test_hotfix117_bridge_prompt_boundary.py",
+    "tests/test_hotfix135_multi_request_regression.py",
+    "tests/test_v25_authoritative_two_message_runtime.py",
+    "tests/test_v26_3_13_round_identity_lifecycle.py",
+    "tests/test_v26_3_9_canonical_persistence.py"
+  ]
+}
