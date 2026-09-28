@@ -1304,9 +1304,16 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     # If a caller accidentally includes one in the user prompt, redact it before
     # constructing the HTTP prompt rather than manufacturing a provider failure.
     # The provider must receive a safe prompt; the Bridge remains application-owned.
+    # HOTFIX163-P2: redact forbidden Bridge canaries from BOTH user prompt and
+    # shared context before constructing the provider HTTP prompt. A Bridge
+    # value is application-owned state and must never cross the provider
+    # boundary through either input channel.
+    safe_shared_context = str(shared_context or "")
     for forbidden in forbidden_bridge_values:
         if forbidden:
             user_prompt = str(user_prompt or "").replace(forbidden, "[BRIDGE_VALUE_REDACTED]")
+            safe_shared_context = safe_shared_context.replace(forbidden, "[BRIDGE_VALUE_REDACTED]")
+    shared_context = safe_shared_context
     started = time.perf_counter()
     # No artificial provider/seat timeout is imposed. An optional caller-owned
     # deadline is honored only when explicitly supplied by the caller.
