@@ -361,10 +361,23 @@ def _normalize_single_round_per_request_identity(record: dict, conversation_id: 
 
 
 def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
-    """Restore the complete canonical ConversationRecord before runtime/audit use."""
+    """Restore the complete canonical ConversationRecord before runtime/audit use.
+
+    HOTFIX163-P3: hydration is allowed to restore from the already committed
+    canonical record embedded in ``chat`` when a Session-State transport object
+    is unavailable.  It never falls back to current UI messages, request
+    projections, completion order, or provider prose.  This makes hydrate/rebuild
+    deterministic across both Streamlit reruns and direct persistence tests.
+    """
     ensure_store(chat)
     cid = str(chat.get("conversation_id") or "").strip()
-    if not cid or session_state is None:
+    if not cid:
+        return chat
+    if session_state is None:
+        record = chat.get("conversation_record")
+        if isinstance(record, dict) and record.get("canonical_store_contract") == "V26_3_CANONICAL_CONVERSATION_STORE":
+            if all(isinstance(record.get(k), list) for k in ("messages", "requests", "rounds")):
+                _chat_rebind_alias(chat)
         return chat
     root = session_state.get("v26_3_canonical_conversation_store", {})
     saved = root.get(cid) if isinstance(root, dict) else None
