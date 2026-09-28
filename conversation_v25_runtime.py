@@ -164,11 +164,6 @@ def reconcile_v26_message_ledger(chat: dict) -> list[dict]:
         if mid and rid and rec is not None and _s(rec.get("message_id")) == mid:
             candidates.append((mid, rid, _s(msg.get("created_at")), "HOTFIX145_MESSAGE_LEDGER_AND_REQUEST_RECORD"))
 
-    # HOTFIX163-P3: merge by canonical Message identity while preserving the
-    # first application-owned Message→Request binding.  Re-running this
-    # reconciliation therefore cannot reorder, duplicate, or overwrite a
-    # previously proven binding.  A contradictory binding is retained only as
-    # an explicit conflict marker and never becomes authoritative.
     merged = {}
     for mid, rid, created_at, source in candidates:
         if mid not in merged:
@@ -180,6 +175,7 @@ def reconcile_v26_message_ledger(chat: dict) -> list[dict]:
                 "authoritative_source": source,
             }
         elif merged[mid].get("request_id") != rid:
+            # Conflicting bindings are retained as an explicit contradiction; do not overwrite.
             merged[mid]["identity_conflict"] = True
     chat["message_ledger_v26"] = list(merged.values())[-1000:]
     touch(chat)
