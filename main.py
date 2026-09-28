@@ -23,7 +23,7 @@ from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_audit_preflight
-from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -2576,6 +2576,25 @@ def _request_fingerprint(prompt: str, attachments: list[dict]) -> str:
 # Backward-compatible name retained for older integrations; rendering is now agent-count agnostic.
 _render_six_rooms = _render_agent_rooms
 
+def _is_hotfix1631_read_only_diagnostic(prompt: str) -> bool:
+    first = next((line.strip() for line in str(prompt or "").splitlines() if line.strip()), "")
+    return first.upper().startswith("HOTFIX163.1") and "REPOSITORY CANONICAL STATE BOUNDARY AUDIT" in str(prompt or "").upper()
+
+
+def _render_hotfix1631_read_only_diagnostic(chat: dict) -> None:
+    """Execute the repository audit locally without entering the request lifecycle."""
+    report = repository_canonical_state_boundary_audit(chat, st.session_state)
+    st.session_state.last_hotfix1631_read_only_audit = copy.deepcopy(report)
+    st.subheader("🧭 HOTFIX163.1 — Repository Canonical State Boundary Audit")
+    st.json(report)
+    _render_section_actions(
+        "HOTFIX163.1 — Repository Canonical State Boundary Audit",
+        report,
+        "hotfix1631_read_only_audit",
+        "HOTFIX1631_Repository_Canonical_State_Boundary_Audit.json",
+    )
+
+
 def run_app() -> None:
     _init_state()
     # HOTFIX123: the Bridge/Security claim is only shown as deployable after the
@@ -2634,6 +2653,12 @@ def run_app() -> None:
         prompt = ""
         attachments = []
     if attachments is None:
+        return
+    # HOTFIX163.1: repository canonical diagnostics are a local read-only control
+    # path, never a Council Request. This gate executes before fingerprinting,
+    # Message/Request/Round allocation, provider dispatch, cascade, or synthesis.
+    if prompt and _is_hotfix1631_read_only_diagnostic(prompt) and not attachments:
+        _render_hotfix1631_read_only_diagnostic(chat)
         return
     if prompt or attachments:
         if not prompt:
