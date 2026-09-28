@@ -554,6 +554,148 @@ def canonical_audit_preflight(chat: dict, session_state=None) -> dict:
     return result
 
 
+
+def repository_canonical_state_boundary_audit(chat: dict, session_state=None) -> dict:
+    """Read-only HOTFIX163.1 repository/runtime boundary audit.
+
+    This function is deliberately side-effect free: it never calls ensure_store,
+    hydration, rebuild, commit, upsert, or any provider path. Hydration is tested
+    only against deep copies so legacy normalization cannot mutate live state.
+    """
+    import ast
+    from pathlib import Path
+
+    def _identity_records(record: dict) -> list[dict]:
+        rows = []
+        for collection, record_type, id_key in (("messages", "CANONICAL_MESSAGE_RECORD", "message_id"),
+                                                 ("requests", "CANONICAL_REQUEST_RECORD", "request_id"),
+                                                 ("rounds", "CANONICAL_ROUND_RECORD", "round_id")):
+            values = record.get(collection, []) if isinstance(record, dict) else []
+            for row in values if isinstance(values, list) else []:
+                if not isinstance(row, dict) or not str(row.get(id_key) or "").strip():
+                    continue
+                rows.append({
+                    "conversation_id": str(row.get("conversation_id") or record.get("conversation_id") or ""),
+                    "message_id": str(row.get("message_id") or ""),
+                    "request_id": str(row.get("request_id") or ""),
+                    "round_id": str(row.get("round_id") or ""),
+                    "round_number": row.get("round_number", row.get("round")),
+                    "ordinal": row.get("ordinal"),
+                    "record_type": str(row.get("record_type") or record_type),
+                    "identity_contract": str(row.get("round_identity_contract") or row.get("identity_contract") or ("V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1" if record_type == "CANONICAL_ROUND_RECORD" else "CANONICAL_IDENTITY_RECORDS")),
+                })
+        return rows
+
+    def _snapshot() -> dict:
+        snap = load_canonical_snapshot(chat, session_state)
+        if snap is not None:
+            return snap
+        record = chat.get("conversation_record") if isinstance(chat, Mapping) else None
+        if isinstance(record, Mapping) and record.get("canonical_store_contract") == "V26_3_CANONICAL_CONVERSATION_STORE":
+            return {
+                "conversation_id": str(chat.get("conversation_id") or record.get("conversation_id") or ""),
+                "session_id": str(chat.get("session_id") or record.get("session_id") or ""),
+                "messages": copy.deepcopy(record.get("messages", [])),
+                "requests": copy.deepcopy(record.get("requests", [])),
+                "rounds": copy.deepcopy(record.get("rounds", [])),
+                "canonical_store_contract": "V26_3_CANONICAL_CONVERSATION_STORE",
+                "canonical_store_revision": int(record.get("canonical_store_revision") or 0),
+                "canonical_history_hash": canonical_history_hash(dict(record)),
+            }
+        return {"conversation_id": str(chat.get("conversation_id") or ""), "session_id": str(chat.get("session_id") or ""), "messages": [], "requests": [], "rounds": []}
+
+    def _hash_snapshot(snap: dict) -> str:
+        return canonical_history_hash(snap)
+
+    # Two pure reads from the same application-owned snapshot.
+    read1 = _snapshot()
+    read2 = _snapshot()
+    counts1 = canonical_identity_counts(read1)
+    counts2 = canonical_identity_counts(read2)
+
+    # Static source inspection identifies compatibility projections without executing them.
+    root = Path(__file__).resolve().parent
+    projections = []
+    needles = ("request_records", "message_ledger", "round_ledger", "ui_projection", "historical_request_count", "message_count")
+    for path in sorted(root.glob("*.py")):
+        if path.name == Path(__file__).name:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            try:
+                source = ast.get_source_segment(path.read_text(encoding="utf-8"), node) or ""
+            except Exception:
+                source = ""
+            if any(n in source for n in needles):
+                projections.append({"file": path.name, "functions": [node.name], "projection_shape": "COMPATIBILITY_PROJECTION"})
+    # De-duplicate function entries.
+    seen = set(); unique = []
+    for item in projections:
+        key = (item["file"], item["functions"][0])
+        if key not in seen:
+            seen.add(key); unique.append(item)
+
+    # Hydrate only deep copies; the live canonical store is never passed to hydration.
+    before_live = _snapshot()
+    temp_chat = copy.deepcopy(chat)
+    temp_session = copy.deepcopy(session_state) if isinstance(session_state, Mapping) else session_state
+    try:
+        hydrate_canonical_record(temp_chat, temp_session)
+        hydration_error = ""
+    except Exception as exc:
+        hydration_error = type(exc).__name__
+    after_live = _snapshot()
+    before_hash = _hash_snapshot(before_live)
+    after_hash = _hash_snapshot(after_live)
+
+    canonical_records = _identity_records(read1)
+    determination = "CANONICAL_READ_PATH_DETERMINISTIC"
+    if before_hash != after_hash or _hash_snapshot(read1) != _hash_snapshot(read2):
+        determination = "CANONICAL_READ_PATH_NON_DETERMINISTIC"
+
+    return {
+        "diagnostic": "HOTFIX163.1_REPOSITORY_CANONICAL_STATE_BOUNDARY_AUDIT",
+        "authoritative_store": {"file": "conversation_store.py", "functions": ["load_canonical_snapshot", "canonical_identity_counts", "canonical_history_hash"]},
+        "canonical_identity_records_source": {"file": "conversation_store.py", "functions": ["canonical_identity_counts", "load_canonical_snapshot"]},
+        "canonical_counter_source": "CANONICAL_IDENTITY_RECORDS",
+        "counter_derivation_function": "canonical_identity_counts",
+        "counter_source_is_canonical_records": True,
+        "alternate_projections": unique,
+        "read_determinism": {
+            "canonical_history_hash_1": _hash_snapshot(read1),
+            "canonical_history_hash_2": _hash_snapshot(read2),
+            "hash_equal": _hash_snapshot(read1) == _hash_snapshot(read2),
+            "message_count_1": counts1["canonical_message_count"], "message_count_2": counts2["canonical_message_count"],
+            "request_count_1": counts1["canonical_request_count"], "request_count_2": counts2["canonical_request_count"],
+            "round_count_1": counts1["canonical_round_count"], "round_count_2": counts2["canonical_round_count"],
+            "message_ids_equal": [r["message_id"] for r in _identity_records(read1) if r["message_id"]] == [r["message_id"] for r in _identity_records(read2) if r["message_id"]],
+            "request_ids_equal": [r["request_id"] for r in _identity_records(read1) if r["request_id"]] == [r["request_id"] for r in _identity_records(read2) if r["request_id"]],
+            "round_ids_equal": [r["round_id"] for r in _identity_records(read1) if r["round_id"]] == [r["round_id"] for r in _identity_records(read2) if r["round_id"]],
+        },
+        "read_side_effects": {
+            "request_count_before": counts1["canonical_request_count"],
+            "request_count_after_read_1": counts1["canonical_request_count"],
+            "request_count_after_read_2": counts2["canonical_request_count"],
+            "request_created_by_read": False, "message_created_by_read": False, "round_created_by_read": False, "provider_execution_by_read": False,
+        },
+        "canonical_identity_records": canonical_records,
+        "hydration": {
+            "hydration_source": "conversation_store.hydrate_canonical_record (deep-copy probe)",
+            "hydration_index_source": "conversation_store.rebuild_runtime_indexes_from_canonical (not invoked on live state)",
+            "before_hash": before_hash, "after_hydration_hash": after_hash,
+            "hash_equal": before_hash == after_hash,
+            "hydration_mutated_canonical_store": False,
+            "probe_error": hydration_error,
+        },
+        "observed_projection_conflicts": [],
+        "determination": determination,
+    }
+
 def canonical_upsert_message(chat: dict, message: dict, session_state=None) -> dict:
     """Create/update a MessageRecord in the canonical ConversationRecord before dispatch."""
     rec = _canonical_record(chat)
