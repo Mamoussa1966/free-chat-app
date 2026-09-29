@@ -78,3 +78,13 @@ def test_hotfix162_gemini_no_secret_has_no_implicit_models():
     with patch("providers._streamlit_secret", return_value=None), patch.dict(os.environ, {}, clear=False):
         os.environ.pop("GEMINI_FREE_MODELS", None)
         assert get_model_candidates(seat) == ()
+
+
+def test_hotfix1631_all_read_only_diagnostic_variants_bypass_request_lifecycle():
+    prompts = [
+        "HOTFIX163.1 — REPOSITORY CANONICAL STATE BOUNDARY TEST\nREAD-ONLY",
+        "HOTFIX163.1 — CLEAN TWO-RECORD CANONICAL FIXTURE TEST\nREAD-ONLY",
+        "HOTFIX163.1 — READ PATH SIDE-EFFECT ISOLATION TEST\nREAD-ONLY",
+    ]
+    assert all(main._is_hotfix1631_read_only_diagnostic(p) for p in prompts)
+    assert not main._is_hotfix1631_read_only_diagnostic("HOTFIX163.1 unrelated request")
