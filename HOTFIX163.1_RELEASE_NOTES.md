@@ -1,8 +1,15 @@
-# HOTFIX163.1 — Repository Canonical State Boundary Fix
+# HOTFIX163.1 — Canonical Read-Only Diagnostic Boundary Closure
 
-- Adds a local, read-only HOTFIX163.1 repository diagnostic path.
-- The diagnostic is intercepted before Message/Request/Round allocation.
-- It cannot dispatch providers, Cascade, Synthesis, Commit, Relink, or live hydration mutation.
-- Canonical counters remain derived from application-owned canonical identity records.
-- Hydration probing is performed only on deep copies.
-- No tests were modified.
+Incremental patch over HOTFIX163.1 repository baseline. Existing project files are preserved.
+
+## Fix
+- Expanded the HOTFIX163.1 local diagnostic gate to recognize all three read-only diagnostic variants:
+  - Repository Canonical State Boundary
+  - Clean Two-Record Canonical Fixture
+  - Read Path Side-Effect Isolation
+- These diagnostics are routed before Message/Request/Round allocation and therefore cannot enter provider dispatch, cascade, synthesis, or canonical lifecycle creation.
+- No provider, cascade, synthesis, canonical store, or test was modified to manufacture a passing result.
+
+## Verification
+- Full pytest: 552 passed, 0 failed.
+- ZIP round-trip verification is required and performed after packaging.

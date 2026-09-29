@@ -2577,8 +2577,26 @@ def _request_fingerprint(prompt: str, attachments: list[dict]) -> str:
 _render_six_rooms = _render_agent_rooms
 
 def _is_hotfix1631_read_only_diagnostic(prompt: str) -> bool:
-    first = next((line.strip() for line in str(prompt or "").splitlines() if line.strip()), "")
-    return first.upper().startswith("HOTFIX163.1") and "REPOSITORY CANONICAL STATE BOUNDARY AUDIT" in str(prompt or "").upper()
+    """Recognize the complete HOTFIX163.1 repository diagnostics as local READ_ONLY controls.
+
+    HOTFIX163.1 deliberately has three diagnostic variants (boundary, clean
+    two-record fixture, and read-path side-effect isolation).  All three must
+    bypass the normal Message -> Request -> Round -> Provider lifecycle.  The
+    old gate recognized only the boundary-audit wording, so the other two
+    variants were accidentally submitted as real Council Requests and polluted
+    the very canonical history they were meant to inspect.
+    """
+    text = str(prompt or "")
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    upper = text.upper()
+    if not first.upper().startswith("HOTFIX163.1"):
+        return False
+    diagnostic_markers = (
+        "REPOSITORY CANONICAL STATE BOUNDARY",
+        "CLEAN TWO-RECORD CANONICAL FIXTURE",
+        "READ PATH SIDE-EFFECT ISOLATION",
+    )
+    return any(marker in upper for marker in diagnostic_markers)
 
 
 def _render_hotfix1631_read_only_diagnostic(chat: dict) -> None:
