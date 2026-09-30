@@ -119,36 +119,36 @@ def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no
     round_no = int(round_no)
     if round_no < 1:
         raise ValueError("canonical round number must be >= 1")
-    # Request creation owns the immutable conversation ordinal.  If the
-    # application already persisted an explicit canonical_round_base for this
-    # Request, a caller's legacy/default round_no cannot downgrade Request 2 to
-    # Round 1. This is lifecycle allocation, never audit-time reconstruction.
-    canonical_requests = (chat.get("conversation_record") or {}).get("requests", [])
-    bound_request = next((r for r in canonical_requests if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id)), None)
-    if isinstance(bound_request, dict):
+    # Request creation owns the conversation-global canonical round ordinal.
+    # The caller may still pass the legacy per-request round number (normally 1),
+    # but the canonical RoundRecord must use the already-allocated Request ordinal.
+    canonical_ordinal = round_no
+    record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    req = next((x for x in record.get("requests", []) if isinstance(x, dict) and str(x.get("request_id") or "") == str(request_id)), None)
+    if isinstance(req, dict):
         try:
-            allocated = int(bound_request.get("canonical_round_base") or 0)
+            allocated = int(req.get("canonical_round_base") or 0)
         except (TypeError, ValueError):
             allocated = 0
         if allocated > 0:
-            round_no = allocated
-    round_id = f"{chat['conversation_id']}:{request_id}:r{int(round_no)}"
+            canonical_ordinal = allocated
+    round_id = f"{chat['conversation_id']}:{request_id}:r{int(canonical_ordinal)}"
     row = {
         "round_id": round_id,
         "conversation_id": chat["conversation_id"],
         "session_id": chat["session_id"],
         "message_id": str(message_id),
         "request_id": str(request_id),
-        "round": int(round_no),
-        "round_number": int(round_no),
-        "canonical_round_base": int(round_no),
+        "round": int(canonical_ordinal),
+        "round_number": int(canonical_ordinal),
+        "canonical_round_base": int(canonical_ordinal),
         # HOTFIX158: materialize an explicit canonical RoundRecord identity.
         # `round` remains the compatibility field; `ordinal` is the immutable
         # conversation-round ordinal consumed by the authoritative audit.
-        "ordinal": int(round_no),
+        "ordinal": int(canonical_ordinal),
         "record_type": "CANONICAL_ROUND_RECORD",
         "canonical_round_record_id": round_id,
-        "canonical_identity_key": f"{chat['conversation_id']}:{request_id}:r{int(round_no)}",
+        "canonical_identity_key": f"{chat['conversation_id']}:{request_id}:r{int(canonical_ordinal)}",
         "round_identity_contract": "V26.3.18-MONOTONIC-CONVERSATION-ROUND/v1",
         "status": "STARTED",
         "created_at": utc_now(),

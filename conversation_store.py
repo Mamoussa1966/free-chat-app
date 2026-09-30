@@ -383,11 +383,10 @@ def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
     else:
         chat["conversation_record"] = current
     rec = chat["conversation_record"]
-    cid = str(chat.get("conversation_id") or rec.get("conversation_id") or "").strip()
-    normalized = _normalize_single_round_per_request_identity(rec, cid) if cid else False
-    # Hydration itself must materialize the compatibility indexes from the full
-    # canonical record. This is a projection only; the canonical lists remain
-    # the sole identity source.
+    # Hydration is observational, but the compatibility indexes are a deterministic
+    # projection of the already-loaded canonical record. Build them here so callers
+    # that explicitly request hydration (without a second rebuild call) still receive
+    # the same read-only projection. No identity is created or allocated here.
     messages = [copy.deepcopy(x) for x in rec.get("messages", []) if isinstance(x, dict)]
     requests = [copy.deepcopy(x) for x in rec.get("requests", []) if isinstance(x, dict)]
     rounds = [copy.deepcopy(x) for x in rec.get("rounds", []) if isinstance(x, dict)]
@@ -399,6 +398,8 @@ def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
         "round_sequence": [str(x.get("round_id")) for x in rounds if str(x.get("round_id") or "")],
         "source": "V26_3_CANONICAL_CONVERSATION_STORE",
     }
+    cid = str(chat.get("conversation_id") or rec.get("conversation_id") or "").strip()
+    normalized = _normalize_single_round_per_request_identity(rec, cid) if cid else False
     _chat_rebind_alias(chat)
     if normalized and isinstance(session_state, dict):
         # Persist the repaired canonical identity immediately.  Use the same
