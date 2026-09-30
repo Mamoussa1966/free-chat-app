@@ -119,6 +119,19 @@ def begin_round(chat: dict[str, Any], message_id: str, request_id: str, round_no
     round_no = int(round_no)
     if round_no < 1:
         raise ValueError("canonical round number must be >= 1")
+    # Request creation owns the immutable conversation ordinal.  If the
+    # application already persisted an explicit canonical_round_base for this
+    # Request, a caller's legacy/default round_no cannot downgrade Request 2 to
+    # Round 1. This is lifecycle allocation, never audit-time reconstruction.
+    canonical_requests = (chat.get("conversation_record") or {}).get("requests", [])
+    bound_request = next((r for r in canonical_requests if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id)), None)
+    if isinstance(bound_request, dict):
+        try:
+            allocated = int(bound_request.get("canonical_round_base") or 0)
+        except (TypeError, ValueError):
+            allocated = 0
+        if allocated > 0:
+            round_no = allocated
     round_id = f"{chat['conversation_id']}:{request_id}:r{int(round_no)}"
     row = {
         "round_id": round_id,

@@ -385,6 +385,20 @@ def hydrate_canonical_record(chat: dict, session_state=None) -> dict:
     rec = chat["conversation_record"]
     cid = str(chat.get("conversation_id") or rec.get("conversation_id") or "").strip()
     normalized = _normalize_single_round_per_request_identity(rec, cid) if cid else False
+    # Hydration itself must materialize the compatibility indexes from the full
+    # canonical record. This is a projection only; the canonical lists remain
+    # the sole identity source.
+    messages = [copy.deepcopy(x) for x in rec.get("messages", []) if isinstance(x, dict)]
+    requests = [copy.deepcopy(x) for x in rec.get("requests", []) if isinstance(x, dict)]
+    rounds = [copy.deepcopy(x) for x in rec.get("rounds", []) if isinstance(x, dict)]
+    chat["canonical_runtime_indexes"] = {
+        "message_ids": [str(x.get("message_id")) for x in messages if str(x.get("message_id") or "")],
+        "request_ids": [str(x.get("request_id")) for x in requests if str(x.get("request_id") or "")],
+        "round_ids": [str(x.get("round_id")) for x in rounds if str(x.get("round_id") or "")],
+        "request_sequence": [str(x.get("request_id")) for x in requests if str(x.get("request_id") or "")],
+        "round_sequence": [str(x.get("round_id")) for x in rounds if str(x.get("round_id") or "")],
+        "source": "V26_3_CANONICAL_CONVERSATION_STORE",
+    }
     _chat_rebind_alias(chat)
     if normalized and isinstance(session_state, dict):
         # Persist the repaired canonical identity immediately.  Use the same
