@@ -289,6 +289,16 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
             result_rid = str(result.get("request_id") or rid).strip()
             if result_rid and result_rid != rid:
                 contamination = True
+            # Runtime execution events are application-owned identity evidence.
+            # A result can carry the correct request_id while one of its execution
+            # events still points at another Request; that is cross-request
+            # contamination and must fail the regression gate.
+            for event in result.get("runtime_execution_events") if isinstance(result.get("runtime_execution_events"), list) else []:
+                if not isinstance(event, dict) or event.get("execution_started") is not True:
+                    continue
+                event_rid = str(event.get("request_id") or rid).strip()
+                if event_rid != rid:
+                    contamination = True
             seat = str(result.get("seat_key") or result.get("seat") or "").strip()
             try:
                 rnd = int(result.get("round") or 0)
@@ -308,15 +318,20 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
     unique_bridges = len(bridge_ids) == len(set(bridge_ids))
     checks = {
         "REQUEST_COUNT": enough,
+        "MINIMUM_INDEPENDENT_REQUESTS": enough,
         "REQUEST_ID_INDEPENDENCE": independent,
         "RESULT_REQUEST_ID_ISOLATION": not contamination,
+        "NO_CROSS_REQUEST_RESULT_REFERENCE": not contamination,
         "BRIDGE_ID_REQUEST_ISOLATION": unique_bridges,
         "SEAT_ROUND_EXECUTION_ISOLATION": duplicate_seat_round == 0,
     }
     ok = all(checks.values())
+    # HOTFIX135 contract: absence of the required second persisted Request is a
+    # regression failure, not merely an unproven state. NOT_PROVEN remains reserved
+    # for audits where the authoritative application-owned source itself is absent.
     return {
-        "status": "PASS" if ok else "FAIL" if enough else "NOT_PROVEN",
-        "gate": "PASS" if ok else "FAIL" if enough else "NOT_PROVEN",
+        "status": "PASS" if ok else "FAIL",
+        "gate": "PASS" if ok else "FAIL",
         "required_request_count": 2,
         "observed_request_records": len(records),
         "audited_request_ids": request_ids,

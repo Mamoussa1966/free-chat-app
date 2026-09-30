@@ -1311,8 +1311,8 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     safe_shared_context = str(shared_context or "")
     for forbidden in forbidden_bridge_values:
         if forbidden:
-            user_prompt = str(user_prompt or "").replace(forbidden, "[BRIDGE_VALUE_REDACTED]")
-            safe_shared_context = safe_shared_context.replace(forbidden, "[BRIDGE_VALUE_REDACTED]")
+            user_prompt = str(user_prompt or "").replace(forbidden, "[REDACTED_BRIDGE_VALUE]")
+            safe_shared_context = safe_shared_context.replace(forbidden, "[REDACTED_BRIDGE_VALUE]")
     shared_context = safe_shared_context
     started = time.perf_counter()
     # No artificial provider/seat timeout is imposed. An optional caller-owned
