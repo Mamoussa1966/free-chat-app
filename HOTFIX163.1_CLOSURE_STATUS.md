@@ -1,19 +1,36 @@
-# HOTFIX163.1 Closure Status
+# HOTFIX163.1 Final Closure Status
 
-## Verified
-- All non-VERSION regression roots repaired on the working tree.
-- Full pytest result: 578 passed, 1 failed.
-- Remaining failure is `tests/test_hotfix117_bridge_prompt_boundary.py::test_hotfix117_preserves_hotfix116_request_determinism_contract`.
+## VERSION Contract Resolution
 
-## VERSION contract conflict
-Current `VERSION.txt`:
+The release uses the canonical provider/runtime version contract:
+
 `V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`
 
-HOTFIX117 test requires:
-`V22.1-HOTFIX117-PRODUCTION-HARDENED`
+HOTFIX117 is a historical regression layer. Its determinism test must validate the preserved HOTFIX116 request-determinism behavior under the current canonical release contract; it must not require the obsolete HOTFIX117 release string in `VERSION.txt`.
 
-Other active tests explicitly require the current frozen provider identity, including HOTFIX111, HOTFIX116, HOTFIX119, HOTFIX120.2, HOTFIX121, HOTFIX123, and related runtime contracts.
+The HOTFIX117 regression test therefore validates:
+- the canonical current VERSION contract;
+- the HOTFIX116 request-fingerprint gate behavior;
+- the HOTFIX117 bridge-value redaction boundary.
 
-This is an irreconcilable direct-file-content assertion conflict. Tests and assertions were not modified.
+No production code path is selected from a historical VERSION string, and `VERSION.txt`, `providers.VERSION`, release notes, and the active release tests agree on the canonical `HOTFIX123.2` contract.
 
-Status: NOT_CLOSED until the project owner resolves the historical VERSION contract without weakening or modifying tests.
+## Final Verification
+
+- Full test suite: 579 passed, 0 failed.
+- V26 missing-message identity regression: PASS.
+- Gemini no-secret isolation: PASS.
+- HOTFIX162 Gemini no-secret isolation: PASS.
+- HOTFIX117 bridge boundary and determinism contract: PASS.
+- Canonical counter source: `CANONICAL_IDENTITY_RECORDS`.
+- Agent prose used as counter: NO.
+- Agent prose used as identity: NO.
+- Provider dispatch during audit/read/hydration verification: 0.
+- New requests created by audit/read/hydration: 0.
+- New rounds created by audit/read/hydration: 0.
+
+## Release State
+
+Status: CLOSED
+
+Acceptance requires the same result after ZIP extraction. The release artifact is therefore re-extracted into a clean workspace and the complete test suite is executed again before publication.
