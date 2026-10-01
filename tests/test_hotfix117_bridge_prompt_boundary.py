@@ -36,7 +36,7 @@ def test_hotfix117_final_http_prompt_boundary_never_contains_bridge_value():
 
 
 def test_hotfix117_preserves_hotfix116_request_determinism_contract():
-    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX117-PRODUCTION-HARDENED"
+    assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
     fingerprint = main._request_fingerprint("same logical request", [])
     with main._REQUEST_GATE_LOCK:
         main._ACTIVE_REQUEST_FINGERPRINTS.discard(fingerprint)
