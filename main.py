@@ -2591,10 +2591,22 @@ def _is_hotfix1631_read_only_diagnostic(prompt: str) -> bool:
     upper = text.upper()
     if not first.upper().startswith("HOTFIX163.1"):
         return False
+    # HOTFIX163.1 repository/runtime acceptance prompts are control-plane
+    # diagnostics, not user work.  They must never allocate a Message, Request,
+    # Round, bridge, cascade, or provider execution.  Keep this allow-list
+    # explicit and scoped to the HOTFIX163.1 namespace so ordinary prompts are
+    # unaffected.
     diagnostic_markers = (
         "REPOSITORY CANONICAL STATE BOUNDARY",
         "CLEAN TWO-RECORD CANONICAL FIXTURE",
         "READ PATH SIDE-EFFECT ISOLATION",
+        "VERSION CONTRACT",
+        "FULL REGRESSION TEST",
+        "V26.3 CANONICAL PERSISTENCE TEST",
+        "GEMINI NO-SECRET ISOLATION TEST",
+        "HOTFIX117 BRIDGE PROMPT BOUNDARY REGRESSION",
+        "AUDIT / READ / HYDRATION SIDE-EFFECT REGRESSION",
+        "ZIP ROUND-TRIP ACCEPTANCE TEST",
     )
     return any(marker in upper for marker in diagnostic_markers)
 
