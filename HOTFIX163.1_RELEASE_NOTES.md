@@ -14,8 +14,8 @@ Incremental patch over HOTFIX163.1 repository baseline. Existing project files a
   - HOTFIX117 Bridge Prompt Boundary Regression
   - Audit / Read / Hydration Side-Effect Regression
   - ZIP Round-Trip Acceptance Test
-- The gate remains explicitly scoped to prompts whose first non-empty line starts with HOTFIX163.1. Ordinary user prompts are unaffected.
-- These diagnostics are routed before Message/Request/Round allocation and therefore cannot enter provider dispatch, cascade, synthesis, bridge creation, or canonical lifecycle creation.
+- The message composer no longer auto-detects or blocks prompts merely because they start with HOTFIX163.1. This restores normal chat input/submission for closure test text and ordinary user messages.
+- The repository canonical diagnostic remains available only through an explicit sidebar control, so local read-only auditing cannot silently hijack a user message or create a Request/Round/provider execution.
 - No provider, cascade, synthesis, canonical store, or test was modified to manufacture a passing result.
 
 ## Verification

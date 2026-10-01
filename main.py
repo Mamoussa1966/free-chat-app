@@ -1965,6 +1965,24 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 code, report = run_production_core_tests()
             st.session_state.last_production_core_report = report
             st.session_state.last_production_core_code = code
+        if st.button("🧭 HOTFIX163.1 Local Read-Only Audit", use_container_width=True):
+            # Control-plane action only: compute and persist the report here, but
+            # never render the report inline in the sidebar event branch.  Inline
+            # rendering here used to interleave a large diagnostic tree with the
+            # sidebar's normal widget tree and could abort/derail the main-room
+            # render on Streamlit reruns.
+            report = repository_canonical_state_boundary_audit(_active_chat(), st.session_state)
+            st.session_state.last_hotfix1631_read_only_audit = copy.deepcopy(report)
+            st.session_state.last_hotfix1631_local_audit_ran = True
+        if st.session_state.get("last_hotfix1631_read_only_audit"):
+            with st.expander("🧭 HOTFIX163.1 — Local Read-Only Audit", expanded=False):
+                st.json(st.session_state.last_hotfix1631_read_only_audit)
+                _render_section_actions(
+                    "HOTFIX163.1 — Repository Canonical State Boundary Audit",
+                    st.session_state.last_hotfix1631_read_only_audit,
+                    "hotfix1631_read_only_audit",
+                    "HOTFIX1631_Repository_Canonical_State_Boundary_Audit.json",
+                )
         st.divider()
         st.subheader("🚀 V23 Production Platform")
         st.caption("HOTFIX124→HOTFIX130 + V23 Release Candidate: طبقات إضافية فوق Core HOTFIX123.2.")
@@ -2615,14 +2633,37 @@ def _render_hotfix1631_read_only_diagnostic(chat: dict) -> None:
     """Execute the repository audit locally without entering the request lifecycle."""
     report = repository_canonical_state_boundary_audit(chat, st.session_state)
     st.session_state.last_hotfix1631_read_only_audit = copy.deepcopy(report)
-    st.subheader("🧭 HOTFIX163.1 — Repository Canonical State Boundary Audit")
-    st.json(report)
-    _render_section_actions(
-        "HOTFIX163.1 — Repository Canonical State Boundary Audit",
-        report,
-        "hotfix1631_read_only_audit",
-        "HOTFIX1631_Repository_Canonical_State_Boundary_Audit.json",
+    with st.expander("🧭 HOTFIX163.1 — Repository Canonical State Boundary Audit", expanded=False):
+        st.json(report)
+        _render_section_actions(
+            "HOTFIX163.1 — Repository Canonical State Boundary Audit",
+            report,
+            "hotfix1631_read_only_audit",
+            "HOTFIX1631_Repository_Canonical_State_Boundary_Audit.json",
+        )
+
+
+def _render_main_room_shell() -> None:
+    """HOTFIX163.1 UI boundary: keep the primary room headings in the main pane.
+
+    This is presentation-only. It does not inspect prompt text, allocate lifecycle
+    identities, execute diagnostics, or mutate canonical conversation state.
+    """
+    st.markdown(
+        """<style>
+        /* Main-room visibility guard: do not let theme/browser rendering collapse
+           the semantic Streamlit heading elements used by the Council room. */
+        [data-testid="stAppViewContainer"] h1,
+        [data-testid="stAppViewContainer"] h2,
+        [data-testid="stAppViewContainer"] h3 {
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+        </style>""",
+        unsafe_allow_html=True,
     )
+    st.divider()
+    st.subheader("💬 غرفة المحادثة")
 
 
 def run_app() -> None:
@@ -2635,6 +2676,7 @@ def run_app() -> None:
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
+    _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
     st.caption(f"HOTFIX123 Release Identity Gate: {release_identity.get('gate', 'FAIL')} • Frozen Provider={release_identity.get('observed', {}).get('provider_core', 'NOT_PROVEN')} • Runtime Match={release_identity.get('runtime_matches_frozen_identity', False)}")
@@ -2684,12 +2726,10 @@ def run_app() -> None:
         attachments = []
     if attachments is None:
         return
-    # HOTFIX163.1: repository canonical diagnostics are a local read-only control
-    # path, never a Council Request. This gate executes before fingerprinting,
-    # Message/Request/Round allocation, provider dispatch, cascade, or synthesis.
-    if prompt and _is_hotfix1631_read_only_diagnostic(prompt) and not attachments:
-        _render_hotfix1631_read_only_diagnostic(chat)
-        return
+    # HOTFIX163.1: repository diagnostics are NOT auto-detected from message text.
+    # The composer must remain a normal Council input surface so users can paste
+    # and send any test prompt, including HOTFIX163.1 test text. The local
+    # read-only diagnostic is exposed only through its explicit sidebar control.
     if prompt or attachments:
         if not prompt:
             prompt = "حلّل المرفقات المرفقة واذكر أهم ما تحتويه."
