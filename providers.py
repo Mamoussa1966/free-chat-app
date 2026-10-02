@@ -348,19 +348,15 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
 def _read_setting(name: str) -> Tuple[Optional[str], str]:
     """Read one setting with strict Streamlit Secret precedence.
 
-    A present Streamlit key owns the configuration slot even when its value is
-    empty. This prevents a stale environment variable from silently replacing
-    a dashboard Secret and makes the source state diagnosable.
+    ``_streamlit_secret`` is the single live/test seam. It returns ``None``
+    only when a Secret key is absent and ``""`` when the Secret exists but is
+    explicitly empty. This preserves Secret-over-ENV precedence and, critically,
+    prevents a no-secret regression from being bypassed by a second direct
+    lookup into ``st.secrets``.
     """
-    # Keep _streamlit_secret as a live/test seam while retaining an explicit
-    # present-but-empty check below.  This gives the runtime and regression
-    # harness one authoritative precedence path.
     secret_value = _streamlit_secret(name)
     if secret_value is not None:
-        return secret_value, "streamlit_secrets"
-    present, value = _streamlit_secret_state(name)
-    if present:
-        return value, "streamlit_secrets" if value else "streamlit_secrets_empty"
+        return secret_value, "streamlit_secrets" if secret_value else "streamlit_secrets_empty"
     value = _coerce_setting_value(os.getenv(name))
     if value:
         return value, "environment"
@@ -368,10 +364,11 @@ def _read_setting(name: str) -> Tuple[Optional[str], str]:
 
 
 def _streamlit_secret(name: str) -> Optional[str]:
-    """Return the Streamlit Secret value, preserving an explicitly empty Secret."""
+    """Return the Secret value; ``None`` means absent, ``""`` means present-empty."""
     present, value = _streamlit_secret_state(name)
-    return value if present else None
-
+    if not present:
+        return None
+    return "" if value is None else value
 
 def _setting(names: Iterable[str]) -> Optional[str]:
     """Read configuration from Streamlit Secrets first, then environment.
