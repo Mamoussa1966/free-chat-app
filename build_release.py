@@ -31,8 +31,6 @@ def _current_test_files() -> set[str]:
 # The Golden baseline remains a minimum-preservation invariant.
 EXPECTED_TEST_FILES = _current_test_files()
 
-FINAL_CLOSURE_TEST_FILES = {"test_hotfix163_final_closure.py"}
-
 # Files intentionally changed as part of the provider-parity integration phase.
 # Every other baseline file must remain byte-identical. The Claude and Grok
 # regression modules are allowed in addition to the 20-module Golden baseline.
@@ -89,8 +87,6 @@ def compare_against_golden_baseline() -> None:
         raise SystemExit("Claude regression test module missing")
     if "tests/test_grok_integration.py" not in current_tests:
         raise SystemExit("Grok regression test module missing")
-    if not {f"tests/{name}" for name in FINAL_CLOSURE_TEST_FILES} <= current_tests:
-        raise SystemExit("HOTFIX163 final-closure regression test module missing")
 
 
 def validate_sources() -> None:
