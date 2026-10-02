@@ -169,7 +169,3 @@ Authoritative result / identity / bridge-prose isolation. Provider prose is neve
 - Gemini has no implicit model catalog when its explicit Free-model Secret is absent.
 - HOTFIX117 bridge prompt boundary remains protected through the `forbidden_bridge_values` provider boundary.
 - Legacy release files are preserved; no runtime secrets are packaged.
-
-## HOTFIX163 Final Regression Closure
-
-Final closure build retains the canonical Secret-resolution fix in `providers.py` and adds a dedicated regression lock for the no-secret seam and explicit-empty Secret precedence. No V26.3 runtime/counter/bridge behavior was changed.

@@ -21,6 +21,14 @@ OBSERVED_DEPLOYED_IDENTITY = {
     "platform_release": "V24.0-HOTFIX145-CONVERSATION-RUNTIME-PROFESSIONAL-CHAT-FOUNDATION",
 }
 
+# HOTFIX163.1 final contract: the provider version in VERSION.txt is the active
+# release identity. HOTFIX117 remains a historical regression layer and is never
+# allowed to replace the active provider version.
+CANONICAL_PROVIDER_VERSION = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+HISTORICAL_PROVIDER_VERSIONS = {
+    "HOTFIX117": "V22.1-HOTFIX117-PRODUCTION-HARDENED",
+}
+
 SOURCE_RELEASE_IDENTITY = {
     "VERSION.txt": VERSION_FILE,
     **OBSERVED_DEPLOYED_IDENTITY,
@@ -32,6 +40,22 @@ def release_fingerprint(identity: dict | None = None) -> str:
 
 DEPLOYED_RELEASE_FINGERPRINT = release_fingerprint(OBSERVED_DEPLOYED_IDENTITY)
 SOURCE_TREE_FINGERPRINT = release_fingerprint(SOURCE_RELEASE_IDENTITY)
+
+
+def version_contract_audit() -> dict:
+    """Fail-closed version contract audit without rewriting VERSION.txt."""
+    current = VERSION_FILE
+    canonical_match = current == CANONICAL_PROVIDER_VERSION
+    historical = dict(HISTORICAL_PROVIDER_VERSIONS)
+    return {
+        "schema": "hotfix1631-version-contract/v1",
+        "current_version": current,
+        "canonical_provider_version": CANONICAL_PROVIDER_VERSION,
+        "canonical_match": bool(canonical_match),
+        "historical_provider_versions": historical,
+        "historical_versions_active": False,
+        "version_contract": "PASS" if canonical_match else "FAIL",
+    }
 
 
 def deployed_release_identity() -> dict:
@@ -70,5 +94,10 @@ def deployed_release_identity() -> dict:
 def assert_deployed_release_identity() -> dict:
     """Return a fail-closed identity report; never mutate version metadata."""
     report = deployed_release_identity()
-    report["gate"] = "PASS" if report.get("runtime_matches_frozen_identity") is True else "FAIL"
+    version_contract = version_contract_audit()
+    report["version_contract"] = version_contract
+    report["gate"] = "PASS" if (
+        report.get("runtime_matches_frozen_identity") is True
+        and version_contract.get("version_contract") == "PASS"
+    ) else "FAIL"
     return report

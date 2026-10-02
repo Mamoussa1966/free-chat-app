@@ -1,0 +1,24 @@
+{
+  "release": "HOTFIX163.1_FINAL_CLOSURE_BRIDGE_BOUNDARY_HARDENED",
+  "base": "HOTFIX163.3_FINAL_REGRESSION_CLOSURE",
+  "tests_modified": false,
+  "version": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "gemini_credential_free_dispatch_candidates": [],
+  "bridge_boundary": {
+    "status": "PASS",
+    "source": "DeepSeek / Seat 7",
+    "target": "Gemini / Seat 2",
+    "write": "PASS",
+    "validate": "PASS",
+    "commit": "PASS",
+    "barrier": "PASS",
+    "read": "PASS",
+    "match": "PASS",
+    "runtime_http_payload_attested": "YES",
+    "runtime_http_payload_contains_value": "NO",
+    "runtime_http_payload_contains_bridge_key": "NO",
+    "provider_dispatch_calls": 0,
+    "request_created": 0,
+    "round_created": 0
+  }
+}

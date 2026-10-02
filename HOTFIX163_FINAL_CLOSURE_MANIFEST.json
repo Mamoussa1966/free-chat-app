@@ -1,10 +1,7 @@
 {
   "release": "HOTFIX163",
-  "artifact": "FINAL_REGRESSION_CLOSURE",
-  "base": "HOTFIX163.1_V5",
+  "base": "HOTFIX161/162",
   "purpose": "FINAL_REGRESSION_CLOSURE",
-  "production_fix": "providers.py_secret_resolution_seam",
-  "final_regression_lock": "tests/test_hotfix163_final_closure.py",
   "test_mutation": false,
   "implicit_model_discovery": false,
   "credential_packaging": false,

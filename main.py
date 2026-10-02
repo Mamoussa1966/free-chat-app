@@ -248,9 +248,12 @@ class SharedContextBridge:
         # the diagnostic canary is created and controlled exclusively by the
         # application; provider prose is never authoritative for the transaction.
         self.application_owned_test = bool(application_owned_test)
-        self.bridge_id = hashlib.sha256(
-            f"{self.request_id}:{self.round_no}:{uuid.uuid4().hex}".encode("utf-8")
-        ).hexdigest()[:24]
+        # HOTFIX163.1 FINAL BRIDGE CONTRACT: exactly one Bridge identity per
+        # logical Request.  The identity is deterministic from request_id, so a
+        # repeated construction of the same request cannot silently mint a second
+        # Bridge ID.  Round number remains an independently audited field.
+        bridge_identity = f"HOTFIX1631:BRIDGE:{self.request_id}" if self.request_id else f"HOTFIX1631:BRIDGE:{self.round_no}:{uuid.uuid4().hex}"
+        self.bridge_id = hashlib.sha256(bridge_identity.encode("utf-8")).hexdigest()[:24]
         self._entries: list[str] = []
         self._values: dict[str, dict] = {}
         self._write_sequence = 0
@@ -1246,6 +1249,104 @@ def _dispatch_gate(seat, request_id: str, round_no: int, credential, model_candi
     if not str(getattr(seat, "key", "") or "").strip():
         return False, "SEAT_KEY_MISSING"
     return True, "READY_FREE_MODEL"
+
+
+def hotfix1631_bridge_boundary_self_test() -> dict:
+    """Application-owned, provider-free proof of the transactional Bridge boundary.
+
+    This is a deterministic runtime probe for release verification. It exercises
+    WRITE -> VALIDATE -> COMMIT -> BARRIER -> READ and proves that the bridge key/value
+    never enters the target Gemini provider prompt/payload. It performs no provider
+    dispatch, no request allocation, and no mutation of a conversation store.
+    """
+    seats = {seat.key: seat for seat in get_seats()}
+    deepseek = seats.get("deepseek")
+    gemini = seats.get("gemini")
+    if deepseek is None or gemini is None:
+        return {"status": "FAIL", "reason": "REQUIRED_BRIDGE_SEATS_MISSING", "provider_dispatch_calls": 0}
+
+    probe_request_id = "HOTFIX1631-BRIDGE-BOUNDARY-PROBE"
+    bridge = SharedContextBridge(
+        request_id=probe_request_id,
+        round_no=1,
+        application_owned_test=True,
+    )
+    canary = "HOTFIX1631_BRIDGE_PROBE_APPLICATION_OWNED"
+    bridge.seed_application_state("BRIDGE_RESULT", canary, source="DeepSeek", source_seat=7)
+    pre_commit_prompt = bridge.prompt_snapshot(gemini)
+    bridge.commit(gemini)
+    bridge.barrier()
+    resolved = bridge.read("BRIDGE_RESULT", gemini)
+    provider_prompt = bridge.prompt_snapshot(gemini)
+    bridge.record_provider_input(gemini, provider_prompt)
+    payload_json = json.dumps({"contents": [{"parts": [{"text": provider_prompt}]}]}, ensure_ascii=False, sort_keys=True)
+    bridge.record_runtime_payload_attestation(
+        gemini,
+        {
+            "payload_json": payload_json,
+            "payload_sha256": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+        },
+    )
+    audit = bridge.seal_runtime_audit(
+        source_seat=7, target_seat=2, key="BRIDGE_RESULT", user_prompt="bridge boundary probe",
+    )
+    gate = bridge.bridge_security_regression_gate(audit)
+    trace = bridge.transaction_trace()
+    bridge_ids = {str(item.get("bridge_id") or "") for item in trace if str(item.get("bridge_id") or "")}
+    ordered_stages = [
+        any(item.get("write_sequence") == 1 and item.get("commit_status") in {"PENDING", "COMMITTED"} for item in trace),
+        audit.get("VALIDATE") == "PASS",
+        audit.get("COMMIT") == "PASS",
+        audit.get("BARRIER") == "PASS",
+        audit.get("READ") == "PASS",
+        audit.get("MATCH") == "PASS",
+    ]
+    source_target = all(
+        (int(item.get("source_seat", 0) or 0) == 7 and int(item.get("target_seat", 0) or 0) in {0, 2})
+        for item in trace
+        if item.get("key") == "BRIDGE_RESULT"
+    )
+    target_isolated = (
+        canary not in pre_commit_prompt
+        and "BRIDGE_RESULT" not in pre_commit_prompt
+        and canary not in provider_prompt
+        and "BRIDGE_RESULT" not in provider_prompt
+        and canary not in payload_json
+        and "BRIDGE_RESULT" not in payload_json
+    )
+    ok = (
+        gate.get("status") == "PASS"
+        and resolved == canary
+        and bridge.request_id == probe_request_id
+        and len(bridge_ids) == 1
+        and source_target
+        and target_isolated
+        and all(ordered_stages)
+    )
+    return {
+        "schema": "hotfix1631-bridge-boundary-self-test/v1",
+        "status": "PASS" if ok else "FAIL",
+        "provider_dispatch_calls": 0,
+        "request_created": 0,
+        "round_created": 0,
+        "source": "DeepSeek / Seat 7",
+        "target": "Gemini / Seat 2",
+        "request_id": probe_request_id,
+        "bridge_id": bridge.bridge_id,
+        "bridge_id_count": len(bridge_ids),
+        "write": audit.get("WRITE"),
+        "validate": audit.get("VALIDATE"),
+        "commit": audit.get("COMMIT"),
+        "barrier": audit.get("BARRIER"),
+        "read": audit.get("READ"),
+        "match": audit.get("MATCH"),
+        "runtime_http_payload_attested": audit.get("RUNTIME_HTTP_PAYLOAD_ATTESTED"),
+        "runtime_http_payload_contains_value": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE"),
+        "runtime_http_payload_contains_bridge_key": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY"),
+        "gemini_received_sanitized_representation_only": audit.get("GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY"),
+        "trace": trace,
+        "gate_failures": list(gate.get("failures") or []),
+    }
 
 
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str, bridge_controls: list[tuple[str, str]] | None = None) -> list[dict]:
