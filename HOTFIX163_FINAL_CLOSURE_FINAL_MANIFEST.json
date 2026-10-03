@@ -1,0 +1,18 @@
+{
+  "release": "HOTFIX163_FINAL_CLOSURE_FINAL",
+  "base": "HOTFIX163.4_FINAL_CLOSURE_VERIFIED",
+  "purpose": "FINAL_REGRESSION_CLOSURE",
+  "source_tree_preserved": true,
+  "canonical_v26_3_preserved": true,
+  "tests_modified": false,
+  "secrets_changed": false,
+  "free_model_lists_changed": false,
+  "local_engine": false,
+  "paid_fallback": false,
+  "dynamic_model_discovery": false,
+  "version": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "bridge_boundary_contract": "WRITE->VALIDATE->COMMIT->BARRIER->READ->MATCH",
+  "gemini_no_secret_dispatch_candidates": [],
+  "zip_layout": "PROJECT_CONTENTS_AT_ARCHIVE_ROOT",
+  "nested_zip": false
+}

@@ -21,13 +21,10 @@ OBSERVED_DEPLOYED_IDENTITY = {
     "platform_release": "V24.0-HOTFIX145-CONVERSATION-RUNTIME-PROFESSIONAL-CHAT-FOUNDATION",
 }
 
-# HOTFIX163.1 final contract: the provider version in VERSION.txt is the active
-# release identity. HOTFIX117 remains a historical regression layer and is never
-# allowed to replace the active provider version.
+# HOTFIX163.4: active provider version stays canonical; HOTFIX117 is a historical
+# regression layer and must never replace VERSION.txt.
 CANONICAL_PROVIDER_VERSION = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
-HISTORICAL_PROVIDER_VERSIONS = {
-    "HOTFIX117": "V22.1-HOTFIX117-PRODUCTION-HARDENED",
-}
+HISTORICAL_PROVIDER_VERSIONS = {"HOTFIX117": "V22.1-HOTFIX117-PRODUCTION-HARDENED"}
 
 SOURCE_RELEASE_IDENTITY = {
     "VERSION.txt": VERSION_FILE,
@@ -43,16 +40,15 @@ SOURCE_TREE_FINGERPRINT = release_fingerprint(SOURCE_RELEASE_IDENTITY)
 
 
 def version_contract_audit() -> dict:
-    """Fail-closed version contract audit without rewriting VERSION.txt."""
+    """Fail-closed VERSION contract audit; historical HOTFIX117 is non-active."""
     current = VERSION_FILE
     canonical_match = current == CANONICAL_PROVIDER_VERSION
-    historical = dict(HISTORICAL_PROVIDER_VERSIONS)
     return {
-        "schema": "hotfix1631-version-contract/v1",
+        "schema": "hotfix1634-version-contract/v1",
         "current_version": current,
         "canonical_provider_version": CANONICAL_PROVIDER_VERSION,
         "canonical_match": bool(canonical_match),
-        "historical_provider_versions": historical,
+        "historical_provider_versions": dict(HISTORICAL_PROVIDER_VERSIONS),
         "historical_versions_active": False,
         "version_contract": "PASS" if canonical_match else "FAIL",
     }

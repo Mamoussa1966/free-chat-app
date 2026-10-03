@@ -248,11 +248,14 @@ class SharedContextBridge:
         # the diagnostic canary is created and controlled exclusively by the
         # application; provider prose is never authoritative for the transaction.
         self.application_owned_test = bool(application_owned_test)
-        # HOTFIX163.1 FINAL BRIDGE CONTRACT: exactly one Bridge identity per
-        # logical Request.  The identity is deterministic from request_id, so a
-        # repeated construction of the same request cannot silently mint a second
-        # Bridge ID.  Round number remains an independently audited field.
-        bridge_identity = f"HOTFIX1631:BRIDGE:{self.request_id}" if self.request_id else f"HOTFIX1631:BRIDGE:{self.round_no}:{uuid.uuid4().hex}"
+        # HOTFIX163.4: one deterministic Bridge identity per logical Request.
+        # A repeated construction of the same request/round must not mint a new
+        # bridge identity; an empty request uses a unique probe identity.
+        bridge_identity = (
+            f"HOTFIX1634:BRIDGE:{self.request_id}"
+            if self.request_id
+            else f"HOTFIX1634:BRIDGE:{self.round_no}:{uuid.uuid4().hex}"
+        )
         self.bridge_id = hashlib.sha256(bridge_identity.encode("utf-8")).hexdigest()[:24]
         self._entries: list[str] = []
         self._values: dict[str, dict] = {}
@@ -1251,7 +1254,7 @@ def _dispatch_gate(seat, request_id: str, round_no: int, credential, model_candi
     return True, "READY_FREE_MODEL"
 
 
-def hotfix1631_bridge_boundary_self_test() -> dict:
+def hotfix1634_bridge_boundary_self_test() -> dict:
     """Application-owned, provider-free proof of the transactional Bridge boundary.
 
     This is a deterministic runtime probe for release verification. It exercises
@@ -1265,13 +1268,13 @@ def hotfix1631_bridge_boundary_self_test() -> dict:
     if deepseek is None or gemini is None:
         return {"status": "FAIL", "reason": "REQUIRED_BRIDGE_SEATS_MISSING", "provider_dispatch_calls": 0}
 
-    probe_request_id = "HOTFIX1631-BRIDGE-BOUNDARY-PROBE"
+    probe_request_id = "HOTFIX1634-BRIDGE-BOUNDARY-PROBE"
     bridge = SharedContextBridge(
         request_id=probe_request_id,
         round_no=1,
         application_owned_test=True,
     )
-    canary = "HOTFIX1631_BRIDGE_PROBE_APPLICATION_OWNED"
+    canary = "HOTFIX1634_BRIDGE_PROBE_APPLICATION_OWNED"
     bridge.seed_application_state("BRIDGE_RESULT", canary, source="DeepSeek", source_seat=7)
     pre_commit_prompt = bridge.prompt_snapshot(gemini)
     bridge.commit(gemini)
@@ -1324,7 +1327,7 @@ def hotfix1631_bridge_boundary_self_test() -> dict:
         and all(ordered_stages)
     )
     return {
-        "schema": "hotfix1631-bridge-boundary-self-test/v1",
+        "schema": "hotfix1634-bridge-boundary-self-test/v1",
         "status": "PASS" if ok else "FAIL",
         "provider_dispatch_calls": 0,
         "request_created": 0,
@@ -1347,6 +1350,8 @@ def hotfix1631_bridge_boundary_self_test() -> dict:
         "trace": trace,
         "gate_failures": list(gate.get("failures") or []),
     }
+
+
 
 
 def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, deadline: float | None, request_id: str, bridge_controls: list[tuple[str, str]] | None = None) -> list[dict]:

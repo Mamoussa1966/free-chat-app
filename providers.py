@@ -348,19 +348,15 @@ def _streamlit_secret_state(name: str) -> Tuple[bool, Optional[str]]:
 def _read_setting(name: str) -> Tuple[Optional[str], str]:
     """Read one setting with strict Streamlit Secret precedence.
 
-    A present Streamlit key owns the configuration slot even when its value is
-    empty. This prevents a stale environment variable from silently replacing
-    a dashboard Secret and makes the source state diagnosable.
+    ``_streamlit_secret`` is the single live/test seam. It returns ``None``
+    only when a Secret key is absent and ``""`` when the Secret exists but is
+    explicitly empty. This preserves Secret-over-ENV precedence and, critically,
+    prevents a no-secret regression from being bypassed by a second direct
+    lookup into ``st.secrets``.
     """
-    # Keep _streamlit_secret as a live/test seam while retaining an explicit
-    # present-but-empty check below.  This gives the runtime and regression
-    # harness one authoritative precedence path.
     secret_value = _streamlit_secret(name)
     if secret_value is not None:
-        return secret_value, "streamlit_secrets"
-    present, value = _streamlit_secret_state(name)
-    if present:
-        return value, "streamlit_secrets" if value else "streamlit_secrets_empty"
+        return secret_value, "streamlit_secrets" if secret_value else "streamlit_secrets_empty"
     value = _coerce_setting_value(os.getenv(name))
     if value:
         return value, "environment"
@@ -368,10 +364,11 @@ def _read_setting(name: str) -> Tuple[Optional[str], str]:
 
 
 def _streamlit_secret(name: str) -> Optional[str]:
-    """Return the Streamlit Secret value, preserving an explicitly empty Secret."""
+    """Return the Secret value; ``None`` means absent, ``""`` means present-empty."""
     present, value = _streamlit_secret_state(name)
-    return value if present else None
-
+    if not present:
+        return None
+    return "" if value is None else value
 
 def _setting(names: Iterable[str]) -> Optional[str]:
     """Read configuration from Streamlit Secrets first, then environment.
@@ -446,23 +443,17 @@ def _parse_models(raw: str) -> Tuple[str, ...]:
 
 
 def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
-    """Return explicitly configured Free-model names (configuration projection).
-
-    Backward-compatible configuration parsing is kept here for historical unit
-    tests and compatibility callers.  Production dispatch must use
-    :func:`get_model_candidates_for_dispatch`, which binds candidate availability
-    to an actual provider credential.  A model list alone never grants runtime
-    eligibility.
-    """
+    """Return only explicitly configured Free models with strict precedence."""
     return _parse_models(_setting(seat.model_env) or "")
 
 
 def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
-    """Resolve the candidate list that is actually eligible for Provider dispatch.
+    """Return Free-model candidates eligible for actual provider dispatch.
 
-    Contract: NO CREDENTIAL -> ().  Credential + explicit Free Models returns only
-    those configured candidates.  There is no implicit/default catalog, discovery,
-    paid fallback, or model invention in this path.
+    Contract: no provider credential means no dispatch candidates, even when a
+    model list exists in configuration. With a credential, only the explicitly
+    configured Free-model list is eligible. No discovery, default catalog, paid
+    fallback, or automatic model selection is permitted.
     """
     credential = _setting(seat.env_names)
     if not credential:
@@ -471,10 +462,8 @@ def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
 
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
-    # The application-facing model snapshot is credential-bound. This prevents a
-    # dashboard from reporting Gemini Free candidates as available when its
-    # credential is absent, while preserving the legacy get_model_candidates()
-    # compatibility seam used by historical regression tests.
+    # Runtime/UI/dispatch snapshot is credential-bound; legacy callers may still
+    # use get_model_candidates() as the raw configuration projection.
     return {seat.key: get_model_candidates_for_dispatch(seat) for seat in get_seats()}
 
 
@@ -1343,7 +1332,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     # deadline is honored only when explicitly supplied by the caller.
     seat_deadline = float(deadline) if deadline is not None else None
     cascade = FreeCascadeController(
-        _parse_models(",".join(model_candidates or get_model_candidates(seat)))[:MAX_MODELS_PER_SEAT],
+        _parse_models(",".join(model_candidates if model_candidates is not None else get_model_candidates_for_dispatch(seat)))[:MAX_MODELS_PER_SEAT],
         TimeoutRetryPolicy(timeout_seconds=CASCADE_MODEL_TIMEOUT_SECONDS, max_transport_retries=0, cascade_max_models=MAX_MODELS_PER_SEAT),
     )
     candidates = cascade.candidates
@@ -1530,7 +1519,7 @@ def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Opt
             _openai_models_probe(credential)
         except ProviderError as exc:
             return _result(seat, "FAILED", "", "", _diagnostic(exc, credential), started, [])
-        candidates = tuple(model_candidates or get_model_candidates(seat))
+        candidates = tuple(model_candidates if model_candidates is not None else get_model_candidates_for_dispatch(seat))
         if not candidates:
             return _result(seat, "AUTHENTICATION_OK_NO_FREE_MODEL", "", "", "class=authentication_ok_no_free_model; Authentication endpoint accepted the credential, but no Free model was explicitly configured.", started, [], authenticated=True)
     return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates)

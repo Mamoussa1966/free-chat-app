@@ -1,0 +1,23 @@
+{
+  "release": "HOTFIX163.4_FINAL_CLOSURE_VERIFIED",
+  "base": "HOTFIX163_FINAL_REGRESSION_CLOSURE_FINAL",
+  "changes": [
+    "main.py",
+    "providers.py",
+    "release_identity.py",
+    "HOTFIX163.4_FINAL_CLOSURE_RELEASE.md"
+  ],
+  "preserved_canonical_v26_3": true,
+  "tests_modified": false,
+  "tests_deleted": false,
+  "secrets_changed": false,
+  "free_model_lists_changed": false,
+  "version_current": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "version_contract": "PASS",
+  "full_pytest": "581 passed / 0 failed / 0 errors",
+  "bridge_self_test": "PASS",
+  "bridge_provider_dispatch_calls": 0,
+  "bridge_request_created": 0,
+  "bridge_round_created": 0,
+  "root_file_count": 333
+}
