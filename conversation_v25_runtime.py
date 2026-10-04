@@ -535,8 +535,33 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     m1, m2 = (mids[0] if len(mids) > 0 else ""), (mids[1] if len(mids) > 1 else "")
     e1, a1, p1, res1 = count_for(m1, r1) if r1 else (None, None, [], [])
     e2, a2, p2, res2 = count_for(m2, r2) if r2 else (None, None, [], [])
-    b1 = sorted({_s(x.get("bridge_id")) for x in bridges if _s(x.get("request_id")) == r1 and _s(x.get("bridge_id"))}) if r1 else []
-    b2 = sorted({_s(x.get("bridge_id")) for x in bridges if _s(x.get("request_id")) == r2 and _s(x.get("bridge_id"))}) if r2 else []
+    # FINAL CLOSURE: Bridge identity/evidence is read from the canonical
+    # RequestRecord results, not from the compatibility bridge_ledger_v24
+    # projection.  The canonical request row is application-owned and is
+    # already the identity anchor for Message -> Request -> Round.
+    def _canonical_bridge_evidence(request_row: dict | None) -> tuple[list[str], list[dict]]:
+        audits: list[dict] = []
+        if not isinstance(request_row, dict):
+            return [], audits
+        for item in request_row.get("results", []) if isinstance(request_row.get("results"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            audit_row = item.get("bridge_transaction_audit")
+            if isinstance(audit_row, dict) and _s(audit_row.get("BRIDGE_ID")):
+                audits.append(deepcopy(audit_row))
+        ids = sorted({_s(x.get("BRIDGE_ID")) for x in audits if _s(x.get("BRIDGE_ID"))})
+        return ids, audits
+
+    canonical_request_by_id = {
+        _s(x.get("request_id")): x
+        for x in selected_request_records
+        if isinstance(x, dict) and _s(x.get("request_id"))
+    }
+    b1, bridge_audits_1 = _canonical_bridge_evidence(canonical_request_by_id.get(r1)) if r1 else ([], [])
+    b2, bridge_audits_2 = _canonical_bridge_evidence(canonical_request_by_id.get(r2)) if r2 else ([], [])
+    bridge_history_expected = bool(
+        any(bool(x.get("bridge_test_requested")) for x in selected_request_records if isinstance(x, dict))
+    )
     srows = {_s(x.get("message_id")): x for x in synth}
     selected_round_identity_rows = [
         x for x in rounds
@@ -577,6 +602,27 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
             request_isolation = True
             result_isolation = True
             counter_isolation = bool(e1 is not None and a1 is not None)
+
+    def _canonical_bridge_traces(request_row: dict | None, bridge_id: str) -> list[dict]:
+        traces: list[dict] = []
+        if not isinstance(request_row, dict) or not bridge_id:
+            return traces
+        results_rows = request_row.get("results", []) if isinstance(request_row.get("results"), list) else []
+        for result_row in results_rows:
+            if not isinstance(result_row, dict):
+                continue
+            audit_row = result_row.get("bridge_transaction_audit")
+            if not isinstance(audit_row, dict) or _s(audit_row.get("BRIDGE_ID")) != bridge_id:
+                continue
+            raw_trace = result_row.get("bridge_trace")
+            if isinstance(raw_trace, list):
+                traces.extend(copy for copy in raw_trace if isinstance(copy, dict))
+        return traces
+
+    trace_1 = _canonical_bridge_traces(canonical_request_by_id.get(r1), b1[0] if len(b1) == 1 else "")
+    trace_2 = _canonical_bridge_traces(canonical_request_by_id.get(r2), b2[0] if len(b2) == 1 else "")
+    trace_zero_1 = (any(int(t.get("target_seat", 0) or 0) == 0 for t in trace_1) if trace_1 else "NOT_PROVEN")
+    trace_zero_2 = (any(int(t.get("target_seat", 0) or 0) == 0 for t in trace_2) if trace_2 else "NOT_PROVEN")
 
     cred, raw, diag = _structural_secret_scan(chat)
     audit = {
@@ -648,9 +694,27 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "message_ids_unique": (len(set(mids)) == evidence_count) if enough else "NOT_PROVEN",
         "request_ids_unique": (len(set(req_ids)) == evidence_count) if enough else "NOT_PROVEN",
         "round_ids_unique": (len(set([rid for mid in mids for rid in round_ids_by_msg.get(mid, [])])) == sum(len(round_ids_by_msg.get(mid, [])) for mid in mids) and all(len(round_ids_by_msg.get(mid, [])) == 1 for mid in mids)) if enough else "NOT_PROVEN",
+        "bridge_evidence_source": "V26_3_CANONICAL_REQUEST_RECORD_RESULTS",
         "bridge_ids_unique_when_present": (len(set(b1 + b2)) == len(b1 + b2)) if (b1 or b2) else "NOT_PROVEN",
         "bridge_ids_message_1": b1 or "NOT_PROVEN",
         "bridge_ids_message_2": b2 or "NOT_PROVEN",
+        "bridge_audit_record_count_message_1": len(bridge_audits_1) if r1 else "NOT_PROVEN",
+        "bridge_audit_record_count_message_2": len(bridge_audits_2) if r2 else "NOT_PROVEN",
+        "bridge_exactly_one_message_1": (len(bridge_audits_1) == 1 and len(b1) == 1) if r1 and bridge_history_expected else (True if r1 and not bridge_history_expected else "NOT_PROVEN"),
+        "bridge_exactly_one_message_2": (len(bridge_audits_2) == 1 and len(b2) == 1) if r2 and bridge_history_expected else (True if r2 and not bridge_history_expected else "NOT_PROVEN"),
+        "bridge_ids_distinct_message_1_vs_message_2": (len(b1) == 1 and len(b2) == 1 and b1[0] != b2[0]) if two_message_window and bridge_history_expected else ("NOT_PROVEN" if two_message_window else "NOT_APPLICABLE"),
+        "bridge_request_1_id": r1 or "NOT_PROVEN",
+        "bridge_request_2_id": r2 or "NOT_PROVEN",
+        "bridge_lifecycle_message_1": (
+            {k: bridge_audits_1[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
+            if len(bridge_audits_1) == 1 else "NOT_PROVEN"
+        ),
+        "bridge_lifecycle_message_2": (
+            {k: bridge_audits_2[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
+            if len(bridge_audits_2) == 1 else "NOT_PROVEN"
+        ),
+        "bridge_trace_target_seat_zero_message_1": trace_zero_1,
+        "bridge_trace_target_seat_zero_message_2": trace_zero_2,
         "request_1_execution_events": e1 if r1 else "NOT_PROVEN",
         "request_2_execution_events": e2 if r2 else "NOT_PROVEN",
         "request_1_cascade_attempts": a1 if r1 else "NOT_PROVEN",
@@ -912,7 +976,32 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
             "message_2_request_mapping", "round_2_message_mapping"
         )) and audit.get("request_2_round_1_mapping") is False and generic_round2_proven
     structural_pass = bool(dynamic_identity_ok)
-    audit["conversation_runtime_audit"] = "PASS" if structural_pass and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
+    bridge_window_proven = True
+    if bridge_history_expected:
+        if two_message_window:
+            bridge_window_proven = bool(
+                audit.get("bridge_exactly_one_message_1") is True
+                and audit.get("bridge_exactly_one_message_2") is True
+                and audit.get("bridge_ids_distinct_message_1_vs_message_2") is True
+                and audit.get("bridge_ids_unique_when_present") is True
+                and isinstance(audit.get("bridge_lifecycle_message_1"), dict)
+                and isinstance(audit.get("bridge_lifecycle_message_2"), dict)
+                and all(audit.get("bridge_lifecycle_message_1", {}).get(k) == "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH"))
+                and all(audit.get("bridge_lifecycle_message_2", {}).get(k) == "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH"))
+                and audit.get("bridge_lifecycle_message_1", {}).get("SOURCE") == "DeepSeek / Seat 7"
+                and audit.get("bridge_lifecycle_message_1", {}).get("TARGET") == "Gemini / Seat 2"
+                and audit.get("bridge_lifecycle_message_2", {}).get("SOURCE") == "DeepSeek / Seat 7"
+                and audit.get("bridge_lifecycle_message_2", {}).get("TARGET") == "Gemini / Seat 2"
+                and audit.get("bridge_trace_target_seat_zero_message_1") is False
+                and audit.get("bridge_trace_target_seat_zero_message_2") is False
+            )
+        else:
+            bridge_window_proven = bool(
+                audit.get("bridge_exactly_one_message_1") is True
+                and audit.get("bridge_ids_unique_when_present") is True
+            )
+    audit["bridge_history_proven"] = bridge_window_proven if bridge_history_expected else "NOT_REQUESTED"
+    audit["conversation_runtime_audit"] = "PASS" if structural_pass and bridge_window_proven and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
     # Strict regression gate: complete two-message history without direct
     # canonical proof is FAIL, never a legacy-compatibility PASS.
     if historical_exact_two and audit.get("canonical_round_sequence_proven") is not True:
