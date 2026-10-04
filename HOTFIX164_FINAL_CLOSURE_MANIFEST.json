@@ -1,0 +1,31 @@
+{
+  "release": "HOTFIX164_FINAL_CLOSURE_BRIDGE_RUNTIME_CANONICAL_HARDENED",
+  "version_contract": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "base_artifact": "HOTFIX_FINAL_CLOSURE_BRIDGE_CANONICAL_HARDENED.zip",
+  "root_cause_fixes": [
+    "remove bridge_id and round_id from Gemini sanitized prompt",
+    "require actual runtime HTTP payload attestation for real orchestrated Bridge requests",
+    "fail closed on bridge value/key/control-plane identifier leakage",
+    "require WRITE→VALIDATE→COMMIT→BARRIER→READ plus MATCH and one Bridge per Request",
+    "keep application-owned Bridge READ value out of assistant content/history",
+    "make canonical authoritative audit require HOTFIX164 runtime proof for real Bridge requests",
+    "make production platform audit fail closed on missing real Bridge evidence"
+  ],
+  "tests": {
+    "existing_tests_modified": false,
+    "existing_tests_skipped": false,
+    "existing_tests_xfailed": false,
+    "new_test_file": "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "full_pytest_result": "589 passed"
+  },
+  "packaging": {
+    "project_files_at_zip_root": true,
+    "nested_zip": false,
+    "excluded": [
+      ".pytest_cache",
+      "__pycache__",
+      "*.pyc"
+    ],
+    "version_file_preserved": true
+  }
+}

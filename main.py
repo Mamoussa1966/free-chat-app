@@ -261,6 +261,7 @@ class SharedContextBridge:
         self._values: dict[str, dict] = {}
         self._write_sequence = 0
         self._read_sequence = 0
+        self._lifecycle_events: list[str] = []
         self._committed = False
         self._barrier_open = False
         self.trace: list[dict] = []
@@ -304,8 +305,8 @@ class SharedContextBridge:
                 "Target-side READ, if required by the test, is resolved by the application after the provider response.\n"
                 f"Room seat: {sorted({int(r.get('source_seat', 0) or 0) for r in self._values.values()})[0] if self._values else 7}\n"
                 "Provider identity: DeepSeek\n"
-                f"bridge_id: {self.bridge_id}\n"
-                f"round_id: {self.round_no}"
+                "Bridge identity, round identity, bridge keys, and bridge values are application-private.\n"
+                "No bridge identifier or round identifier is included in this provider prompt."
             )
             base = (base + "\n\n" if base else "") + capability
         if str(getattr(target_seat, "key", "") or "") == "gemini":
@@ -390,11 +391,15 @@ class SharedContextBridge:
         source_seat = int(source_seat or 0)
         self._write_sequence += 1
         self._source_values[key] = value
+        target_seat = 2 if key == "BRIDGE_RESULT" and source_seat == 7 else 0
         self._values[key] = {
             "value": value, "source_seat": source_seat, "source_provider": source,
+            "target_seat": target_seat,
+            "target_provider": "Gemini" if target_seat == 2 else "",
             "write_sequence": self._write_sequence, "write_origin": "APPLICATION_TEST_CONTROL",
         }
-        self._record_trace(source_seat=source_seat, source_provider=source, target_seat=(2 if key == "BRIDGE_RESULT" and source_seat == 7 else 0), key=key,
+        self._lifecycle_events.extend(("WRITE", "VALIDATE"))
+        self._record_trace(source_seat=source_seat, source_provider=source, target_seat=target_seat, key=key,
                            write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
 
     def application_owned_state(self) -> dict:
@@ -404,6 +409,7 @@ class SharedContextBridge:
             "request_id": self.request_id, "round_id": self.round_no, "bridge_id": self.bridge_id,
             "values": copy.deepcopy(self._values), "committed": bool(self._committed),
             "barrier_open": bool(self._barrier_open), "trace": copy.deepcopy(self.trace),
+            "lifecycle_events": list(self._lifecycle_events),
         }
 
 
@@ -514,7 +520,12 @@ class SharedContextBridge:
     def commit(self, target_seat=None) -> None:
         """Commit the pending write transaction and bind its intended target seat."""
         target_slot = int(getattr(target_seat, "room_slot", 0) or 0) if target_seat else 0
+        if self.application_owned_test and "BRIDGE_RESULT" in self._values:
+            if target_slot != 2:
+                raise RuntimeError("Bridge target must be Gemini Seat 2")
         self._committed = True
+        if "COMMIT" not in self._lifecycle_events:
+            self._lifecycle_events.append("COMMIT")
         for trace in self.trace:
             if trace["commit_status"] == "PENDING":
                 trace["commit_status"] = "COMMITTED"
@@ -525,6 +536,8 @@ class SharedContextBridge:
         if not self._committed:
             raise RuntimeError("Bridge barrier reached before commit")
         self._barrier_open = True
+        if "BARRIER" not in self._lifecycle_events:
+            self._lifecycle_events.append("BARRIER")
 
     def read(self, key: str, target_seat) -> str | None:
         key = str(key or "").strip()
@@ -535,6 +548,10 @@ class SharedContextBridge:
             return None
         self._read_sequence += 1
         target_slot = int(getattr(target_seat, "room_slot", 0) or 0)
+        if self.application_owned_test and key == "BRIDGE_RESULT" and target_slot != 2:
+            return None
+        if key == "BRIDGE_RESULT" and int(record.get("source_seat", 0) or 0) == 7 and target_slot != 2:
+            return None
         self._resolved_reads[key] = {
             "source_seat": record["source_seat"],
             "source_provider": record["source_provider"],
@@ -553,6 +570,8 @@ class SharedContextBridge:
             read_sequence=self._read_sequence,
             schema_validation="PASS",
         )
+        if key == "BRIDGE_RESULT" and "READ" not in self._lifecycle_events:
+            self._lifecycle_events.append("READ")
         return str(record["value"])
 
     def _transaction_audit_unsealed(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
@@ -568,9 +587,32 @@ class SharedContextBridge:
         target_key_has = bool(key and key in target_payload)
         target_value_outside_sanitized = target_payload_has
         target_value = str(read.get("value")) if read else ""
+        bridge_id = str(self.bridge_id or "")
+        # Detect exact control-plane identity material only; do not flag ordinary
+        # numeric round mentions in unrelated user/provider text.
+        round_tokens = {
+            f"bridge_round_id:{self.round_no}",
+            f"bridge_round_id={self.round_no}",
+            f'"bridge_round_id":{self.round_no}',
+            f'"bridge_round_id": {self.round_no}',
+            f'"round_id":{self.round_no}',
+            f'"round_id": {self.round_no}',
+            f"round_id:{self.round_no}",
+            f"round_id={self.round_no}",
+        }
+        user_text = str(user_prompt or "")
+        bridge_id_in_user = bool(bridge_id and bridge_id in user_text)
+        bridge_id_in_prompt = bool(bridge_id and bridge_id in target_prompt)
+        bridge_id_in_payload = bool(bridge_id and bridge_id in target_payload)
+        round_id_in_prompt = any(token in target_prompt for token in round_tokens)
+        round_id_in_payload = any(token in target_payload for token in round_tokens)
         application_owned = bool(record and record.get("write_origin") == "APPLICATION_TEST_CONTROL")
         source_ok = bool(record and int(record.get("source_seat", 0)) == int(source_seat) and (not self.application_owned_test or application_owned))
         target_ok = bool(read and int(read.get("target_seat", 0)) == int(target_seat))
+        lifecycle_expected = ["WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ"]
+        lifecycle_events = list(self._lifecycle_events)
+        lifecycle_complete = lifecycle_events == lifecycle_expected
+        bridge_count_for_request = 1 if (self.application_owned_test and isinstance(record, dict) and key == "BRIDGE_RESULT") else 0
         runtime_attestation_present = bool(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256"))
         runtime_payload_is_sanitized = runtime_attestation_present and not target_value_outside_sanitized and not target_key_has
         proven = bool(source_value)
@@ -583,6 +625,13 @@ class SharedContextBridge:
             "SOURCE": "DeepSeek / Seat 7" if int(source_seat) == 7 else f"Seat {source_seat}",
             "TARGET": "Gemini / Seat 2" if int(target_seat) == 2 else f"Seat {target_seat}",
             "KEY": key,
+            "source_seat": int(record.get("source_seat", 0)) if record else 0,
+            "source_provider": str(record.get("source_provider", "")) if record else "",
+            "target_seat": int(target_seat),
+            "target_provider": "Gemini" if int(target_seat) == 2 else "",
+            "bridge_lifecycle_events": lifecycle_events,
+            "bridge_lifecycle_complete": "PASS" if lifecycle_complete else "FAIL",
+            "bridge_count_for_request": bridge_count_for_request,
             "WRITE": "PASS" if record and source_ok else "FAIL",
             "VALIDATE": "PASS" if record else "FAIL",
             "COMMIT": "PASS" if self._committed and record else "FAIL",
@@ -594,6 +643,11 @@ class SharedContextBridge:
             "USER_PROMPT_CONTAINS_VALUE": user_isolation,
             "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": gemini_isolation,
             "BRIDGE_STATE_CONTAINS_VALUE": bridge_state,
+            "BRIDGE_ID_IN_USER_PROMPT": "YES" if bridge_id_in_user else "NO",
+            "BRIDGE_ID_IN_GEMINI_INPUT_PROMPT": "YES" if bridge_id_in_prompt else "NO",
+            "BRIDGE_ID_IN_RUNTIME_HTTP_PAYLOAD": "YES" if bridge_id_in_payload else "NO",
+            "ROUND_ID_IN_GEMINI_INPUT_PROMPT": "YES" if round_id_in_prompt else "NO",
+            "ROUND_ID_IN_RUNTIME_HTTP_PAYLOAD": "YES" if round_id_in_payload else "NO",
             "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES" if runtime_attestation_present else "NO",
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": ("NO" if not target_value_outside_sanitized else "YES") if runtime_attestation_present else "NOT_PROVEN",
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": ("NO" if not target_key_has else "YES") if runtime_attestation_present else "NOT_PROVEN",
@@ -626,6 +680,17 @@ class SharedContextBridge:
             "MATCH": "PASS", "BRIDGE_STATE_CONTAINS_VALUE": "YES",
             "USER_PROMPT_CONTAINS_VALUE": "NO",
             "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": "NO",
+            "BRIDGE_ID_IN_USER_PROMPT": "NO",
+            "BRIDGE_ID_IN_GEMINI_INPUT_PROMPT": "NO",
+            "BRIDGE_ID_IN_RUNTIME_HTTP_PAYLOAD": "NO",
+            "ROUND_ID_IN_GEMINI_INPUT_PROMPT": "NO",
+            "ROUND_ID_IN_RUNTIME_HTTP_PAYLOAD": "NO",
+            "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": "NO",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": "NO",
+            "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS",
+            "bridge_lifecycle_complete": "PASS",
+            "bridge_count_for_request": 1,
         }
         failures = [k for k, expected in required.items() if report.get(k) != expected]
         return {
@@ -1417,6 +1482,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # remaining seats retain canonical room order. Results are returned in
     # canonical room order, so seat identity/history/UI ordering is unchanged.
     by_key = {seat.key: seat for seat in seats}
+    # Preserve the explicit Gemini Seat 2 object before it is removed from
+    # the ordering map. Bridge COMMIT must never receive None/Seat 0.
+    gemini_target = by_key.get("gemini")
     bridge_order = []
     for key in ("deepseek", "gemini"):
         if key in by_key:
@@ -1509,7 +1577,6 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 # Seat 7 is the source and Seat 2 is the explicit read target
                 # for the transactional bridge test. Commit and open the
                 # handoff barrier before Gemini is invoked.
-                gemini_target = by_key.get("gemini")
                 bridge.commit(gemini_target)
                 bridge.barrier()
             else:
@@ -1521,13 +1588,16 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 )
                 result["bridge_schema_validation"] = resolution.get("schema_validation", "")
                 if resolution.get("status") == "RESOLVED" and resolution.get("value") is not None:
-                    # The provider was deliberately not given the bridge value
-                    # in its input. The bridge resolves its explicit read request
-                    # here and publishes the canonical read result as the seat's
-                    # response. No second provider call is made, so there is no
-                    # prompt injection of BRIDGE_RESULT.
-                    result["content"] = str(resolution["value"])
-                    result["bridge_read_value"] = str(resolution["value"])
+                    if bridge.application_owned_test:
+                        # Real transactional Bridge mode: READ is application-owned
+                        # control-plane state and its value must never be copied into
+                        # assistant content/history.
+                        result["bridge_read_value"] = "[REDACTED]"
+                    else:
+                        # Preserve the legacy HOTFIX89 diagnostic contract for
+                        # non-transactional bridge unit probes.
+                        result["content"] = str(resolution["value"])
+                        result["bridge_read_value"] = str(resolution["value"])
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
             result["bridge_trace"] = bridge.transaction_trace()
@@ -1841,6 +1911,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
                 "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper()
                 or bool(bridge_controls)
             )
+            record["bridge_runtime_proof_required"] = bool(record["bridge_test_requested"])
+            record["bridge_runtime_proof_contract"] = (
+                "HOTFIX164-ACTUAL-RUNTIME-HTTP-BRIDGE/v1"
+                if record["bridge_runtime_proof_required"] else "NOT_REQUIRED"
+            )
     # V26.3.8: every real orchestrator entry point converges into the canonical
     # ConversationRecord before creating/dispatching its first provider round.
     if record is None:
@@ -1856,6 +1931,15 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             "bridge_test_requested": bool(
                 "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper()
                 or bool(bridge_controls)
+            ),
+            "bridge_runtime_proof_required": bool(
+                "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper()
+                or bool(bridge_controls)
+            ),
+            "bridge_runtime_proof_contract": (
+                "HOTFIX164-ACTUAL-RUNTIME-HTTP-BRIDGE/v1"
+                if ("TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper() or bool(bridge_controls))
+                else "NOT_REQUIRED"
             ),
         }
         chat.setdefault("request_records", []).append(record)

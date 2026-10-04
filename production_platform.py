@@ -421,6 +421,8 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     # Runtime identity is a hard gate: a report cannot PASS if the actual persisted
     # Request ID differs from the requested/audited ID.
     persisted_record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id or "")), None)
+    bridge_runtime_proof_required = bool((persisted_record or {}).get("bridge_runtime_proof_required"))
+    bridge_runtime_proof_contract = str((persisted_record or {}).get("bridge_runtime_proof_contract") or "")
     actual_request_id = str((persisted_record or {}).get("request_id") or "").strip()
     identity_match = bool(request_id and actual_request_id and actual_request_id == str(request_id).strip())
     continuation_audit = {}
@@ -466,12 +468,30 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             "BARRIER": bridge.get("BARRIER") == "PASS",
             "READ": bridge.get("READ") == "PASS",
             "SCHEMA_VALIDATION": bridge.get("SCHEMA_VALIDATION") == "PASS",
+            "MATCH": (bridge.get("MATCH") == "PASS") if bridge_runtime_proof_required else True,
             "USER_PROMPT_ISOLATED": bridge.get("USER_PROMPT_CONTAINS_VALUE") == "NO",
             "GEMINI_INPUT_ISOLATED": bridge.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE") == "NO",
             "BRIDGE_STATE_CONTAINS_VALUE": bridge.get("BRIDGE_STATE_CONTAINS_VALUE") == "YES",
             "NO_AGENT_PROSE_AUTHORITY": True,
             "REQUEST_ID_IDENTITY_MATCH": identity_match,
         }
+        if bridge_runtime_proof_required:
+            bridge_checks.update({
+                "RUNTIME_PROOF_CONTRACT": bridge_runtime_proof_contract == "HOTFIX164-ACTUAL-RUNTIME-HTTP-BRIDGE/v1",
+                "BRIDGE_RUNTIME_HTTP_ATTESTED": bridge.get("RUNTIME_HTTP_PAYLOAD_ATTESTED") == "YES",
+                "RUNTIME_PAYLOAD_VALUE_ISOLATED": bridge.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE") == "NO",
+                "RUNTIME_PAYLOAD_KEY_ISOLATED": bridge.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY") == "NO",
+                "BRIDGE_ID_USER_PROMPT_ISOLATED": bridge.get("BRIDGE_ID_IN_USER_PROMPT") == "NO",
+                "BRIDGE_ID_GEMINI_PROMPT_ISOLATED": bridge.get("BRIDGE_ID_IN_GEMINI_INPUT_PROMPT") == "NO",
+                "BRIDGE_ID_RUNTIME_PAYLOAD_ISOLATED": bridge.get("BRIDGE_ID_IN_RUNTIME_HTTP_PAYLOAD") == "NO",
+                "ROUND_ID_GEMINI_PROMPT_ISOLATED": bridge.get("ROUND_ID_IN_GEMINI_INPUT_PROMPT") == "NO",
+                "ROUND_ID_RUNTIME_PAYLOAD_ISOLATED": bridge.get("ROUND_ID_IN_RUNTIME_HTTP_PAYLOAD") == "NO",
+                "SANITIZED_REPRESENTATION_ONLY": bridge.get("GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY") == "PASS",
+                "LIFECYCLE_COMPLETE": bridge.get("bridge_lifecycle_complete") == "PASS" and bridge.get("bridge_lifecycle_events") == ["WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ"],
+                "ONE_BRIDGE_FOR_REQUEST": bridge.get("bridge_count_for_request") == 1,
+                "AUDIT_SEALED": bridge.get("AUDIT_SEALED") == "YES",
+                "PRODUCTION_GATE_SEALED": bridge.get("PRODUCTION_GATE") == "PASS",
+            })
         bridge_status = "PASS" if all(bridge_checks.values()) else "FAIL"
     elif not bridge_test_requested:
         # A Bridge record is not allowed to manufacture a Bridge FAIL in a
@@ -525,7 +545,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         "session_integrity": session,
         "provider_health": {"status": health_status, "rows": health_rows},
         "regression_core": {"status": regression_status, **regression},
-        "bridge_isolation": {"status": bridge_status, "requested": bridge_test_requested, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}, "unique_persisted_bridge_ids": unique_persisted_bridge_ids},
+        "bridge_isolation": {"status": bridge_status, "requested": bridge_test_requested, "runtime_proof_required": bridge_runtime_proof_required, "runtime_proof_contract": bridge_runtime_proof_contract or "NOT_REQUIRED", "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}, "unique_persisted_bridge_ids": unique_persisted_bridge_ids},
         "continuation_runtime_gate": {"status": continuation_status, "audit": continuation_audit, "REQUEST_ID_IDENTITY_MATCH": identity_match},
     }
 
