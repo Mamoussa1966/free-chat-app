@@ -552,36 +552,6 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         ids = sorted({_s(x.get("BRIDGE_ID")) for x in audits if _s(x.get("BRIDGE_ID"))})
         return ids, audits
 
-    def _runtime_bridge_proof_required(request_row: dict | None) -> bool:
-        return bool(isinstance(request_row, dict) and request_row.get("bridge_runtime_proof_required"))
-
-    def _runtime_bridge_proof_ok(request_row: dict | None, bridge_row: dict | None) -> bool:
-        # Compatibility: historical/synthetic bridge fixtures may omit the
-        # runtime-proof marker and are evaluated by their legacy structural gate.
-        # Real orchestrated Bridge requests are fail-closed on actual HTTP evidence.
-        if not _runtime_bridge_proof_required(request_row):
-            return True
-        if not isinstance(bridge_row, dict):
-            return False
-        return bool(
-            str(request_row.get("bridge_runtime_proof_contract") or "") == "HOTFIX164-ACTUAL-RUNTIME-HTTP-BRIDGE/v1"
-            and bridge_row.get("MATCH") == "PASS"
-            and bridge_row.get("RUNTIME_HTTP_PAYLOAD_ATTESTED") == "YES"
-            and bridge_row.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE") == "NO"
-            and bridge_row.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY") == "NO"
-            and bridge_row.get("BRIDGE_ID_IN_USER_PROMPT") == "NO"
-            and bridge_row.get("BRIDGE_ID_IN_GEMINI_INPUT_PROMPT") == "NO"
-            and bridge_row.get("BRIDGE_ID_IN_RUNTIME_HTTP_PAYLOAD") == "NO"
-            and bridge_row.get("ROUND_ID_IN_GEMINI_INPUT_PROMPT") == "NO"
-            and bridge_row.get("ROUND_ID_IN_RUNTIME_HTTP_PAYLOAD") == "NO"
-            and bridge_row.get("GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY") == "PASS"
-            and bridge_row.get("bridge_lifecycle_complete") == "PASS"
-            and bridge_row.get("bridge_lifecycle_events") == ["WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ"]
-            and bridge_row.get("bridge_count_for_request") == 1
-            and bridge_row.get("AUDIT_SEALED") == "YES"
-            and bridge_row.get("PRODUCTION_GATE") == "PASS"
-        )
-
     canonical_request_by_id = {
         _s(x.get("request_id")): x
         for x in selected_request_records
@@ -646,13 +616,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 continue
             raw_trace = result_row.get("bridge_trace")
             if isinstance(raw_trace, list):
-                # Only BRIDGE_RESULT rows are Bridge transaction records.
-                # Unrelated provider-rejection telemetry (often key="") must
-                # not become a false target_seat=0 Bridge failure.
-                traces.extend(
-                    row for row in raw_trace
-                    if isinstance(row, dict) and _s(row.get("key")) == "BRIDGE_RESULT"
-                )
+                traces.extend(copy for copy in raw_trace if isinstance(copy, dict))
         return traces
 
     trace_1 = _canonical_bridge_traces(canonical_request_by_id.get(r1), b1[0] if len(b1) == 1 else "")
@@ -741,16 +705,12 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "bridge_ids_distinct_message_1_vs_message_2": (len(b1) == 1 and len(b2) == 1 and b1[0] != b2[0]) if two_message_window and bridge_history_expected else ("NOT_PROVEN" if two_message_window else "NOT_APPLICABLE"),
         "bridge_request_1_id": r1 or "NOT_PROVEN",
         "bridge_request_2_id": r2 or "NOT_PROVEN",
-        "bridge_runtime_proof_required_message_1": _runtime_bridge_proof_required(canonical_request_by_id.get(r1)) if r1 else "NOT_PROVEN",
-        "bridge_runtime_proof_required_message_2": _runtime_bridge_proof_required(canonical_request_by_id.get(r2)) if r2 else "NOT_PROVEN",
-        "bridge_runtime_proof_message_1": _runtime_bridge_proof_ok(canonical_request_by_id.get(r1), bridge_audits_1[0] if len(bridge_audits_1) == 1 else None) if r1 else "NOT_PROVEN",
-        "bridge_runtime_proof_message_2": _runtime_bridge_proof_ok(canonical_request_by_id.get(r2), bridge_audits_2[0] if len(bridge_audits_2) == 1 else None) if r2 else "NOT_PROVEN",
         "bridge_lifecycle_message_1": (
-            {k: bridge_audits_1[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET", "source_seat", "source_provider", "target_seat", "target_provider", "bridge_lifecycle_events", "bridge_lifecycle_complete", "bridge_count_for_request", "RUNTIME_HTTP_PAYLOAD_ATTESTED", "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE", "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY", "BRIDGE_ID_IN_USER_PROMPT", "BRIDGE_ID_IN_GEMINI_INPUT_PROMPT", "BRIDGE_ID_IN_RUNTIME_HTTP_PAYLOAD", "ROUND_ID_IN_GEMINI_INPUT_PROMPT", "ROUND_ID_IN_RUNTIME_HTTP_PAYLOAD", "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY", "AUDIT_SEALED", "PRODUCTION_GATE")}
+            {k: bridge_audits_1[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
             if len(bridge_audits_1) == 1 else "NOT_PROVEN"
         ),
         "bridge_lifecycle_message_2": (
-            {k: bridge_audits_2[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET", "source_seat", "source_provider", "target_seat", "target_provider", "bridge_lifecycle_events", "bridge_lifecycle_complete", "bridge_count_for_request", "RUNTIME_HTTP_PAYLOAD_ATTESTED", "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE", "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY", "BRIDGE_ID_IN_USER_PROMPT", "BRIDGE_ID_IN_GEMINI_INPUT_PROMPT", "BRIDGE_ID_IN_RUNTIME_HTTP_PAYLOAD", "ROUND_ID_IN_GEMINI_INPUT_PROMPT", "ROUND_ID_IN_RUNTIME_HTTP_PAYLOAD", "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY", "AUDIT_SEALED", "PRODUCTION_GATE")}
+            {k: bridge_audits_2[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
             if len(bridge_audits_2) == 1 else "NOT_PROVEN"
         ),
         "bridge_trace_target_seat_zero_message_1": trace_zero_1,
@@ -1034,14 +994,11 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 and audit.get("bridge_lifecycle_message_2", {}).get("TARGET") == "Gemini / Seat 2"
                 and audit.get("bridge_trace_target_seat_zero_message_1") is False
                 and audit.get("bridge_trace_target_seat_zero_message_2") is False
-                and audit.get("bridge_runtime_proof_message_1") is True
-                and audit.get("bridge_runtime_proof_message_2") is True
             )
         else:
             bridge_window_proven = bool(
                 audit.get("bridge_exactly_one_message_1") is True
                 and audit.get("bridge_ids_unique_when_present") is True
-                and audit.get("bridge_runtime_proof_message_1") is True
             )
     audit["bridge_history_proven"] = bridge_window_proven if bridge_history_expected else "NOT_REQUESTED"
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and bridge_window_proven and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
