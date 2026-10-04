@@ -1,0 +1,10 @@
+{
+  "release": "HOTFIX164.1_FINAL_REGRESSION_CLOSURE",
+  "base": "HOTFIX163_FINAL_CLOSURE_BRIDGE_CANONICAL_EVIDENCE_FINAL",
+  "scope": [
+    "single application-owned Bridge WRITE",
+    "post-provider target-side READ",
+    "preserve V26.3 canonical persistence"
+  ],
+  "version_contract": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+}
