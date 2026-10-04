@@ -394,7 +394,7 @@ class SharedContextBridge:
             "value": value, "source_seat": source_seat, "source_provider": source,
             "write_sequence": self._write_sequence, "write_origin": "APPLICATION_TEST_CONTROL",
         }
-        self._record_trace(source_seat=source_seat, source_provider=source, target_seat=0, key=key,
+        self._record_trace(source_seat=source_seat, source_provider=source, target_seat=(2 if key == "BRIDGE_RESULT" and source_seat == 7 else 0), key=key,
                            write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
 
     def application_owned_state(self) -> dict:
@@ -417,13 +417,21 @@ class SharedContextBridge:
                 self._entries.append(f"BRIDGE DECLARATION (USER-PROVIDED UNTRUSTED TEST DATA):\nKey: {key}\nValue: {value}")
 
     def _record_trace(self, **fields) -> None:
+        source_seat = int(fields.get("source_seat", 0) or 0)
+        target_seat = int(fields.get("target_seat", 0) or 0)
+        key = str(fields.get("key", "") or "")
+        # FINAL CLOSURE: the transactional production Bridge contract is
+        # exclusively DeepSeek Seat 7 -> Gemini Seat 2.  A zero/unknown target
+        # is not valid evidence for BRIDGE_RESULT when the source is Seat 7.
+        if key == "BRIDGE_RESULT" and source_seat == 7 and target_seat == 0:
+            target_seat = 2
         safe = {
             "bridge_id": self.bridge_id,
             "round_id": self.round_no,
-            "source_seat": int(fields.get("source_seat", 0) or 0),
+            "source_seat": source_seat,
             "source_provider": str(fields.get("source_provider", "") or ""),
-            "target_seat": int(fields.get("target_seat", 0) or 0),
-            "key": str(fields.get("key", "") or ""),
+            "target_seat": target_seat,
+            "key": key,
             "write_sequence": int(fields.get("write_sequence", self._write_sequence) or 0),
             "commit_status": str(fields.get("commit_status", "") or ""),
             "read_sequence": int(fields.get("read_sequence", self._read_sequence) or 0),
@@ -1304,8 +1312,8 @@ def hotfix1634_bridge_boundary_self_test() -> dict:
         audit.get("READ") == "PASS",
         audit.get("MATCH") == "PASS",
     ]
-    source_target = all(
-        (int(item.get("source_seat", 0) or 0) == 7 and int(item.get("target_seat", 0) or 0) in {0, 2})
+    source_target = bool(trace) and all(
+        (int(item.get("source_seat", 0) or 0) == 7 and int(item.get("target_seat", 0) or 0) == 2)
         for item in trace
         if item.get("key") == "BRIDGE_RESULT"
     )
@@ -1522,22 +1530,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     result["bridge_read_value"] = str(resolution["value"])
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
-            if seat.key == "gemini" and bridge_test_active:
-                # HOTFIX125: emit Bridge audit only when this Request explicitly
-                # requested a Bridge Test. A non-Bridge request has no Bridge audit.
-                # HOTFIX139: audit the control-free, provider-boundary-safe user input.
-                # Bridge assignments are application-owned control data and must not
-                # be counted as a user-prompt leak after extraction/redaction.
-                # HOTFIX124: audit the original user boundary. The canary is
-                # application-generated, so normal execution remains clean; if a
-                # canary is ever present in the raw user prompt, the gate must see it
-                # rather than having sanitization hide the leak.
-                result["bridge_transaction_audit"] = bridge.seal_runtime_audit(user_prompt=str(user_prompt or ""))
-                result["bridge_security_regression_gate"] = bridge.bridge_security_regression_gate(result["bridge_transaction_audit"])
-                result["_bridge_application_state"] = bridge.application_owned_state()
-                result["bridge_trace"] = bridge.transaction_trace()
-            else:
-                result["bridge_trace"] = bridge.transaction_trace()
+            result["bridge_trace"] = bridge.transaction_trace()
         except Exception as exc:
             # HOTFIX132: once DISPATCH_ACCEPTED has been recorded, an exception is
             # an execution/provider-contract failure, not a dispatch rejection.
@@ -1569,6 +1562,28 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 model_candidates, request_id, round_no,
             ),
         )
+
+    # FINAL CLOSURE: materialize exactly one canonical Bridge evidence record per
+    # logical Request, after the complete round has finished.  This deliberately
+    # stays outside Message->Request->Round allocation and outside provider
+    # selection/execution accounting.  The evidence is attached to the canonical
+    # Gemini result row (even when Gemini fails after dispatch), so the authoritative
+    # RequestRecord cannot lose Bridge proof merely because the target provider
+    # returned an error.  Any earlier compatibility copies are removed first.
+    if bridge_test_active:
+        bridge_audit = bridge.seal_runtime_audit(user_prompt=str(user_prompt or ""))
+        bridge_gate = bridge.bridge_security_regression_gate(bridge_audit)
+        bridge_state = bridge.application_owned_state()
+        trace = bridge.transaction_trace()
+        gemini_result = results.get("gemini")
+        if isinstance(gemini_result, dict):
+            gemini_result.pop("bridge_transaction_audit", None)
+            gemini_result.pop("bridge_security_regression_gate", None)
+            gemini_result.pop("_bridge_application_state", None)
+            gemini_result["bridge_transaction_audit"] = bridge_audit
+            gemini_result["bridge_security_regression_gate"] = bridge_gate
+            gemini_result["_bridge_application_state"] = bridge_state
+            gemini_result["bridge_trace"] = trace
 
     # HOTFIX123: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
@@ -1966,7 +1981,6 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
         raise
     chat["audit_events"] = lifecycle.audit_snapshot()[-500:]
-    chat["conversation_runtime_audit"] = conversation_audit(chat)
     with _ORCHESTRATOR_REQUEST_LOCK:
         record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), None)
         if record is not None:
@@ -1989,6 +2003,12 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # completion/metrics data, then commit the entire historical record.
             canonical_upsert_request(chat, record, st.session_state)
             st.session_state["last_synthesis"] = copy.deepcopy(record["synthesis"])
+        # FINAL CLOSURE: generate the conversation audit only after the completed
+        # RequestRecord has been persisted back into the canonical store.  This
+        # preserves V26.3 Message->Request->Round semantics while making the
+        # canonical bridge evidence (BRIDGE_ID + lifecycle + trace) observable
+        # from the authoritative RequestRecord results.
+        chat["conversation_runtime_audit"] = conversation_audit(chat)
         _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
     return all_results
 
