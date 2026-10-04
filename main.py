@@ -389,6 +389,18 @@ class SharedContextBridge:
         if not key or not value or len(value) > 2000:
             return
         source_seat = int(source_seat or 0)
+        # HOTFIX164.1: application-owned BRIDGE_RESULT is single-seed within one
+        # logical Request. A second seed attempt (including a diagnostic/user
+        # control projection) must not append another WRITE/VALIDATE pair or
+        # mutate the authoritative bridge value.
+        existing = self._values.get(key)
+        if (
+            self.application_owned_test
+            and key == "BRIDGE_RESULT"
+            and isinstance(existing, dict)
+            and existing.get("write_origin") == "APPLICATION_TEST_CONTROL"
+        ):
+            return
         self._write_sequence += 1
         self._source_values[key] = value
         target_seat = 2 if key == "BRIDGE_RESULT" and source_seat == 7 else 0
@@ -733,10 +745,9 @@ class SharedContextBridge:
             if "BRIDGE_RESULT" in self._values:
                 requested_keys = ["BRIDGE_RESULT"]
         for key in requested_keys:
-            # HOTFIX123: if the application already performed the canonical
-            # post-barrier READ before the target HTTP request, reuse that exact
-            # committed read record. Do not increment read_sequence twice when
-            # Gemini later echoes BRIDGE_READ in its response.
+            # HOTFIX164.1: reuse only an already-resolved read record when a
+            # caller legitimately supplied one; normal orchestrated Gemini READ
+            # occurs here, strictly after the provider response.
             existing = self._resolved_reads.get(key)
             if existing and int(existing.get("target_seat", 0) or 0) == int(getattr(seat, "room_slot", 0) or 0):
                 value = str(existing.get("value"))
@@ -1520,15 +1531,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # The provider may perform multiple Free Cascade attempts, but all
             # attempts belong to this one execution claim.
             execution_ledger.assert_claimed(seat.key, execution_id)
-            # HOTFIX123: resolve the committed target-side READ at the application
-            # boundary, after COMMIT + BARRIER and before the target provider HTTP
-            # request. The resolved value is retained only in bridge state/audit;
-            # it is NEVER injected into the Gemini prompt or HTTP payload. This
-            # closes the prior gap where READ depended on a provider echo/control
-            # record and could therefore fail when Gemini returned normally or
-            # failed before emitting BRIDGE_READ.
-            if seat.key == "gemini" and bridge._committed and bridge._barrier_open:
-                bridge.read("BRIDGE_RESULT", seat)
+            # HOTFIX164.1: target-side Bridge READ is application-owned and is
+            # resolved strictly after the target provider response is returned.
+            # Nothing from the committed value is placed into the provider prompt
+            # or HTTP request.
 
             provider_prompt = bridge.prompt_snapshot(seat)
             working_context = provider_prompt

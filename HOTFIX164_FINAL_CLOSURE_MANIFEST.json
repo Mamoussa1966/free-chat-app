@@ -9,7 +9,9 @@
     "require WRITE→VALIDATE→COMMIT→BARRIER→READ plus MATCH and one Bridge per Request",
     "keep application-owned Bridge READ value out of assistant content/history",
     "make canonical authoritative audit require HOTFIX164 runtime proof for real Bridge requests",
-    "make production platform audit fail closed on missing real Bridge evidence"
+    "make production platform audit fail closed on missing real Bridge evidence",
+    "make application-owned BRIDGE_RESULT seed idempotent within a logical Request so duplicate control inputs cannot append WRITE/VALIDATE twice",
+    "resolve the target-side Bridge READ only after the Gemini provider response, while keeping the bridge value out of the Gemini prompt and runtime HTTP payload"
   ],
   "tests": {
     "existing_tests_modified": false,
@@ -27,5 +29,11 @@
       "*.pyc"
     ],
     "version_file_preserved": true
+  },
+  "verification": {
+    "full_pytest_before_roundtrip": "589 passed",
+    "hotfix164_bridge_regression": "4 passed",
+    "duplicate_seed_regression": "1 passed",
+    "post_response_read_order_regression": "1 passed"
   }
 }
