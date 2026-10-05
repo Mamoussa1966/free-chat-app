@@ -31,3 +31,12 @@ def test_final_audit_prefers_runtime_evidence_store_over_provider_output():
     assert a["bridge_evidence_source"] == "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE"
     assert a["bridge_lifecycle_message_1"]["bridge_id_hash"] == "h1"
     assert a["bridge_lifecycle_message_2"]["bridge_id_hash"] == "h2"
+
+
+def test_final_audit_does_not_fallback_to_provider_bridge_output():
+    chat={"conversation_id":"c","session_id":"s","conversation_record":{"messages":[{"message_id":"m1","request_id":"r1","role":"user"}],"requests":[{"request_id":"r1","message_id":"m1","canonical_round_base":1,"results":[{"bridge_transaction_audit":{"BRIDGE_ID":"PROVIDER-ONLY","WRITE":"PASS"}}]}],"rounds":[{"round_id":"c:r1:r1","message_id":"m1","request_id":"r1","round":1,"ordinal":1}]},"request_records":[],"bridge_runtime_evidence_store":{}}
+    chat["v26_3_conversation_persistence"]={"c":{"session_id":"s","messages":chat["conversation_record"]["messages"],"requests":chat["conversation_record"]["requests"],"rounds":chat["conversation_record"]["rounds"],"canonical_store_revision":1,"history_hash":"h"}}
+    a=authoritative_audit(chat)
+    assert a["bridge_evidence_source"] == "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE"
+    assert a["bridge_ids_message_1"] == "NOT_PROVEN"
+    assert a["bridge_lifecycle_message_1"] == "NOT_PROVEN"
