@@ -561,10 +561,15 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     runtime_store = runtime_store if isinstance(runtime_store, Mapping) else {}
     runtime_r1 = runtime_store.get(str(r1), {}) if r1 else {}
     runtime_r2 = runtime_store.get(str(r2), {}) if r2 else {}
-    b1_legacy, bridge_audits_1 = _canonical_bridge_evidence(canonical_request_by_id.get(r1)) if r1 else ([], [])
-    b2_legacy, bridge_audits_2 = _canonical_bridge_evidence(canonical_request_by_id.get(r2)) if r2 else ([], [])
-    b1 = [str(runtime_r1.get("bridge_id_hash"))] if isinstance(runtime_r1, Mapping) and runtime_r1.get("bridge_id_hash") else b1_legacy
-    b2 = [str(runtime_r2.get("bridge_id_hash"))] if isinstance(runtime_r2, Mapping) and runtime_r2.get("bridge_id_hash") else b2_legacy
+    # HOTFIX164.5: FINAL_CLOSURE_AUDIT has one authoritative Bridge evidence
+    # source: the dedicated Application-Owned runtime evidence store.  The
+    # provider-result compatibility projection is intentionally NOT a fallback.
+    # Missing runtime evidence must remain NOT_PROVEN rather than being promoted
+    # from provider output.
+    bridge_audits_1: list[dict] = []
+    bridge_audits_2: list[dict] = []
+    b1 = [str(runtime_r1.get("bridge_id_hash"))] if isinstance(runtime_r1, Mapping) and runtime_r1.get("bridge_id_hash") else []
+    b2 = [str(runtime_r2.get("bridge_id_hash"))] if isinstance(runtime_r2, Mapping) and runtime_r2.get("bridge_id_hash") else []
     bridge_history_expected = bool(
         any(bool(x.get("bridge_test_requested")) for x in selected_request_records if isinstance(x, dict))
     )
@@ -711,12 +716,8 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "bridge_ids_distinct_message_1_vs_message_2": (len(b1) == 1 and len(b2) == 1 and b1[0] != b2[0]) if two_message_window and bridge_history_expected else ("NOT_PROVEN" if two_message_window else "NOT_APPLICABLE"),
         "bridge_request_1_id": r1 or "NOT_PROVEN",
         "bridge_request_2_id": r2 or "NOT_PROVEN",
-        "bridge_lifecycle_message_1": (copy.deepcopy(runtime_r1) if isinstance(runtime_r1, Mapping) and runtime_r1 else (
-            {k: bridge_audits_1[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
-            if len(bridge_audits_1) == 1 else "NOT_PROVEN")),
-        "bridge_lifecycle_message_2": (copy.deepcopy(runtime_r2) if isinstance(runtime_r2, Mapping) and runtime_r2 else (
-            {k: bridge_audits_2[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
-            if len(bridge_audits_2) == 1 else "NOT_PROVEN")),
+        "bridge_lifecycle_message_1": (copy.deepcopy(runtime_r1) if isinstance(runtime_r1, Mapping) and runtime_r1 else "NOT_PROVEN"),
+        "bridge_lifecycle_message_2": (copy.deepcopy(runtime_r2) if isinstance(runtime_r2, Mapping) and runtime_r2 else "NOT_PROVEN"),
         "bridge_runtime_record_count_message_1": 1 if runtime_r1 else 0,
         "bridge_runtime_record_count_message_2": 1 if runtime_r2 else 0,
         "bridge_trace_target_seat_zero_message_1": trace_zero_1,
