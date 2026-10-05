@@ -557,8 +557,14 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         for x in selected_request_records
         if isinstance(x, dict) and _s(x.get("request_id"))
     }
-    b1, bridge_audits_1 = _canonical_bridge_evidence(canonical_request_by_id.get(r1)) if r1 else ([], [])
-    b2, bridge_audits_2 = _canonical_bridge_evidence(canonical_request_by_id.get(r2)) if r2 else ([], [])
+    runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat, Mapping) else {}
+    runtime_store = runtime_store if isinstance(runtime_store, Mapping) else {}
+    runtime_r1 = runtime_store.get(str(r1), {}) if r1 else {}
+    runtime_r2 = runtime_store.get(str(r2), {}) if r2 else {}
+    b1_legacy, bridge_audits_1 = _canonical_bridge_evidence(canonical_request_by_id.get(r1)) if r1 else ([], [])
+    b2_legacy, bridge_audits_2 = _canonical_bridge_evidence(canonical_request_by_id.get(r2)) if r2 else ([], [])
+    b1 = [str(runtime_r1.get("bridge_id_hash"))] if isinstance(runtime_r1, Mapping) and runtime_r1.get("bridge_id_hash") else b1_legacy
+    b2 = [str(runtime_r2.get("bridge_id_hash"))] if isinstance(runtime_r2, Mapping) and runtime_r2.get("bridge_id_hash") else b2_legacy
     bridge_history_expected = bool(
         any(bool(x.get("bridge_test_requested")) for x in selected_request_records if isinstance(x, dict))
     )
@@ -694,25 +700,25 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "message_ids_unique": (len(set(mids)) == evidence_count) if enough else "NOT_PROVEN",
         "request_ids_unique": (len(set(req_ids)) == evidence_count) if enough else "NOT_PROVEN",
         "round_ids_unique": (len(set([rid for mid in mids for rid in round_ids_by_msg.get(mid, [])])) == sum(len(round_ids_by_msg.get(mid, [])) for mid in mids) and all(len(round_ids_by_msg.get(mid, [])) == 1 for mid in mids)) if enough else "NOT_PROVEN",
-        "bridge_evidence_source": "V26_3_CANONICAL_REQUEST_RECORD_RESULTS",
+        "bridge_evidence_source": "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE",
         "bridge_ids_unique_when_present": (len(set(b1 + b2)) == len(b1 + b2)) if (b1 or b2) else "NOT_PROVEN",
         "bridge_ids_message_1": b1 or "NOT_PROVEN",
         "bridge_ids_message_2": b2 or "NOT_PROVEN",
         "bridge_audit_record_count_message_1": len(bridge_audits_1) if r1 else "NOT_PROVEN",
         "bridge_audit_record_count_message_2": len(bridge_audits_2) if r2 else "NOT_PROVEN",
-        "bridge_exactly_one_message_1": (len(bridge_audits_1) == 1 and len(b1) == 1) if r1 and bridge_history_expected else (True if r1 and not bridge_history_expected else "NOT_PROVEN"),
-        "bridge_exactly_one_message_2": (len(bridge_audits_2) == 1 and len(b2) == 1) if r2 and bridge_history_expected else (True if r2 and not bridge_history_expected else "NOT_PROVEN"),
+        "bridge_exactly_one_message_1": (bool(runtime_r1) and len(b1) == 1) if r1 and bridge_history_expected else (True if r1 and not bridge_history_expected else "NOT_PROVEN"),
+        "bridge_exactly_one_message_2": (bool(runtime_r2) and len(b2) == 1) if r2 and bridge_history_expected else (True if r2 and not bridge_history_expected else "NOT_PROVEN"),
         "bridge_ids_distinct_message_1_vs_message_2": (len(b1) == 1 and len(b2) == 1 and b1[0] != b2[0]) if two_message_window and bridge_history_expected else ("NOT_PROVEN" if two_message_window else "NOT_APPLICABLE"),
         "bridge_request_1_id": r1 or "NOT_PROVEN",
         "bridge_request_2_id": r2 or "NOT_PROVEN",
-        "bridge_lifecycle_message_1": (
+        "bridge_lifecycle_message_1": (copy.deepcopy(runtime_r1) if isinstance(runtime_r1, Mapping) and runtime_r1 else (
             {k: bridge_audits_1[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
-            if len(bridge_audits_1) == 1 else "NOT_PROVEN"
-        ),
-        "bridge_lifecycle_message_2": (
+            if len(bridge_audits_1) == 1 else "NOT_PROVEN")),
+        "bridge_lifecycle_message_2": (copy.deepcopy(runtime_r2) if isinstance(runtime_r2, Mapping) and runtime_r2 else (
             {k: bridge_audits_2[0].get(k) for k in ("BRIDGE_ID", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH", "SOURCE", "TARGET")}
-            if len(bridge_audits_2) == 1 else "NOT_PROVEN"
-        ),
+            if len(bridge_audits_2) == 1 else "NOT_PROVEN")),
+        "bridge_runtime_record_count_message_1": 1 if runtime_r1 else 0,
+        "bridge_runtime_record_count_message_2": 1 if runtime_r2 else 0,
         "bridge_trace_target_seat_zero_message_1": trace_zero_1,
         "bridge_trace_target_seat_zero_message_2": trace_zero_2,
         "request_1_execution_events": e1 if r1 else "NOT_PROVEN",
@@ -978,27 +984,47 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     structural_pass = bool(dynamic_identity_ok)
     bridge_window_proven = True
     if bridge_history_expected:
+        # HOTFIX164.4: Bridge proof comes from the dedicated runtime evidence store.
+        # The canonical Message/Request/Round store remains the identity authority;
+        # provider result dictionaries are never consulted for Bridge proof.
+        def _runtime_bridge_ok(row):
+            if not isinstance(row, Mapping) or not row:
+                return False
+            required = (
+                "source_execution_proven", "write_status", "validate_status",
+                "commit_status", "barrier_status", "target_dispatch_status",
+                "target_response_status", "read_status", "schema_validation_status",
+                "match_status", "user_prompt_contains_value",
+                "gemini_input_prompt_contains_value", "runtime_http_payload_attested",
+                "runtime_http_payload_contains_value", "runtime_http_payload_contains_bridge_key",
+                "gemini_received_sanitized_representation_only", "terminal_state",
+            )
+            return (
+                all(row.get(k) == "PASS" for k in required[:10])
+                and row.get("user_prompt_contains_value") == "NO"
+                and row.get("gemini_input_prompt_contains_value") == "NO"
+                and row.get("runtime_http_payload_attested") == "YES"
+                and row.get("runtime_http_payload_contains_value") == "NO"
+                and row.get("runtime_http_payload_contains_bridge_key") == "NO"
+                and row.get("gemini_received_sanitized_representation_only") == "PASS"
+                and row.get("terminal_state") in {"COMMITTED", "ABORTED"}
+                and row.get("runtime_sequence_valid") == "PASS"
+                and row.get("application_owned") == "PASS"
+            )
         if two_message_window:
             bridge_window_proven = bool(
                 audit.get("bridge_exactly_one_message_1") is True
                 and audit.get("bridge_exactly_one_message_2") is True
                 and audit.get("bridge_ids_distinct_message_1_vs_message_2") is True
                 and audit.get("bridge_ids_unique_when_present") is True
-                and isinstance(audit.get("bridge_lifecycle_message_1"), dict)
-                and isinstance(audit.get("bridge_lifecycle_message_2"), dict)
-                and all(audit.get("bridge_lifecycle_message_1", {}).get(k) == "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH"))
-                and all(audit.get("bridge_lifecycle_message_2", {}).get(k) == "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH"))
-                and audit.get("bridge_lifecycle_message_1", {}).get("SOURCE") == "DeepSeek / Seat 7"
-                and audit.get("bridge_lifecycle_message_1", {}).get("TARGET") == "Gemini / Seat 2"
-                and audit.get("bridge_lifecycle_message_2", {}).get("SOURCE") == "DeepSeek / Seat 7"
-                and audit.get("bridge_lifecycle_message_2", {}).get("TARGET") == "Gemini / Seat 2"
-                and audit.get("bridge_trace_target_seat_zero_message_1") is False
-                and audit.get("bridge_trace_target_seat_zero_message_2") is False
+                and _runtime_bridge_ok(runtime_r1)
+                and _runtime_bridge_ok(runtime_r2)
             )
         else:
             bridge_window_proven = bool(
                 audit.get("bridge_exactly_one_message_1") is True
                 and audit.get("bridge_ids_unique_when_present") is True
+                and _runtime_bridge_ok(runtime_r1)
             )
     audit["bridge_history_proven"] = bridge_window_proven if bridge_history_expected else "NOT_REQUESTED"
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and bridge_window_proven and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
