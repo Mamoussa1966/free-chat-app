@@ -300,6 +300,21 @@ class SharedContextBridge:
         self._provider_input_prompts: dict[int, str] = {}
         self._resolved_reads: dict[str, dict] = {}
         self._runtime_payload_attestations: dict[int, dict] = {}
+        # HOTFIX164.3: one immutable application-owned bridge evidence ledger per
+        # logical Request. Provider prose/ordering is never used as proof.
+        self._runtime_bridge_evidence = {
+            "schema": "bridge-runtime-evidence/v1",
+            "request_id": self.request_id,
+            "round_id": self.round_no,
+            "bridge_id": self.bridge_id,
+            "source": "DeepSeek / Seat 7",
+            "target": "Gemini / Seat 2",
+            "key": "BRIDGE_RESULT",
+            "events": [],
+            "terminal_state": "OPEN",
+            "terminal_reason": "",
+            "sealed": False,
+        }
         self._audit_sealed_json: str = ""
         self._audit_seal_hash: str = ""
         initial = str(initial_snapshot or "").strip()
@@ -377,8 +392,49 @@ class SharedContextBridge:
         record = self._runtime_payload_attestations.get(int(seat_slot)) or {}
         return str(record.get("payload_json") or "")
 
+    def _record_bridge_event(self, phase: str, **fields) -> None:
+        """Append one application-owned phase to the Request-scoped Bridge ledger."""
+        phase = str(phase or "").strip().upper()
+        if not phase:
+            return
+        events = self._runtime_bridge_evidence["events"]
+        if any(e.get("phase") == phase for e in events):
+            return
+        event = {
+            "seq": len(events) + 1,
+            "phase": phase,
+            "request_id": self.request_id,
+            "round_id": self.round_no,
+        }
+        for k in ("seat", "provider", "status", "model", "write_sequence", "read_sequence", "target_seat"):
+            if k in fields and fields[k] not in (None, ""):
+                event[k] = fields[k]
+        events.append(event)
+
+    def _final_bridge_sequence(self) -> list[str]:
+        return [str(e.get("phase") or "") for e in self._runtime_bridge_evidence.get("events", [])]
+
+    def _bridge_runtime_sequence_valid(self) -> bool:
+        expected = [
+            "SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
+            "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH",
+        ]
+        return self._final_bridge_sequence() == expected
+
+    def _bridge_control_record_proven(self, source_seat: int, target_seat: int) -> bool:
+        e = self._runtime_bridge_evidence
+        return bool(
+            e.get("request_id") == self.request_id
+            and int(e.get("round_id", 0) or 0) == int(self.round_no)
+            and e.get("source") == "DeepSeek / Seat 7"
+            and e.get("target") == "Gemini / Seat 2"
+            and int(source_seat) == 7 and int(target_seat) == 2
+            and len(e.get("events", [])) > 0
+        )
+
     def seal_runtime_audit(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
-        """Seal bridge proof from actual runtime HTTP payloads, not prompt/context copies."""
+        """Seal bridge proof from actual Application-Owned runtime evidence."""
+        self._runtime_bridge_evidence["sealed"] = True
         audit = self._transaction_audit_unsealed(source_seat, target_seat, key, user_prompt)
         canonical = json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         self._audit_sealed_json = canonical
@@ -430,6 +486,8 @@ class SharedContextBridge:
             return
         self._terminal_state = "ABORTED"
         self._terminal_reason = str(reason or "BRIDGE_ABORTED")
+        self._runtime_bridge_evidence["terminal_state"] = self._terminal_state
+        self._runtime_bridge_evidence["terminal_reason"] = self._terminal_reason
         self._committed = False
         self._barrier_open = False
         for trace in self.trace:
@@ -449,6 +507,7 @@ class SharedContextBridge:
         self.attest_source_execution(proven, "LIVE_PROVIDER_RESULT", reason if not proven else "")
         if not proven:
             return False
+        self._record_bridge_event("SOURCE_EXECUTION", seat=7, provider="DeepSeek", status="SUCCESS", model=result.get("executed_model") or result.get("model"))
         raw = str(result.get("content") or "").strip()
         # Prefer an explicit machine-readable source write; otherwise the live
         # provider's successful result itself is the bridge payload. Neither form
@@ -477,6 +536,8 @@ class SharedContextBridge:
                            source_provider=str(getattr(seat, "name", "") or ""),
                            target_seat=2, key="BRIDGE_RESULT",
                            write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
+        self._record_bridge_event("WRITE", seat=7, provider="DeepSeek", status="RECORDED", write_sequence=self._write_sequence)
+        self._record_bridge_event("VALIDATE", seat=7, provider="DeepSeek", status="PASS", write_sequence=self._write_sequence)
         return True
 
     def seed_application_state(self, key: str, value: str, source: str = "APPLICATION_TEST_CONTROL", source_seat: int = 0) -> None:
@@ -507,6 +568,7 @@ class SharedContextBridge:
             "values": copy.deepcopy(self._values), "committed": bool(self._committed),
             "barrier_open": bool(self._barrier_open), "trace": copy.deepcopy(self.trace),
             "terminal_state": self._terminal_state, "terminal_reason": self._terminal_reason,
+            "runtime_evidence": copy.deepcopy(self._runtime_bridge_evidence),
         }
 
 
@@ -622,6 +684,7 @@ class SharedContextBridge:
         self._committed = True
         self._terminal_state = "COMMITTED"
         self._terminal_reason = ""
+        self._record_bridge_event("COMMIT", target_seat=target_slot, status="PASS")
         for trace in self.trace:
             if trace["commit_status"] == "PENDING":
                 trace["commit_status"] = "COMMITTED"
@@ -632,6 +695,8 @@ class SharedContextBridge:
         if self._terminal_state != "COMMITTED" or not self._committed:
             raise RuntimeError("Bridge barrier reached before commit")
         self._barrier_open = True
+        self._record_bridge_event("BARRIER", target_seat=2, status="PASS")
+        self._runtime_bridge_evidence["terminal_state"] = self._terminal_state
 
     def read(self, key: str, target_seat) -> str | None:
         key = str(key or "").strip()
@@ -660,6 +725,7 @@ class SharedContextBridge:
             read_sequence=self._read_sequence,
             schema_validation="PASS",
         )
+        self._record_bridge_event("READ", seat=2, provider="Gemini", status="PASS", read_sequence=self._read_sequence)
         return str(record["value"])
 
     def _transaction_audit_unsealed(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
@@ -675,6 +741,8 @@ class SharedContextBridge:
         target_key_has = bool(key and key in target_payload)
         target_value_outside_sanitized = target_payload_has
         target_value = str(read.get("value")) if read else ""
+        sequence_valid = self._bridge_runtime_sequence_valid()
+        control_record_proven = self._bridge_control_record_proven(source_seat, target_seat)
         application_owned = bool(record and record.get("write_origin") == "APPLICATION_TEST_CONTROL")
         source_ok = bool(
             record and int(record.get("source_seat", 0)) == int(source_seat)
@@ -705,6 +773,11 @@ class SharedContextBridge:
             "SCHEMA_VALIDATION": "PASS" if read and target_ok else "FAIL",
             "SOURCE_VALUE": "[REDACTED]", "TARGET_VALUE": "[REDACTED]",
             "MATCH": match,
+            "BRIDGE_CONTROL_RECORD_REDACTED": "PASS" if (self.strict_live_source and control_record_proven) else "NOT_PROVEN",
+            "BRIDGE_RUNTIME_SEQUENCE": self._final_bridge_sequence(),
+            "BRIDGE_RUNTIME_SEQUENCE_VALID": "PASS" if (self.strict_live_source and sequence_valid) else "NOT_PROVEN",
+            "TARGET_DISPATCH_AFTER_BARRIER": "PASS" if (self.strict_live_source and sequence_valid) else "NOT_PROVEN",
+            "READ_AFTER_TARGET_RESPONSE": "PASS" if (self.strict_live_source and sequence_valid) else "NOT_PROVEN",
             "USER_PROMPT_CONTAINS_VALUE": user_isolation,
             "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": gemini_isolation,
             "BRIDGE_STATE_CONTAINS_VALUE": bridge_state,
@@ -712,6 +785,7 @@ class SharedContextBridge:
             "BRIDGE_SOURCE_PROVENANCE": str(self._source_execution_mode or "NOT_PROVEN"),
             "TERMINAL_STATE": self._terminal_state,
             "TERMINAL_REASON": self._terminal_reason,
+            "APPLICATION_OWNED_RUNTIME_RECORD": "PASS" if control_record_proven and self._runtime_bridge_evidence.get("sealed") else "NOT_PROVEN",
             "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES" if runtime_attestation_present else "NO",
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": ("NO" if not target_value_outside_sanitized else "YES") if runtime_attestation_present else "NOT_PROVEN",
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": ("NO" if not target_key_has else "YES") if runtime_attestation_present else "NOT_PROVEN",
@@ -746,6 +820,21 @@ class SharedContextBridge:
             "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": "NO",
         }
         failures = [k for k, expected in required.items() if report.get(k) != expected]
+        if self.strict_live_source:
+            strict_required = {
+                "BRIDGE_CONTROL_RECORD_REDACTED": "PASS",
+                "BRIDGE_RUNTIME_SEQUENCE_VALID": "PASS",
+                "TARGET_DISPATCH_AFTER_BARRIER": "PASS",
+                "READ_AFTER_TARGET_RESPONSE": "PASS",
+                "SOURCE_EXECUTION_PROVEN": "PASS",
+                "BRIDGE_SOURCE_PROVENANCE": "LIVE_PROVIDER_RESULT",
+                "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES",
+                "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": "NO",
+                "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": "NO",
+                "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS",
+                "APPLICATION_OWNED_RUNTIME_RECORD": "PASS",
+            }
+            failures.extend([k for k, expected in strict_required.items() if report.get(k) != expected])
         return {
             "schema": "hotfix124-bridge-security-regression-gate/v1",
             "status": "PASS" if not failures else "FAIL",
@@ -1607,6 +1696,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 allow_bridge_result_key=bool(strict_live_bridge and seat.key == "deepseek"),
             )
             bridge.record_provider_input(seat, provider_prompt)
+            if strict_live_bridge and seat.key == "gemini":
+                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
@@ -1628,6 +1719,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     raise RuntimeError("Execution identity has no matching actual cascade attempt")
             # Capture the exact prompt actually built by the provider runtime,
             # then remove the transient audit field before any history/UI path.
+            if strict_live_bridge and seat.key == "gemini":
+                bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status=str(result.get("status") or ""))
             actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
             runtime_attestation = result.pop("_runtime_payload_attestation", {}) if isinstance(result, dict) else {}
             bridge.record_provider_input(seat, actual_provider_prompt or provider_prompt)
@@ -1638,6 +1731,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # pre-dispatch state preparation.
             if seat.key == "gemini" and bridge._committed and bridge._barrier_open:
                 bridge.read("BRIDGE_RESULT", seat)
+                if strict_live_bridge:
+                    source_value = str((bridge._values.get("BRIDGE_RESULT") or {}).get("value") or "")
+                    target_value = str((bridge._resolved_reads.get("BRIDGE_RESULT") or {}).get("value") or "")
+                    bridge._record_bridge_event("MATCH", seat=2, provider="Application", status="PASS" if source_value and source_value == target_value else "FAIL")
             _render_live_cascade_telemetry(result)
             result["request_routed"] = result_request_routed
             result["model_candidates_configured"] = bool(model_candidates.get(seat.key))
