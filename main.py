@@ -560,6 +560,45 @@ class SharedContextBridge:
         self._record_trace(source_seat=source_seat, source_provider=source, target_seat=(2 if key == "BRIDGE_RESULT" and source_seat == 7 else 0), key=key,
                            write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
 
+    def runtime_evidence_record(self) -> dict:
+        """Return the Request-scoped Application-Owned Bridge Runtime Evidence record.
+
+        This record is deliberately separate from provider result/output dictionaries.
+        FINAL_CLOSURE_AUDIT consumes this record directly; provider prose is never an
+        evidence source. Values and raw payloads remain redacted/hashed.
+        """
+        audit = self.transaction_audit(7, 2, "BRIDGE_RESULT", "")
+        e = self._runtime_bridge_evidence
+        return {
+            "schema": "bridge-runtime-evidence/v2",
+            "request_id": self.request_id,
+            "round_id": self.round_no,
+            "bridge_id_hash": hashlib.sha256(str(self.bridge_id).encode("utf-8")).hexdigest(),
+            "bridge_id": "[REDACTED]",
+            "source_execution_proven": audit.get("SOURCE_EXECUTION_PROVEN", "NOT_PROVEN"),
+            "write_status": audit.get("WRITE", "NOT_PROVEN"),
+            "validate_status": audit.get("VALIDATE", "NOT_PROVEN"),
+            "commit_status": audit.get("COMMIT", "NOT_PROVEN"),
+            "barrier_status": audit.get("BARRIER", "NOT_PROVEN"),
+            "target_dispatch_status": "PASS" if audit.get("TARGET_DISPATCH_AFTER_BARRIER") == "PASS" else "NOT_PROVEN",
+            "target_response_status": "PASS" if any(x.get("phase") == "TARGET_RESPONSE" and x.get("status") == "SUCCESS" for x in e.get("events", [])) else ("FAIL" if any(x.get("phase") == "TARGET_RESPONSE" for x in e.get("events", [])) else "NOT_PROVEN"),
+            "read_status": audit.get("READ", "NOT_PROVEN"),
+            "schema_validation_status": audit.get("SCHEMA_VALIDATION", "NOT_PROVEN"),
+            "match_status": audit.get("MATCH", "NOT_PROVEN"),
+            "user_prompt_contains_value": audit.get("USER_PROMPT_CONTAINS_VALUE", "NOT_PROVEN"),
+            "gemini_input_prompt_contains_value": audit.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE", "NOT_PROVEN"),
+            "runtime_http_payload_attested": audit.get("RUNTIME_HTTP_PAYLOAD_ATTESTED", "NOT_PROVEN"),
+            "runtime_http_payload_contains_value": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE", "NOT_PROVEN"),
+            "runtime_http_payload_contains_bridge_key": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY", "NOT_PROVEN"),
+            "gemini_received_sanitized_representation_only": audit.get("GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY", "NOT_PROVEN"),
+            "terminal_state": audit.get("TERMINAL_STATE", e.get("terminal_state", "NOT_PROVEN")),
+            "terminal_reason": audit.get("TERMINAL_REASON", e.get("terminal_reason", "")),
+            "runtime_sequence": list(e.get("events", [])),
+            "runtime_sequence_valid": audit.get("BRIDGE_RUNTIME_SEQUENCE_VALID", "NOT_PROVEN"),
+            "application_owned": audit.get("APPLICATION_OWNED_RUNTIME_RECORD", "NOT_PROVEN"),
+            "audit_seal_hash": self._audit_seal_hash,
+        }
+
     def application_owned_state(self) -> dict:
         """Return persisted bridge control-plane state; values never enter provider prompts."""
         return {
@@ -1826,15 +1865,24 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         bridge_gate = bridge.bridge_security_regression_gate(bridge_audit)
         bridge_state = bridge.application_owned_state()
         trace = bridge.transaction_trace()
-        gemini_result = results.get("gemini")
-        if isinstance(gemini_result, dict):
-            gemini_result.pop("bridge_transaction_audit", None)
-            gemini_result.pop("bridge_security_regression_gate", None)
-            gemini_result.pop("_bridge_application_state", None)
-            gemini_result["bridge_transaction_audit"] = bridge_audit
-            gemini_result["bridge_security_regression_gate"] = bridge_gate
-            gemini_result["_bridge_application_state"] = bridge_state
-            gemini_result["bridge_trace"] = trace
+        # HOTFIX164.4: Bridge evidence is NOT provider output. Store exactly one
+        # Request-scoped Application-Owned Runtime Record. The provider result rows
+        # remain ordinary provider results and contain no Bridge audit/control state.
+        runtime_record = bridge.runtime_evidence_record()
+        runtime_record["bridge_gate_status"] = bridge_gate.get("status", "NOT_PROVEN")
+        runtime_record["bridge_state_terminal"] = bridge_state.get("terminal_state", "NOT_PROVEN")
+        runtime_record["bridge_trace_count"] = len(trace)
+        chat.setdefault("bridge_runtime_evidence_store", {})
+        chat["bridge_runtime_evidence_store"][str(request_id)] = copy.deepcopy(runtime_record)
+        # Compatibility only: historical Bridge-only tests may still inspect the
+        # legacy provider-result fields. FINAL RUNTIME CLOSURE never receives them.
+        if not strict_live_bridge:
+            legacy_gemini = results.get("gemini")
+            if isinstance(legacy_gemini, dict):
+                legacy_gemini["bridge_transaction_audit"] = bridge_audit
+                legacy_gemini["bridge_security_regression_gate"] = bridge_gate
+                legacy_gemini["_bridge_application_state"] = bridge_state
+                legacy_gemini["bridge_trace"] = trace
 
     # HOTFIX123: diagnostic answers must not invent the executed cascade position.
     # The provider response is still allowed to be arbitrary during normal chat,
@@ -2238,8 +2286,12 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             record["state"] = "COMPLETED"
             record["rounds_executed"] = total_rounds
             record["results"] = copy.deepcopy(all_results)
-            bridge_states = [copy.deepcopy(r.get("_bridge_application_state")) for r in round_results if isinstance(r, dict) and r.get("_bridge_application_state")]
-            record["application_owned_bridge_state"] = bridge_states[-1] if bridge_states else record.get("application_owned_bridge_state")
+            # HOTFIX164.4: Bridge Runtime Evidence is a separate application-owned
+            # runtime store. It is intentionally not copied into any provider result.
+            runtime_store = chat.get("bridge_runtime_evidence_store", {})
+            runtime_evidence = runtime_store.get(str(request_id)) if isinstance(runtime_store, dict) else None
+            if isinstance(runtime_evidence, dict):
+                chat.setdefault("bridge_runtime_evidence_store", {})[str(request_id)] = copy.deepcopy(runtime_evidence)
             # HOTFIX123: persist authoritative counters on the request record itself.
             # These counters are derived from lifecycle/audit data and persisted result
             # telemetry, never from provider-generated prose.
