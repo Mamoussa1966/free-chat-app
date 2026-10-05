@@ -77,7 +77,17 @@ def test_hotfix1642_final_runtime_source_precedes_target(monkeypatch):
     a=by["gemini"]["bridge_transaction_audit"]
     assert a["SOURCE_EXECUTION_PROVEN"] == "PASS"
     assert a["BRIDGE_SOURCE_PROVENANCE"] == "LIVE_PROVIDER_RESULT"
-    assert a["COMMIT"] == "PASS" and a["BARRIER"] == "PASS" and a["READ"] == "PASS"
+    assert a["BRIDGE_CONTROL_RECORD_REDACTED"] == "PASS"
+    assert a["APPLICATION_OWNED_RUNTIME_RECORD"] == "PASS"
+    assert a["BRIDGE_RUNTIME_SEQUENCE_VALID"] == "PASS"
+    assert a["BRIDGE_RUNTIME_SEQUENCE"] == ["SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH"]
+    assert a["TARGET_DISPATCH_AFTER_BARRIER"] == "PASS"
+    assert a["READ_AFTER_TARGET_RESPONSE"] == "PASS"
+    assert a["RUNTIME_HTTP_PAYLOAD_ATTESTED"] == "YES"
+    assert a["RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE"] == "NO"
+    assert a["RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY"] == "NO"
+    assert a["GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY"] == "PASS"
+    assert a["COMMIT"] == "PASS" and a["BARRIER"] == "PASS" and a["READ"] == "PASS" and a["MATCH"] == "PASS"
 
 
 def test_hotfix1642_final_runtime_source_not_executed_suppresses_target(monkeypatch):
