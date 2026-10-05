@@ -74,20 +74,20 @@ def test_hotfix1642_final_runtime_source_precedes_target(monkeypatch):
     out=main._run_round("FINAL RUNTIME CLOSURE TEST\nTRANSACTIONAL BRIDGE ISOLATION",chat,1,{"deepseek":"k","gemini":"k"},[],{"deepseek":("deepseek-flash",),"gemini":("gemini-3.8-flash",)},"m",None,"rid")
     by={x["seat"]:x for x in out}
     assert calls == [("deepseek",True),("gemini",False)]
-    a=by["gemini"]["bridge_transaction_audit"]
-    assert a["SOURCE_EXECUTION_PROVEN"] == "PASS"
-    assert a["BRIDGE_SOURCE_PROVENANCE"] == "LIVE_PROVIDER_RESULT"
-    assert a["BRIDGE_CONTROL_RECORD_REDACTED"] == "PASS"
-    assert a["APPLICATION_OWNED_RUNTIME_RECORD"] == "PASS"
-    assert a["BRIDGE_RUNTIME_SEQUENCE_VALID"] == "PASS"
-    assert a["BRIDGE_RUNTIME_SEQUENCE"] == ["SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH"]
-    assert a["TARGET_DISPATCH_AFTER_BARRIER"] == "PASS"
-    assert a["READ_AFTER_TARGET_RESPONSE"] == "PASS"
-    assert a["RUNTIME_HTTP_PAYLOAD_ATTESTED"] == "YES"
-    assert a["RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE"] == "NO"
-    assert a["RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY"] == "NO"
-    assert a["GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY"] == "PASS"
-    assert a["COMMIT"] == "PASS" and a["BARRIER"] == "PASS" and a["READ"] == "PASS" and a["MATCH"] == "PASS"
+    a=chat["bridge_runtime_evidence_store"]["rid"]
+    assert a["source_execution_proven"] == "PASS"
+    assert a["write_status"] == "PASS" and a["validate_status"] == "PASS"
+    assert a["commit_status"] == "PASS" and a["barrier_status"] == "PASS"
+    assert a["target_dispatch_status"] == "PASS" and a["target_response_status"] == "PASS"
+    assert a["read_status"] == "PASS" and a["schema_validation_status"] == "PASS" and a["match_status"] == "PASS"
+    assert a["runtime_sequence_valid"] == "PASS"
+    assert [e["phase"] for e in a["runtime_sequence"]] == ["SOURCE_EXECUTION","WRITE","VALIDATE","COMMIT","BARRIER","TARGET_DISPATCH","TARGET_RESPONSE","READ","MATCH"]
+    assert a["runtime_http_payload_attested"] == "YES"
+    assert a["runtime_http_payload_contains_value"] == "NO"
+    assert a["runtime_http_payload_contains_bridge_key"] == "NO"
+    assert a["gemini_received_sanitized_representation_only"] == "PASS"
+    assert a["terminal_state"] == "COMMITTED"
+    assert "bridge_transaction_audit" not in by["gemini"]
 
 
 def test_hotfix1642_final_runtime_source_not_executed_suppresses_target(monkeypatch):
@@ -97,8 +97,7 @@ def test_hotfix1642_final_runtime_source_not_executed_suppresses_target(monkeypa
         calls.append(seat.key)
         rid=kwargs.get("request_id") or args[-1]
         if seat.key=="deepseek":
-            return {"status":"NOT_EXECUTED","classification":"NOT_EXECUTED","seat":"deepseek","name":"DeepSeek",
-                    "model":"","executed_model":"","attempted_models":[],"runtime_execution_events":[],"request_id":rid,"round":1,"content":""}
+            return {"status":"NOT_EXECUTED","classification":"NOT_EXECUTED","seat":"deepseek","name":"DeepSeek", "model":"","executed_model":"","attempted_models":[],"runtime_execution_events":[],"request_id":rid,"round":1,"content":""}
         raise AssertionError("Gemini must not dispatch")
     monkeypatch.setattr(main,"get_seats",lambda:(ds,gem))
     monkeypatch.setattr(main,"call_seat",fake_call)
@@ -107,9 +106,10 @@ def test_hotfix1642_final_runtime_source_not_executed_suppresses_target(monkeypa
     assert calls == ["deepseek"]
     by={x["seat"]:x for x in out}
     assert by["gemini"]["dispatch_decision"] == "DISPATCH_SUPPRESSED"
-    state=by["gemini"]["_bridge_application_state"]
+    state=chat["bridge_runtime_evidence_store"]["rid"]
     assert state["terminal_state"] == "ABORTED"
-    assert all(t.get("commit_status") != "PENDING" for t in state["trace"])
+    assert state["commit_status"] == "FAIL"
+    assert "_bridge_application_state" not in by["gemini"]
 
 
 def test_hotfix1642_canonical_identity_counts_only_user_messages():
