@@ -589,6 +589,8 @@ def repository_canonical_state_boundary_audit(chat: dict, session_state=None) ->
             for row in values if isinstance(values, list) else []:
                 if not isinstance(row, dict) or not str(row.get(id_key) or "").strip():
                     continue
+                if record_type == "CANONICAL_MESSAGE_RECORD" and str(row.get("role") or "").lower() != "user":
+                    continue
                 rows.append({
                     "conversation_id": str(row.get("conversation_id") or record.get("conversation_id") or ""),
                     "message_id": str(row.get("message_id") or ""),
@@ -737,7 +739,7 @@ def canonical_upsert_message(chat: dict, message: dict, session_state=None) -> d
 
 
 def canonical_upsert_request(chat: dict, request: dict, session_state=None) -> dict:
-    """Create/update a RequestRecord in the canonical ConversationRecord before dispatch."""
+    """Create/update a RequestRecord without reallocating an existing request's round base."""
     rec = _canonical_record(chat)
     rid = str(request.get("request_id") or "").strip()
     if not rid:
@@ -745,74 +747,61 @@ def canonical_upsert_request(chat: dict, request: dict, session_state=None) -> d
     row = dict(request)
     defer_round_allocation = bool(row.pop("canonical_round_allocation_deferred", False))
     row["request_id"] = rid
-    # Request creation owns the immutable conversation round allocation.
-    # Callers may provide the value (the production orchestrator does), but
-    # direct canonical writers receive the same deterministic contract.
-    # HOTFIX160: Request creation owns the ordinal. Treat legacy/zero values as
-    # unallocated and allocate from canonical Request identity records first;
-    # Round records are only a compatibility cross-check and never completion
-    # order. This prevents the historical 0->1 drift.
-    try:
-        supplied_base = int(row.get("canonical_round_base") or 0)
-    except (TypeError, ValueError):
-        supplied_base = 0
-    if supplied_base <= 0 and not defer_round_allocation:
-        # HOTFIX160: Request creation owns the ordinal.  Prefer the canonical
-        # Request identity sequence itself; Round records are only a secondary
-        # compatibility source for legacy hydrated records.  Completion order,
-        # UI counters, provider result order, and prose are never consulted.
-        request_ordinals = []
-        for existing_request in rec.get("requests", []):
-            if not isinstance(existing_request, dict) or not str(existing_request.get("request_id") or "").strip():
-                continue
-            try:
-                n = int(existing_request.get("canonical_round_base") or 0)
-            except (TypeError, ValueError):
-                n = 0
-            if n > 0:
-                request_ordinals.append(n)
-        if request_ordinals:
-            row["canonical_round_base"] = max(request_ordinals) + 1
-        else:
-            # Fresh canonical store: the first Request is always ordinal 1.
-            # For a legacy store with rounds but no request bases, use the
-            # observed canonical ordinal only as a one-time migration fallback.
-            round_ordinals = []
-            for existing_round in rec.get("rounds", []):
-                if not isinstance(existing_round, dict):
-                    continue
-                for key in ("canonical_round_base", "round_number", "round", "ordinal"):
-                    try:
-                        n = int(existing_round.get(key) or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    if n > 0:
-                        round_ordinals.append(n)
-                        break
-            row["canonical_round_base"] = max(round_ordinals, default=0) + 1
-    if row.get("canonical_request_ordinal") in (None, ""):
-        row["canonical_request_ordinal"] = len([x for x in rec.get("requests", []) if isinstance(x, dict) and str(x.get("request_id") or "")]) + 1
-    row.setdefault("canonical_round_allocation_contract", "V26.3.21-REQUEST-CREATION-MONOTONIC-ROUND/v1")
     existing = next((x for x in rec["requests"] if isinstance(x, dict) and str(x.get("request_id") or "") == rid), None)
     if existing is None:
+        try:
+            supplied_base = int(row.get("canonical_round_base") or 0)
+        except (TypeError, ValueError):
+            supplied_base = 0
+        if supplied_base <= 0 and not defer_round_allocation:
+            request_ordinals = []
+            for prior in rec.get("requests", []):
+                if not isinstance(prior, dict) or not str(prior.get("request_id") or "").strip():
+                    continue
+                try:
+                    n = int(prior.get("canonical_round_base") or 0)
+                except (TypeError, ValueError):
+                    n = 0
+                if n > 0:
+                    request_ordinals.append(n)
+            if request_ordinals:
+                row["canonical_round_base"] = max(request_ordinals) + 1
+            else:
+                round_ordinals = []
+                for prior_round in rec.get("rounds", []):
+                    if not isinstance(prior_round, dict):
+                        continue
+                    for key in ("canonical_round_base", "round_number", "round", "ordinal"):
+                        try:
+                            n = int(prior_round.get(key) or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if n > 0:
+                            round_ordinals.append(n)
+                            break
+                row["canonical_round_base"] = max(round_ordinals, default=0) + 1
+        if row.get("canonical_request_ordinal") in (None, ""):
+            row["canonical_request_ordinal"] = len([x for x in rec.get("requests", []) if isinstance(x, dict) and str(x.get("request_id") or "")]) + 1
+        row.setdefault("canonical_round_allocation_contract", "V26.3.21-REQUEST-CREATION-MONOTONIC-ROUND/v1")
         rec["requests"].append(copy.deepcopy(row))
         existing = rec["requests"][-1]
     else:
+        # Existing Request identity and canonical round base are immutable.
         old_mid = str(existing.get("message_id") or "")
         new_mid = str(row.get("message_id") or "")
         if old_mid and new_mid and old_mid != new_mid:
             existing["identity_conflict"] = True
+        old_base = existing.get("canonical_round_base")
+        new_base = row.get("canonical_round_base")
+        if old_base not in (None, "") and new_base not in (None, "") and int(old_base) != int(new_base):
+            existing["identity_conflict"] = True
         for k, v in row.items():
-            if k == "message_id" and old_mid and new_mid and old_mid != new_mid:
-                continue
-            if k == "canonical_round_base" and existing.get(k) not in (None, "") and v not in (None, "") and int(existing.get(k)) != int(v):
-                existing["identity_conflict"] = True
+            if k in {"message_id", "canonical_round_base", "canonical_request_ordinal"} and existing.get(k) not in (None, ""):
                 continue
             if v not in (None, "", [], {}):
                 existing[k] = copy.deepcopy(v)
     commit_canonical_record(chat, session_state)
     return existing
-
 
 def canonical_upsert_round(chat: dict, round_row: dict, session_state=None) -> dict:
     """Create/update a RoundRecord in the canonical ConversationRecord before provider dispatch."""
