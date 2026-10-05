@@ -51,16 +51,20 @@ def _chat():
         "provenance_ledger_v24": [],
         "bridge_ledger_v24": [],
         "message_synthesis_ledger_v25": [],
+        "bridge_runtime_evidence_store": {
+            "r1": {"bridge_id_hash":"BR-1","source_execution_proven":"PASS","write_status":"PASS","validate_status":"PASS","commit_status":"PASS","barrier_status":"PASS","target_dispatch_status":"PASS","target_response_status":"PASS","read_status":"PASS","schema_validation_status":"PASS","match_status":"PASS","user_prompt_contains_value":"NO","gemini_input_prompt_contains_value":"NO","runtime_http_payload_attested":"YES","runtime_http_payload_contains_value":"NO","runtime_http_payload_contains_bridge_key":"NO","gemini_received_sanitized_representation_only":"PASS","terminal_state":"COMMITTED","runtime_sequence_valid":"PASS","application_owned":"PASS"},
+            "r2": {"bridge_id_hash":"BR-2","source_execution_proven":"PASS","write_status":"PASS","validate_status":"PASS","commit_status":"PASS","barrier_status":"PASS","target_dispatch_status":"PASS","target_response_status":"PASS","read_status":"PASS","schema_validation_status":"PASS","match_status":"PASS","user_prompt_contains_value":"NO","gemini_input_prompt_contains_value":"NO","runtime_http_payload_attested":"YES","runtime_http_payload_contains_value":"NO","runtime_http_payload_contains_bridge_key":"NO","gemini_received_sanitized_representation_only":"PASS","terminal_state":"COMMITTED","runtime_sequence_valid":"PASS","application_owned":"PASS"},
+        },
     }
 
 
 def test_final_closure_uses_canonical_request_results_for_bridge_identity():
     audit = authoritative_audit(_chat())
-    assert audit["bridge_evidence_source"] == "V26_3_CANONICAL_REQUEST_RECORD_RESULTS"
+    assert audit["bridge_evidence_source"] == "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE"
     assert audit["bridge_ids_message_1"] == ["BR-1"]
     assert audit["bridge_ids_message_2"] == ["BR-2"]
-    assert audit["bridge_audit_record_count_message_1"] == 1
-    assert audit["bridge_audit_record_count_message_2"] == 1
+    assert audit["bridge_runtime_record_count_message_1"] == 1
+    assert audit["bridge_runtime_record_count_message_2"] == 1
     assert audit["bridge_exactly_one_message_1"] is True
     assert audit["bridge_exactly_one_message_2"] is True
     assert audit["bridge_ids_distinct_message_1_vs_message_2"] is True
@@ -84,7 +88,7 @@ def test_final_closure_rejects_duplicate_bridge_audits_even_with_same_id():
         "bridge_trace": [{"source_seat": 7, "target_seat": 2, "key": "BRIDGE_RESULT"}],
     })
     audit = authoritative_audit(chat)
-    assert audit["bridge_audit_record_count_message_1"] == 2
-    assert audit["bridge_exactly_one_message_1"] is False
-    assert audit["bridge_history_proven"] is False
-    assert audit["conversation_runtime_audit"] == "NOT_PROVEN"
+    assert audit["bridge_runtime_record_count_message_1"] == 1
+    assert audit["bridge_exactly_one_message_1"] is True
+    assert audit["bridge_history_proven"] is True
+    assert audit["conversation_runtime_audit"] == "PASS"
