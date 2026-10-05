@@ -1619,12 +1619,26 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     seats = get_seats()
     # HOTFIX125: Bridge execution is an explicit request-scoped mode.  A normal
     # Persistence/History request must not instantiate, fail, or render a Bridge audit.
+    _bridge_prompt_upper = str(user_prompt or "").upper()
     bridge_test_active = (
-        "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt).upper()
+        any(marker in _bridge_prompt_upper for marker in (
+            "TRANSACTIONAL BRIDGE ISOLATION",
+            "BRIDGE_RUNTIME_AUDIT",
+            "BRIDGE_CONTROL_RECORD_REDACTED",
+        ))
         or bool(bridge_controls)
     )
+    # FINAL runtime closure is an explicit request-scoped audit mode.  Keep the
+    # legacy TRANSACTIONAL BRIDGE ISOLATION compatibility tests application-owned,
+    # but also recognize the production BRIDGE_RUNTIME_AUDIT scenario used by the
+    # final two-Request regression.
     strict_live_bridge = bool(
-        bridge_test_active and "FINAL RUNTIME CLOSURE TEST" in str(user_prompt).upper()
+        bridge_test_active
+        and any(marker in _bridge_prompt_upper for marker in (
+            "FINAL RUNTIME CLOSURE TEST",
+            "BRIDGE_RUNTIME_AUDIT",
+            "BRIDGE_CONTROL_RECORD_REDACTED",
+        ))
     )
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
@@ -1735,8 +1749,6 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 allow_bridge_result_key=bool(strict_live_bridge and seat.key == "deepseek"),
             )
             bridge.record_provider_input(seat, provider_prompt)
-            if strict_live_bridge and seat.key == "gemini":
-                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
@@ -1746,6 +1758,19 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             result["dispatch_reason"] = "READY_FREE_MODEL"
             result["dispatch_accepted"] = True
             result["dispatch_gate"] = "HOTFIX132"
+            # FINAL CLOSURE P0: TARGET_DISPATCH is runtime evidence only after the
+            # actual provider call returns.  Recording it before call_seat() would
+            # turn a pre-dispatch gate decision into false transport evidence.
+            if strict_live_bridge and seat.key == "gemini":
+                target_execution_proven, target_execution_reason = _actual_execution_proven(
+                    result, request_id, round_no, seat.key
+                )
+                target_dispatch_status = "ACCEPTED" if result.get("dispatch_accepted") is True else "REJECTED"
+                bridge._record_bridge_event(
+                    "TARGET_DISPATCH", seat=2, provider="Gemini", status=target_dispatch_status
+                )
+                result["execution_proof"] = "PROVEN" if target_execution_proven else "NOT_PROVEN"
+                result["execution_proof_reason"] = target_execution_reason
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
                 # Authoritative cascade identity comes from the actual API-attempt
@@ -1759,7 +1784,15 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # Capture the exact prompt actually built by the provider runtime,
             # then remove the transient audit field before any history/UI path.
             if strict_live_bridge and seat.key == "gemini":
-                bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status=str(result.get("status") or ""))
+                target_execution_proven = str(result.get("execution_proof") or "").upper() == "PROVEN"
+                target_response_status = (
+                    "SUCCESS"
+                    if str(result.get("status") or "").upper() == "SUCCESS" and target_execution_proven
+                    else (str(result.get("status") or "PROVIDER_ERROR").upper() or "PROVIDER_ERROR")
+                )
+                bridge._record_bridge_event(
+                    "TARGET_RESPONSE", seat=2, provider="Gemini", status=target_response_status
+                )
             actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
             runtime_attestation = result.pop("_runtime_payload_attestation", {}) if isinstance(result, dict) else {}
             bridge.record_provider_input(seat, actual_provider_prompt or provider_prompt)
@@ -1842,6 +1875,13 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 bridge.abort("SOURCE_EXECUTION_EXCEPTION")
                 failure["execution_proof"] = "NOT_PROVEN"
                 failure["execution_proof_reason"] = exc.__class__.__name__
+            elif strict_live_bridge and seat.key == "gemini":
+                # Once the READY gate accepted the target, an exception inside
+                # call_seat() is an execution/provider failure.  Record both
+                # phases explicitly after the attempted provider call so the
+                # runtime ledger cannot claim a successful target transport.
+                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
+                bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status="PROVIDER_ERROR")
             results[seat.key] = failure
 
     for seat in seats:
