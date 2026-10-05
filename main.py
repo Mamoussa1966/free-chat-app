@@ -231,6 +231,30 @@ def _validate_bridge_provider_output(seat, result: dict) -> tuple[bool, str]:
     return True, "VALID"
 
 
+def _actual_execution_proven(result: dict, request_id: str, round_no: int, seat_key: str) -> tuple[bool, str]:
+    """Prove a provider execution from application runtime telemetry only."""
+    if not isinstance(result, dict):
+        return False, "RESULT_NOT_A_RECORD"
+    if str(result.get("status") or "").upper() != "SUCCESS":
+        return False, "RESULT_STATUS_NOT_SUCCESS"
+    executed_model = str(result.get("executed_model") or result.get("model") or "").strip()
+    attempted = {str(x).strip() for x in (result.get("attempted_models") or []) if str(x).strip()}
+    if not executed_model or executed_model not in attempted:
+        return False, "ACTUAL_MODEL_ATTEMPT_NOT_PROVEN"
+    events = result.get("runtime_execution_events") or []
+    expected_provider = str(seat_key or "").strip().lower()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if (bool(event.get("execution_started"))
+                and str(event.get("status") or "").upper() == "SUCCESS"
+                and str(event.get("request_id") or "") == str(request_id or "")
+                and int(event.get("round", 0) or 0) == int(round_no)
+                and str(event.get("provider") or "").strip().lower() == expected_provider):
+            return True, "LIVE_PROVIDER_RESULT"
+    return False, "EXECUTION_EVENT_NOT_PROVEN"
+
+
 class SharedContextBridge:
     """Transactional, round-scoped bridge with a prompt-safe read protocol.
 
@@ -240,7 +264,7 @@ class SharedContextBridge:
     request from committed Shared Context after the provider response.
     """
 
-    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000, request_id: str = "", round_no: int = 0, application_owned_test: bool = False):
+    def __init__(self, initial_snapshot: str = "", max_chars: int = 30_000, request_id: str = "", round_no: int = 0, application_owned_test: bool = False, strict_live_source: bool = False):
         self.max_chars = max(1, int(max_chars))
         self.request_id = str(request_id or "")
         self.round_no = int(round_no or 0)
@@ -248,6 +272,14 @@ class SharedContextBridge:
         # the diagnostic canary is created and controlled exclusively by the
         # application; provider prose is never authoritative for the transaction.
         self.application_owned_test = bool(application_owned_test)
+        # HOTFIX164.2: live transactional Bridge mode is opt-in for the final
+        # closure scenario. Legacy provider-free Bridge tests stay explicitly
+        # application-owned and do not acquire live-source requirements.
+        self.strict_live_source = bool(strict_live_source)
+        self._terminal_state = "OPEN"
+        self._terminal_reason = ""
+        self._source_execution_proven = None
+        self._source_execution_mode = "NOT_PROVEN"
         # HOTFIX163.4: one deterministic Bridge identity per logical Request.
         # A repeated construction of the same request/round must not mint a new
         # bridge identity; an empty request uses a unique probe identity.
@@ -304,8 +336,7 @@ class SharedContextBridge:
                 "Target-side READ, if required by the test, is resolved by the application after the provider response.\n"
                 f"Room seat: {sorted({int(r.get('source_seat', 0) or 0) for r in self._values.values()})[0] if self._values else 7}\n"
                 "Provider identity: DeepSeek\n"
-                f"bridge_id: {self.bridge_id}\n"
-                f"round_id: {self.round_no}"
+                "No Bridge ID, Bridge key, or Bridge value is present in this provider input."
             )
             base = (base + "\n\n" if base else "") + capability
         if str(getattr(target_seat, "key", "") or "") == "gemini":
@@ -377,6 +408,77 @@ class SharedContextBridge:
         return _sanitize_agent_prose(content, self.request_id, values)
 
 
+    def attest_source_execution(self, proven: bool, mode: str = "LIVE_PROVIDER_RESULT", reason: str = "") -> None:
+        self._source_execution_proven = bool(proven)
+        self._source_execution_mode = str(mode or "NOT_PROVEN")
+        if reason:
+            self._source_execution_reason = str(reason)
+        elif not hasattr(self, "_source_execution_reason"):
+            self._source_execution_reason = ""
+
+    def is_target_ready(self) -> bool:
+        return bool(
+            self._terminal_state == "COMMITTED"
+            and self._committed
+            and self._barrier_open
+            and "BRIDGE_RESULT" in self._values
+        )
+
+    def abort(self, reason: str = "BRIDGE_ABORTED") -> None:
+        """Move a pending Bridge to a terminal ABORTED state without dispatch or identity mutation."""
+        if self._terminal_state == "COMMITTED":
+            return
+        self._terminal_state = "ABORTED"
+        self._terminal_reason = str(reason or "BRIDGE_ABORTED")
+        self._committed = False
+        self._barrier_open = False
+        for trace in self.trace:
+            if trace.get("commit_status") == "PENDING":
+                trace["commit_status"] = "ABORTED"
+                trace["schema_validation"] = trace.get("schema_validation") or "PASS"
+        if not any(t.get("commit_status") == "ABORTED" and t.get("key") == "BRIDGE_RESULT" for t in self.trace):
+            self._record_trace(
+                source_seat=7, source_provider="DeepSeek", target_seat=2,
+                key="BRIDGE_RESULT", write_sequence=self._write_sequence,
+                commit_status="ABORTED", schema_validation="PASS",
+            )
+
+    def write_live_source_result(self, seat, result: dict) -> bool:
+        """Persist a live provider result as untrusted Bridge data, separate from test-control seeds."""
+        proven, reason = _actual_execution_proven(result, self.request_id, self.round_no, getattr(seat, "key", ""))
+        self.attest_source_execution(proven, "LIVE_PROVIDER_RESULT", reason if not proven else "")
+        if not proven:
+            return False
+        raw = str(result.get("content") or "").strip()
+        # Prefer an explicit machine-readable source write; otherwise the live
+        # provider's successful result itself is the bridge payload. Neither form
+        # is ever used for request/message/round identity or counters.
+        extracted = dict(_extract_bridge_writes(raw)).get("BRIDGE_RESULT", "") if _extract_bridge_writes(raw) else ""
+        value = str(extracted or raw).strip()[:2000]
+        if not value:
+            self.attest_source_execution(True, "LIVE_PROVIDER_RESULT", "SOURCE_RESULT_EMPTY")
+            return False
+        self._write_sequence += 1
+        self._source_values["BRIDGE_RESULT"] = value
+        self._values["BRIDGE_RESULT"] = {
+            "value": value, "source_seat": int(getattr(seat, "room_slot", 0) or 0),
+            "source_provider": str(getattr(seat, "name", "") or ""),
+            "write_sequence": self._write_sequence,
+            "write_origin": "PROVIDER_UNTRUSTED_DATA",
+        }
+        self._entries.append(
+            "BRIDGE WRITE RECORD (PROVIDER UNTRUSTED DATA):\n"
+            f"Source seat: {getattr(seat, 'room_slot', 0)}\n"
+            f"Source provider: {getattr(seat, 'name', 'AI')}\n"
+            f"Key: BRIDGE_RESULT\n"
+            "Value: [REDACTED_PROVIDER_BRIDGE_VALUE]"
+        )
+        self._record_trace(source_seat=int(getattr(seat, "room_slot", 0) or 0),
+                           source_provider=str(getattr(seat, "name", "") or ""),
+                           target_seat=2, key="BRIDGE_RESULT",
+                           write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
+        return True
+
     def seed_application_state(self, key: str, value: str, source: str = "APPLICATION_TEST_CONTROL", source_seat: int = 0) -> None:
         """Seed bridge state in the application-owned control plane; never expose it to prompts.
 
@@ -404,6 +506,7 @@ class SharedContextBridge:
             "request_id": self.request_id, "round_id": self.round_no, "bridge_id": self.bridge_id,
             "values": copy.deepcopy(self._values), "committed": bool(self._committed),
             "barrier_open": bool(self._barrier_open), "trace": copy.deepcopy(self.trace),
+            "terminal_state": self._terminal_state, "terminal_reason": self._terminal_reason,
         }
 
 
@@ -507,7 +610,18 @@ class SharedContextBridge:
     def commit(self, target_seat=None) -> None:
         """Commit the pending write transaction and bind its intended target seat."""
         target_slot = int(getattr(target_seat, "room_slot", 0) or 0) if target_seat else 0
+        if self._terminal_state != "OPEN":
+            raise RuntimeError("Bridge is already terminal")
+        record = self._values.get("BRIDGE_RESULT") or {}
+        if self.strict_live_source:
+            if record.get("write_origin") != "PROVIDER_UNTRUSTED_DATA" or self._source_execution_proven is not True:
+                raise RuntimeError("Bridge commit requires proven live source execution")
+        elif self.application_owned_test:
+            if self._source_execution_proven is False:
+                raise RuntimeError("Bridge commit rejected by failed application-test attestation")
         self._committed = True
+        self._terminal_state = "COMMITTED"
+        self._terminal_reason = ""
         for trace in self.trace:
             if trace["commit_status"] == "PENDING":
                 trace["commit_status"] = "COMMITTED"
@@ -515,7 +629,7 @@ class SharedContextBridge:
                     trace["target_seat"] = target_slot
 
     def barrier(self) -> None:
-        if not self._committed:
+        if self._terminal_state != "COMMITTED" or not self._committed:
             raise RuntimeError("Bridge barrier reached before commit")
         self._barrier_open = True
 
@@ -562,7 +676,14 @@ class SharedContextBridge:
         target_value_outside_sanitized = target_payload_has
         target_value = str(read.get("value")) if read else ""
         application_owned = bool(record and record.get("write_origin") == "APPLICATION_TEST_CONTROL")
-        source_ok = bool(record and int(record.get("source_seat", 0)) == int(source_seat) and (not self.application_owned_test or application_owned))
+        source_ok = bool(
+            record and int(record.get("source_seat", 0)) == int(source_seat)
+            and (
+                (self.strict_live_source and record.get("write_origin") == "PROVIDER_UNTRUSTED_DATA" and self._source_execution_proven is True)
+                or (not self.strict_live_source and self.application_owned_test and application_owned and self._source_execution_proven is not False)
+                or (not self.strict_live_source and not self.application_owned_test)
+            )
+        )
         target_ok = bool(read and int(read.get("target_seat", 0)) == int(target_seat))
         runtime_attestation_present = bool(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256"))
         runtime_payload_is_sanitized = runtime_attestation_present and not target_value_outside_sanitized and not target_key_has
@@ -587,6 +708,10 @@ class SharedContextBridge:
             "USER_PROMPT_CONTAINS_VALUE": user_isolation,
             "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": gemini_isolation,
             "BRIDGE_STATE_CONTAINS_VALUE": bridge_state,
+            "SOURCE_EXECUTION_PROVEN": "PASS" if self._source_execution_proven is True else "FAIL" if self._source_execution_proven is False else "NOT_PROVEN",
+            "BRIDGE_SOURCE_PROVENANCE": str(self._source_execution_mode or "NOT_PROVEN"),
+            "TERMINAL_STATE": self._terminal_state,
+            "TERMINAL_REASON": self._terminal_reason,
             "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES" if runtime_attestation_present else "NO",
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": ("NO" if not target_value_outside_sanitized else "YES") if runtime_attestation_present else "NOT_PROVEN",
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": ("NO" if not target_key_has else "YES") if runtime_attestation_present else "NOT_PROVEN",
@@ -1209,7 +1334,7 @@ def _provider_identity_matches(seat_key: str, executed_model: str, reported_mode
     return reported_model.lower() == executed_model.lower()
 
 
-def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls: list[tuple[str, str]] | None = None) -> None:
+def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls: list[tuple[str, str]] | None = None, allow_bridge_result_key: bool = False) -> None:
     """HOTFIX132: validate the *actual provider input*, not the user's diagnostic instructions.
 
     The previous implementation concatenated ``prompt`` with ``provider_prompt``.
@@ -1219,7 +1344,7 @@ def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls
     prompt is subject to the no-leak invariant.
     """
     provider_text = str(provider_prompt or "")
-    if re.search(r"(?i)\bBRIDGE_RESULT\b", provider_text):
+    if not allow_bridge_result_key and re.search(r"(?i)\bBRIDGE_RESULT\b", provider_text):
         raise RuntimeError("BRIDGE_RESULT leaked into provider-layer prompt")
     for key, value in (bridge_controls or []):
         key_text = str(key or "").strip()
@@ -1277,6 +1402,7 @@ def hotfix1634_bridge_boundary_self_test() -> dict:
     )
     canary = "HOTFIX1634_BRIDGE_PROBE_APPLICATION_OWNED"
     bridge.seed_application_state("BRIDGE_RESULT", canary, source="DeepSeek", source_seat=7)
+    bridge.attest_source_execution(True, "APPLICATION_TEST_CONTROL")
     pre_commit_prompt = bridge.prompt_snapshot(gemini)
     bridge.commit(gemini)
     bridge.barrier()
@@ -1369,27 +1495,23 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt).upper()
         or bool(bridge_controls)
     )
+    strict_live_bridge = bool(
+        bridge_test_active and "FINAL RUNTIME CLOSURE TEST" in str(user_prompt).upper()
+    )
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
         request_id=request_id,
         round_no=round_no,
-        application_owned_test=bridge_test_active,
+        application_owned_test=bool(bridge_test_active and not strict_live_bridge),
+        strict_live_source=strict_live_bridge,
     )
-    # HOTFIX123 Bridge/Security deterministic test boundary. For the explicit
-    # Transactional Bridge diagnostic, the application owns the canary value and
-    # binds it to the logical DeepSeek source seat. The canary is never copied into
-    # the user prompt or Gemini input, and its origin is recorded as application test
-    # control so the audit cannot misattribute model prose as authoritative state.
-    if bridge_test_active:
-        # HOTFIX124: always create the diagnostic canary from application-owned
-        # runtime state. Activation no longer depends on a second brittle phrase
-        # or on a user-supplied BRIDGE_RESULT value.
+    # Legacy Bridge-only diagnostics keep their application-owned canary. The
+    # final runtime-closure scenario uses a live provider result instead.
+    if bridge_test_active and not strict_live_bridge:
         bridge.seed_application_state(
-            "BRIDGE_RESULT",
-            f"HOTFIX124_BRIDGE_RUNTIME_{uuid.uuid4().hex}",
-            source="DeepSeek",
-            source_seat=7,
+            "BRIDGE_RESULT", f"HOTFIX124_BRIDGE_RUNTIME_{uuid.uuid4().hex}",
+            source="DeepSeek", source_seat=7,
         )
 
     # HOTFIX125: explicit bridge controls are meaningful only inside the
@@ -1438,6 +1560,25 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 "execution_claim": f"{request_id}:{round_no}:{seat.key}",
             }
             continue
+        # FINAL CLOSURE P0: target execution is not independent of Bridge readiness.
+        # Never dispatch Gemini while the DeepSeek source transaction is uncommitted.
+        if strict_live_bridge and seat.key == "gemini" and not bridge.is_target_ready():
+            bridge.abort(bridge._terminal_reason or "BRIDGE_SOURCE_NOT_READY") if bridge._terminal_state == "OPEN" else None
+            results[seat.key] = {
+                "seat": seat.key, "name": seat.name, "label": seat.label,
+                "status": "BRIDGE_NOT_READY", "classification": "BRIDGE_NOT_READY",
+                "dispatch_decision": "DISPATCH_SUPPRESSED",
+                "dispatch_reason": "BRIDGE_SOURCE_NOT_COMMITTED",
+                "dispatch_accepted": False, "dispatch_gate": "HOTFIX164.2",
+                "mode": "internal", "model": "", "executed_model": "", "content": "",
+                "attempt_summaries": [], "attempt_telemetry": [], "attempted_models": [],
+                "official_authenticated": False, "execution_started": False,
+                "runtime_execution_events": [], "request_id": request_id, "round": round_no,
+                "request_routed": False, "model_candidates_configured": bool(model_candidates.get(seat.key)),
+                "execution_id": execution_id,
+                "execution_claim": f"{request_id}:{round_no}:{seat.key}",
+            }
+            continue
         try:
             # HOTFIX132: dispatch is accepted before entering the Provider Execution Contract.
             # Provider/API failures after this point are execution outcomes, never dispatch failures.
@@ -1451,12 +1592,20 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # The resolved value remains application-owned and is never injected
             # into the Gemini prompt or HTTP payload.
             provider_prompt = bridge.prompt_snapshot(seat)
+            if strict_live_bridge and seat.key == "deepseek":
+                provider_prompt = (provider_prompt + "\n\n" if provider_prompt else "") + (
+                    "BRIDGE SOURCE HANDOFF: after a successful execution, return the source result. "
+                    "The application will record it as untrusted BRIDGE_RESULT data. Do not emit Bridge ID."
+                )
             working_context = provider_prompt
             # HOTFIX127: configuration/routing are separate from execution.
             # This records only booleans; credentials themselves never enter state.
             result_request_routed = bool(credentials.get(seat.key) and model_candidates.get(seat.key))
             provider_user_prompt = bridge.sanitize_user_prompt(user_prompt, seat)
-            _assert_provider_boundary(provider_user_prompt, provider_prompt, bridge_controls)
+            _assert_provider_boundary(
+                provider_user_prompt, provider_prompt, bridge_controls,
+                allow_bridge_result_key=bool(strict_live_bridge and seat.key == "deepseek"),
+            )
             bridge.record_provider_input(seat, provider_prompt)
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
@@ -1500,12 +1649,19 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # introduce a Request ID/status/result row or expose bridge values.
             result["content"] = bridge.sanitize_agent_prose(result.get("content", ""))
             if seat.key == "deepseek":
-                # Seat 7 is the source and Seat 2 is the explicit read target
-                # for the transactional bridge test. Commit and open the
-                # handoff barrier before Gemini is invoked.
                 gemini_target = by_key.get("gemini")
-                bridge.commit(gemini_target)
-                bridge.barrier()
+                if strict_live_bridge:
+                    proven, proof_reason = _actual_execution_proven(result, request_id, round_no, seat.key)
+                    result["execution_proof"] = "PROVEN" if proven else "NOT_PROVEN"
+                    result["execution_proof_reason"] = proof_reason
+                    if not proven or not bridge.write_live_source_result(seat, result):
+                        bridge.abort("SOURCE_EXECUTION_NOT_PROVEN" if not proven else "SOURCE_BRIDGE_WRITE_FAILED")
+                    else:
+                        bridge.commit(gemini_target)
+                        bridge.barrier()
+                else:
+                    bridge.commit(gemini_target)
+                    bridge.barrier()
             else:
                 resolution = bridge.consume_read_requests(seat, result)
                 result["bridge_read_status"] = (
@@ -1546,6 +1702,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 "execution_id": execution_id,
                 "execution_claim": f"{request_id}:{round_no}:{seat.key}",
             }
+            if strict_live_bridge and seat.key == "deepseek":
+                bridge.abort("SOURCE_EXECUTION_EXCEPTION")
+                failure["execution_proof"] = "NOT_PROVEN"
+                failure["execution_proof_reason"] = exc.__class__.__name__
             results[seat.key] = failure
 
     for seat in seats:
