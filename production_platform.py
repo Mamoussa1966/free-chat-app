@@ -689,6 +689,87 @@ def provider_health_snapshot(seats: list[Any], credentials: dict[str, Any], mode
     return rows
 
 
+def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: dict[str, Any]) -> bool:
+    """Validate strict live Bridge proof from the application-owned evidence store only.
+
+    HOTFIX164.9 intentionally stopped copying Bridge proof into provider result rows.
+    The security audit must therefore validate the separate evidence ledger instead
+    of treating the absence of a legacy result-side audit as an isolation failure.
+    """
+    rid = str(request_record.get("request_id") or "").strip()
+    if not rid:
+        return False
+    store = chat.get("bridge_runtime_evidence_store")
+    if not isinstance(store, dict):
+        return False
+    evidence = store.get(rid)
+    if not isinstance(evidence, dict) or str(evidence.get("request_id") or "") != rid:
+        return False
+
+    canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    rounds = canonical.get("rounds") if isinstance(canonical.get("rounds"), list) else []
+    if not _canonical_round_binding(rounds, rid, evidence):
+        return False
+
+    required_equal = {
+        "source_execution_proven": "PASS",
+        "bridge_state_contains_value": "YES",
+        "write_status": "PASS",
+        "validate_status": "PASS",
+        "commit_status": "PASS",
+        "barrier_status": "PASS",
+        "target_dispatch_status": "PASS",
+        "target_response_status": "PASS",
+        "read_status": "PASS",
+        "schema_validation_status": "PASS",
+        "match_status": "PASS",
+        "user_prompt_contains_value": "NO",
+        "gemini_input_prompt_contains_value": "NO",
+        "runtime_http_payload_attested": "YES",
+        "runtime_http_payload_contains_value": "NO",
+        "runtime_http_payload_contains_bridge_key": "NO",
+        "gemini_received_sanitized_representation_only": "PASS",
+        "runtime_sequence_valid": "PASS",
+        "application_owned": "PASS",
+        "bridge_gate_status": "PASS",
+        "terminal_state": "COMMITTED",
+        "bridge_state_terminal": "COMMITTED",
+    }
+    if any(evidence.get(field) != expected for field, expected in required_equal.items()):
+        return False
+    if not str(evidence.get("bridge_id_hash") or "").strip():
+        return False
+    # In strict live mode, the source WRITE and target READ are the only two
+    # Bridge trace records. Reject duplicate writes, synthetic seeds, and reads
+    # that are not represented by the sealed request-bound runtime sequence.
+    try:
+        if int(evidence.get("bridge_trace_count") or 0) != 2:
+            return False
+        ordinal = int(evidence.get("round_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    phases = [
+        "SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
+        "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH",
+    ]
+    events = evidence.get("runtime_sequence")
+    if not isinstance(events, list) or [str(e.get("phase") or "") for e in events if isinstance(e, dict)] != phases:
+        return False
+    if len(events) != len(phases):
+        return False
+    expected_statuses = ["SUCCESS", "RECORDED", "PASS", "PASS", "PASS", "ACCEPTED", "SUCCESS", "PASS", "PASS"]
+    for idx, (event, phase, status) in enumerate(zip(events, phases, expected_statuses), start=1):
+        if not isinstance(event, dict):
+            return False
+        if (event.get("seq") != idx
+                or str(event.get("phase") or "") != phase
+                or str(event.get("request_id") or "") != rid
+                or str(event.get("round_id") or "") != str(ordinal)
+                or str(event.get("status") or "") != status):
+            return False
+    return ordinal > 0
+
+
 def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
     checks = {
         "NO_CREDENTIALS_IN_CHAT_STATE": True,
@@ -702,8 +783,10 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
         # of truth. Agent prose is presentation-only and cannot fail this gate by
         # merely containing a conflicting identity label.
         "PROSE_ISOLATION_AUTHORITATIVE_GATE": True,
+        "STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE": True,
     }
     for chat in chats or []:
+        strict_bridge_hashes: list[str] = []
         raw = json.dumps(chat, ensure_ascii=False, default=str)
         if re.search(r"(?i)(api[_ -]?key|authorization|x-api-key|x-goog-api-key)\s*[:=]", raw):
             checks["NO_CREDENTIALS_IN_CHAT_STATE"] = False
@@ -735,6 +818,22 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
             if not isinstance(record, dict):
                 continue
             requested = bool(record.get("bridge_test_requested"))
+            strict_live = str(record.get("bridge_runtime_contract") or "") == "STRICT_LIVE"
+            if requested and strict_live:
+                # HOTFIX164.9 stores proof in an Application-Owned ledger, not
+                # in provider result rows. Validate that ledger directly and fail
+                # closed if it is missing, stale, unbound, or incomplete.
+                complete = _strict_live_bridge_evidence_complete(chat, record)
+                if not complete:
+                    checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
+                    checks["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] = False
+                else:
+                    store = chat.get("bridge_runtime_evidence_store")
+                    evidence = store.get(str(record.get("request_id") or "")) if isinstance(store, dict) else None
+                    bridge_hash = str((evidence or {}).get("bridge_id_hash") or "").strip()
+                    if bridge_hash:
+                        strict_bridge_hashes.append(bridge_hash)
+                continue
             audits = [
                 result.get("bridge_transaction_audit")
                 for result in (record.get("results") if isinstance(record.get("results"), list) else [])
@@ -750,6 +849,10 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
                 if any(audit.get(k) != "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH")):
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
+
+        if len(strict_bridge_hashes) != len(set(strict_bridge_hashes)):
+            checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
+            checks["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] = False
 
         # HOTFIX144: verify authoritative identity from persisted application-owned
         # request records and runtime execution events only. Never inspect agent prose

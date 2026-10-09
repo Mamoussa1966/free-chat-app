@@ -686,7 +686,7 @@ class SharedContextBridge:
             f"Executed model: {model}\n"
             f"Output:\n{content}"
         )
-        # HOTFIX164.9: strict live mode admits exactly one source write, through
+        # HOTFIX164.10: strict live mode admits exactly one source write, through
         # write_live_source_result() after the actual DeepSeek execution is proven.
         # Provider prose may still be included as untrusted context, but it cannot
         # create or duplicate application-owned lifecycle writes in this mode.

@@ -1,0 +1,35 @@
+{
+  "release": "HOTFIX164.10_STRICT_BRIDGE_SECURITY_AUDIT_INTEGRATION",
+  "baseline_archive": "HOTFIX164.9_FINAL_RUNTIME_BRIDGE_EVIDENCE_CLOSURE.zip",
+  "frozen_provider_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "scope": "STRICT_LIVE_APPLICATION_OWNED_BRIDGE_SECURITY_AUDIT_INTEGRATION",
+  "key_files": [
+    "production_platform.py",
+    "providers.py",
+    "main.py",
+    "conversation_store.py",
+    "tests/test_hotfix16410_strict_bridge_security_audit.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py"
+  ],
+  "required_strict_sequence": [
+    "SOURCE_EXECUTION",
+    "WRITE",
+    "VALIDATE",
+    "COMMIT",
+    "BARRIER",
+    "TARGET_DISPATCH",
+    "TARGET_RESPONSE",
+    "READ",
+    "MATCH"
+  ],
+  "fail_closed_when_evidence_missing": true,
+  "raw_bridge_value_exported": false,
+  "raw_http_payload_exported": false,
+  "live_deployment_closure_claimed": false,
+  "strict_security_audit_source": "bridge_runtime_evidence_store",
+  "strict_bridge_fail_closed_when_missing_or_incomplete": true,
+  "strict_bridge_requires_canonical_round_binding": true,
+  "strict_bridge_requires_exact_runtime_sequence": true,
+  "strict_bridge_identity_isolation_checked": true,
+  "version_txt_changed": false
+}
