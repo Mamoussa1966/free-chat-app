@@ -70,7 +70,7 @@ def test_hotfix1642_final_runtime_source_precedes_target(monkeypatch):
         return _runtime_success(seat, request_id, round_no, "DEEPSEEK_LIVE_BRIDGE_VALUE" if seat.key=="deepseek" else "target response")
     monkeypatch.setattr(main,"get_seats",lambda:(ds,gem))
     monkeypatch.setattr(main,"call_seat",fake_call)
-    chat={"conversation_id":"c","session_id":"s","messages":[],"conversation_record":{"messages":[],"requests":[],"rounds":[]}}
+    chat={"conversation_id":"c","session_id":"s","messages":[],"conversation_record":{"messages":[],"requests":[],"rounds":[{"round_id":"c:rid:r1","request_id":"rid","round_number":1,"ordinal":1}]}}
     out=main._run_round("FINAL RUNTIME CLOSURE TEST\nTRANSACTIONAL BRIDGE ISOLATION",chat,1,{"deepseek":"k","gemini":"k"},[],{"deepseek":("deepseek-flash",),"gemini":("gemini-3.8-flash",)},"m",None,"rid")
     by={x["seat"]:x for x in out}
     assert calls == [("deepseek",True),("gemini",False)]
@@ -101,7 +101,7 @@ def test_hotfix1642_final_runtime_source_not_executed_suppresses_target(monkeypa
         raise AssertionError("Gemini must not dispatch")
     monkeypatch.setattr(main,"get_seats",lambda:(ds,gem))
     monkeypatch.setattr(main,"call_seat",fake_call)
-    chat={"conversation_id":"c","session_id":"s","messages":[],"conversation_record":{"messages":[],"requests":[],"rounds":[]}}
+    chat={"conversation_id":"c","session_id":"s","messages":[],"conversation_record":{"messages":[],"requests":[],"rounds":[{"round_id":"c:rid:r1","request_id":"rid","round_number":1,"ordinal":1}]}}
     out=main._run_round("FINAL RUNTIME CLOSURE TEST\nTRANSACTIONAL BRIDGE ISOLATION",chat,1,{"deepseek":"k","gemini":"k"},[],{"deepseek":("deepseek-flash",),"gemini":("gemini-3.8-flash",)},"m",None,"rid")
     assert calls == ["deepseek"]
     by={x["seat"]:x for x in out}
