@@ -877,20 +877,56 @@ def append_once(rows: list, row: dict, identity_keys: tuple[str, ...]) -> None:
 def authoritative_snapshot(chat: dict) -> dict:
     ensure_store(chat)
     rec = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    # HOTFIX164.9: include only the sanitized application-owned runtime evidence
+    # projection. Raw values, Bridge IDs, HTTP bodies, and provider payloads never
+    # enter the export. An absent runtime record remains absent (NOT_PROVEN).
+    safe_bridge_fields = {
+        "schema", "request_id", "round_id", "canonical_round_id", "bridge_id_hash", "bridge_id",
+        "source_execution_proven", "bridge_state_contains_value", "write_status",
+        "validate_status", "commit_status", "barrier_status", "target_dispatch_status",
+        "target_response_status", "read_status", "schema_validation_status", "match_status",
+        "user_prompt_contains_value", "gemini_input_prompt_contains_value",
+        "runtime_http_payload_attested", "runtime_http_payload_contains_value",
+        "runtime_http_payload_contains_bridge_key", "gemini_received_sanitized_representation_only",
+        "terminal_state", "terminal_reason", "runtime_sequence", "runtime_sequence_valid",
+        "application_owned", "audit_seal_hash", "bridge_gate_status",
+        "bridge_state_terminal", "bridge_trace_count",
+    }
+    runtime_store = chat.get("bridge_runtime_evidence_store", {})
+    safe_runtime_store = {}
+    if isinstance(runtime_store, dict):
+        for rid, evidence in runtime_store.items():
+            if not isinstance(evidence, dict) or str(evidence.get("request_id") or "") != str(rid):
+                continue
+            safe = {k: copy.deepcopy(v) for k, v in evidence.items() if k in safe_bridge_fields}
+            # Raw Bridge ID is never needed outside the runtime; only its hash is exported.
+            safe["bridge_id"] = "[REDACTED]"
+            if isinstance(safe.get("runtime_sequence"), list):
+                safe["runtime_sequence"] = [
+                    {k: copy.deepcopy(v) for k, v in e.items()
+                     if isinstance(e, dict) and k in {"seq", "phase", "request_id", "round_id", "seat", "provider", "status", "model", "write_sequence", "read_sequence", "target_seat"}}
+                    for e in safe["runtime_sequence"] if isinstance(e, dict)
+                ]
+            safe_runtime_store[str(rid)] = safe
+    canonical_rounds = copy.deepcopy(rec.get("rounds", []))
+    projection_rounds = copy.deepcopy(chat.get("round_ledger_v24", []))
+    if not projection_rounds and canonical_rounds:
+        projection_rounds = copy.deepcopy(canonical_rounds)
     return {
         "schema": SCHEMA_VERSION,
         "conversation_id": chat.get("conversation_id"),
         "session_id": chat.get("session_id"),
         # Preserve HOTFIX145/V24 snapshot contract.
         "messages": copy.deepcopy(chat.get("message_ledger_v24", [])),
-        "rounds": copy.deepcopy(chat.get("round_ledger_v24", [])),
+        "rounds": projection_rounds,
         "requests": copy.deepcopy(chat.get("request_ledger_v24", [])),
         "canonical_conversation_record": {
             "messages": copy.deepcopy(rec.get("messages", [])),
             "requests": copy.deepcopy(rec.get("requests", [])),
-            "rounds": copy.deepcopy(rec.get("rounds", [])),
+            "rounds": canonical_rounds,
         },
         "bridges": copy.deepcopy(chat.get("bridge_ledger_v24", [])),
+        "bridge_runtime_evidence_store": safe_runtime_store,
         "results": copy.deepcopy(chat.get("result_ledger_v24", [])),
         "provenance": copy.deepcopy(chat.get("provenance_ledger_v24", [])),
         "timeline": copy.deepcopy(chat.get("timeline_ledger_v24", [])),
