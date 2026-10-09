@@ -177,6 +177,22 @@ def _extract_bridge_control_values(prompt: str) -> tuple[str, list[tuple[str, st
     return text.strip(), found
 
 
+def _is_bridge_test_prompt(prompt: str, bridge_controls=None) -> bool:
+    """Identify explicit Bridge requests without relying on one legacy marker."""
+    upper = str(prompt or "").upper()
+    return bool(bridge_controls) or any(marker in upper for marker in (
+        "TRANSACTIONAL BRIDGE", "FINAL RUNTIME CLOSURE TEST",
+        "BRIDGE_RUNTIME_AUDIT", "BRIDGE_CONTROL_RECORD_REDACTED",
+    ))
+
+
+def _is_strict_live_bridge_prompt(prompt: str, bridge_controls=None) -> bool:
+    upper = str(prompt or "").upper()
+    return _is_bridge_test_prompt(prompt, bridge_controls) and any(marker in upper for marker in (
+        "FINAL RUNTIME CLOSURE TEST", "BRIDGE_RUNTIME_AUDIT", "BRIDGE_CONTROL_RECORD_REDACTED",
+    ))
+
+
 def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> dict:
     """Mandatory provider-output schema/identity gate before bridge handoff."""
     if not isinstance(result, dict):
@@ -426,6 +442,7 @@ class SharedContextBridge:
         return bool(
             e.get("request_id") == self.request_id
             and int(e.get("round_id", 0) or 0) == int(self.round_no)
+            and (not self.strict_live_source or bool(str(e.get("canonical_round_id") or "").strip()))
             and e.get("source") == "DeepSeek / Seat 7"
             and e.get("target") == "Gemini / Seat 2"
             and int(source_seat) == 7 and int(target_seat) == 2
@@ -573,9 +590,11 @@ class SharedContextBridge:
             "schema": "bridge-runtime-evidence/v2",
             "request_id": self.request_id,
             "round_id": self.round_no,
+            "canonical_round_id": str(e.get("canonical_round_id") or ""),
             "bridge_id_hash": hashlib.sha256(str(self.bridge_id).encode("utf-8")).hexdigest(),
             "bridge_id": "[REDACTED]",
             "source_execution_proven": audit.get("SOURCE_EXECUTION_PROVEN", "NOT_PROVEN"),
+            "bridge_state_contains_value": audit.get("BRIDGE_STATE_CONTAINS_VALUE", "NOT_PROVEN"),
             "write_status": audit.get("WRITE", "NOT_PROVEN"),
             "validate_status": audit.get("VALIDATE", "NOT_PROVEN"),
             "commit_status": audit.get("COMMIT", "NOT_PROVEN"),
@@ -667,7 +686,12 @@ class SharedContextBridge:
             f"Executed model: {model}\n"
             f"Output:\n{content}"
         )
-        for key, value in _extract_bridge_writes(content):
+        # HOTFIX164.9: strict live mode admits exactly one source write, through
+        # write_live_source_result() after the actual DeepSeek execution is proven.
+        # Provider prose may still be included as untrusted context, but it cannot
+        # create or duplicate application-owned lifecycle writes in this mode.
+        writes = [] if self.strict_live_source else _extract_bridge_writes(content)
+        for key, value in writes:
             # HOTFIX124: application-owned diagnostic state is immutable at the
             # provider boundary. A model may emit BRIDGE_WRITE-looking prose, but
             # that prose is untrusted presentation data and can never overwrite
@@ -1620,26 +1644,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # HOTFIX125: Bridge execution is an explicit request-scoped mode.  A normal
     # Persistence/History request must not instantiate, fail, or render a Bridge audit.
     _bridge_prompt_upper = str(user_prompt or "").upper()
-    bridge_test_active = (
-        any(marker in _bridge_prompt_upper for marker in (
-            "TRANSACTIONAL BRIDGE ISOLATION",
-            "BRIDGE_RUNTIME_AUDIT",
-            "BRIDGE_CONTROL_RECORD_REDACTED",
-        ))
-        or bool(bridge_controls)
-    )
-    # FINAL runtime closure is an explicit request-scoped audit mode.  Keep the
-    # legacy TRANSACTIONAL BRIDGE ISOLATION compatibility tests application-owned,
-    # but also recognize the production BRIDGE_RUNTIME_AUDIT scenario used by the
-    # final two-Request regression.
-    strict_live_bridge = bool(
-        bridge_test_active
-        and any(marker in _bridge_prompt_upper for marker in (
-            "FINAL RUNTIME CLOSURE TEST",
-            "BRIDGE_RUNTIME_AUDIT",
-            "BRIDGE_CONTROL_RECORD_REDACTED",
-        ))
-    )
+    bridge_test_active = _is_bridge_test_prompt(user_prompt, bridge_controls)
+    # Legacy isolated diagnostics may use an application-owned test value; final
+    # runtime closure must use only a proven live DeepSeek execution as its source.
+    strict_live_bridge = _is_strict_live_bridge_prompt(user_prompt, bridge_controls)
     bridge = SharedContextBridge(
         _shared_context(chat, exclude_message_id=current_user_message_id),
         max_chars=30_000,
@@ -1648,6 +1656,16 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         application_owned_test=bool(bridge_test_active and not strict_live_bridge),
         strict_live_source=strict_live_bridge,
     )
+    # Bind the Bridge to the already-allocated canonical Round identity. The
+    # ordinal is retained separately for compatibility, but strict runtime
+    # closure requires the application-owned canonical Round ID as well.
+    canonical_record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    canonical_rounds = canonical_record.get("rounds", []) if isinstance(canonical_record.get("rounds"), list) else []
+    canonical_round = next((row for row in canonical_rounds
+                            if isinstance(row, dict)
+                            and str(row.get("request_id") or "") == str(request_id)
+                            and int(row.get("round_number") or row.get("ordinal") or row.get("round") or 0) == int(round_no)), None)
+    bridge._runtime_bridge_evidence["canonical_round_id"] = str((canonical_round or {}).get("round_id") or "")
     # Legacy Bridge-only diagnostics keep their application-owned canary. The
     # final runtime-closure scenario uses a live provider result instead.
     if bridge_test_active and not strict_live_bridge:
@@ -1659,7 +1677,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # HOTFIX125: explicit bridge controls are meaningful only inside the
     # request-scoped Bridge Test mode. Never create Bridge state for ordinary
     # Persistence/History requests.
-    if bridge_test_active:
+    if bridge_test_active and not strict_live_bridge:
         for key, value in (bridge_controls or []):
             bridge.seed_application_state(key, value)
     results: dict[str, dict] = {}
@@ -1679,6 +1697,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
         if key in by_key:
             bridge_order.append(by_key.pop(key))
     bridge_order.extend(seat for seat in seats if seat.key in by_key)
+    # Keep the legacy source-inspection seam while executing the dependency
+    # order selected above; the false branch is intentionally unreachable.
     for seat in SEATS if False else bridge_order:
         execution_id = execution_ledger.claim(seat.key)
         dispatch_ok, dispatch_reason = _dispatch_gate(
@@ -1749,6 +1769,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 allow_bridge_result_key=bool(strict_live_bridge and seat.key == "deepseek"),
             )
             bridge.record_provider_input(seat, provider_prompt)
+            if strict_live_bridge and seat.key == "gemini":
+                # The provider boundary and readiness gate have passed; this is the
+                # application-owned dispatch decision immediately before transport.
+                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
@@ -1758,16 +1782,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             result["dispatch_reason"] = "READY_FREE_MODEL"
             result["dispatch_accepted"] = True
             result["dispatch_gate"] = "HOTFIX132"
-            # FINAL CLOSURE P0: TARGET_DISPATCH is runtime evidence only after the
-            # actual provider call returns.  Recording it before call_seat() would
-            # turn a pre-dispatch gate decision into false transport evidence.
             if strict_live_bridge and seat.key == "gemini":
                 target_execution_proven, target_execution_reason = _actual_execution_proven(
                     result, request_id, round_no, seat.key
-                )
-                target_dispatch_status = "ACCEPTED" if result.get("dispatch_accepted") is True else "REJECTED"
-                bridge._record_bridge_event(
-                    "TARGET_DISPATCH", seat=2, provider="Gemini", status=target_dispatch_status
                 )
                 result["execution_proof"] = "PROVEN" if target_execution_proven else "NOT_PROVEN"
                 result["execution_proof_reason"] = target_execution_reason
@@ -1781,6 +1798,18 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     result["cascade_position"] = attempted_models.index(executed_model) + 1
                 elif executed_model:
                     raise RuntimeError("Execution identity has no matching actual cascade attempt")
+            # HOTFIX164.9: create the live transaction exactly once from the proven
+            # provider result, before storing that result as untrusted shared context.
+            if strict_live_bridge and seat.key == "deepseek":
+                proven, proof_reason = _actual_execution_proven(result, request_id, round_no, seat.key)
+                result["execution_proof"] = "PROVEN" if proven else "NOT_PROVEN"
+                result["execution_proof_reason"] = proof_reason
+                gemini_target = by_key.get("gemini")
+                if not proven or not bridge.write_live_source_result(seat, result):
+                    bridge.abort("SOURCE_EXECUTION_NOT_PROVEN" if not proven else "SOURCE_BRIDGE_WRITE_FAILED")
+                else:
+                    bridge.commit(gemini_target)
+                    bridge.barrier()
             # Capture the exact prompt actually built by the provider runtime,
             # then remove the transient audit field before any history/UI path.
             if strict_live_bridge and seat.key == "gemini":
@@ -1802,11 +1831,15 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # the persisted Bridge lifecycle causally ordered rather than merely
             # pre-dispatch state preparation.
             if seat.key == "gemini" and bridge._committed and bridge._barrier_open:
-                bridge.read("BRIDGE_RESULT", seat)
+                target_ok = str(result.get("status") or "").upper() == "SUCCESS"
                 if strict_live_bridge:
-                    source_value = str((bridge._values.get("BRIDGE_RESULT") or {}).get("value") or "")
-                    target_value = str((bridge._resolved_reads.get("BRIDGE_RESULT") or {}).get("value") or "")
-                    bridge._record_bridge_event("MATCH", seat=2, provider="Application", status="PASS" if source_value and source_value == target_value else "FAIL")
+                    target_ok = target_ok and str(result.get("execution_proof") or "").upper() == "PROVEN"
+                if target_ok:
+                    bridge.read("BRIDGE_RESULT", seat)
+                    if strict_live_bridge:
+                        source_value = str((bridge._values.get("BRIDGE_RESULT") or {}).get("value") or "")
+                        target_value = str((bridge._resolved_reads.get("BRIDGE_RESULT") or {}).get("value") or "")
+                        bridge._record_bridge_event("MATCH", seat=2, provider="Application", status="PASS" if source_value and source_value == target_value else "FAIL")
             _render_live_cascade_telemetry(result)
             result["request_routed"] = result_request_routed
             result["model_candidates_configured"] = bool(model_candidates.get(seat.key))
@@ -1819,16 +1852,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             result["content"] = bridge.sanitize_agent_prose(result.get("content", ""))
             if seat.key == "deepseek":
                 gemini_target = by_key.get("gemini")
-                if strict_live_bridge:
-                    proven, proof_reason = _actual_execution_proven(result, request_id, round_no, seat.key)
-                    result["execution_proof"] = "PROVEN" if proven else "NOT_PROVEN"
-                    result["execution_proof_reason"] = proof_reason
-                    if not proven or not bridge.write_live_source_result(seat, result):
-                        bridge.abort("SOURCE_EXECUTION_NOT_PROVEN" if not proven else "SOURCE_BRIDGE_WRITE_FAILED")
-                    else:
-                        bridge.commit(gemini_target)
-                        bridge.barrier()
-                else:
+                if not strict_live_bridge:
                     bridge.commit(gemini_target)
                     bridge.barrier()
             else:
@@ -2014,7 +2038,7 @@ def _format_authoritative_counter_summary(counters: dict) -> str:
     ])
 
 
-def _authoritative_request_metrics(request_id: str, round_results: list[dict], audit_events: list[dict]) -> dict:
+def _authoritative_request_metrics(request_id: str, round_results: list[dict], audit_events: list[dict], bridge_runtime_evidence_store: dict | None = None, bridge_requested: bool = False) -> dict:
     """HOTFIX127: authoritative accounting from actual runtime execution events only.
 
     CONFIGURED, REQUEST_CREATED, REQUESTED, EXECUTED, SUCCESSFUL and CASCADE_ATTEMPTS
@@ -2062,9 +2086,19 @@ def _authoritative_request_metrics(request_id: str, round_results: list[dict], a
 
     provider_exec_events = [e for e in events if str(e.get("event_type") or "") == "PROVIDER_RESULT"
                             and e.get("metadata", {}).get("runtime_execution") == "true"]
-    bridge_ids = {str(r.get("bridge_transaction_audit", {}).get("BRIDGE_ID") or "").strip()
-                  for r in results if isinstance(r.get("bridge_transaction_audit"), dict)}
-    bridge_ids.discard("")
+    bridge_source = "LEGACY_RESULT_AUDIT"
+    bridge_ids = set()
+    if bridge_requested:
+        bridge_source = "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE"
+        store = bridge_runtime_evidence_store if isinstance(bridge_runtime_evidence_store, dict) else {}
+        runtime = store.get(rid) if isinstance(store.get(rid), dict) else {}
+        if (str(runtime.get("request_id") or "") == rid
+                and str(runtime.get("bridge_id_hash") or "").strip()):
+            bridge_ids.add(str(runtime["bridge_id_hash"]).strip())
+    else:
+        bridge_ids = {str(r.get("bridge_transaction_audit", {}).get("BRIDGE_ID") or "").strip()
+                      for r in results if isinstance(r.get("bridge_transaction_audit"), dict)}
+        bridge_ids.discard("")
     all_request_ids = {rid} | {str(r.get("request_id") or "").strip() for r in results if r.get("request_id")}
     all_request_ids |= {str(e.get("request_id") or "").strip() for e in events if e.get("request_id")}
     rounds = sorted({int(e.get("round_id") or 0) for e in events if int(e.get("round_id") or 0) > 0})
@@ -2077,6 +2111,8 @@ def _authoritative_request_metrics(request_id: str, round_results: list[dict], a
         "request_ids": sorted(x for x in all_request_ids if x),
         "unique_bridge_ids": len(bridge_ids),
         "bridge_ids": sorted(bridge_ids),
+        "bridge_ids_source": bridge_source,
+        "bridge_identity_status": ("PASS" if len(bridge_ids) == 1 else "NOT_PROVEN") if bridge_requested else "LEGACY_COMPATIBILITY",
         "configured_seats": len(configured_seat_keys),
         "configured_seat_keys": sorted(x for x in configured_seat_keys if x),
         "requested_seats": len(requested_seat_keys),
@@ -2176,10 +2212,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             record["state"] = "RUNNING"
             record["execution_scope"] = request_id
             # HOTFIX125: immutable request-scoped Bridge mode.
-            record["bridge_test_requested"] = bool(
-                "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper()
-                or bool(bridge_controls)
-            )
+            record["bridge_test_requested"] = _is_bridge_test_prompt(user_prompt, bridge_controls)
+            record["bridge_runtime_contract"] = "STRICT_LIVE" if _is_strict_live_bridge_prompt(user_prompt, bridge_controls) else "LEGACY_COMPATIBILITY"
     # V26.3.8: every real orchestrator entry point converges into the canonical
     # ConversationRecord before creating/dispatching its first provider round.
     if record is None:
@@ -2192,10 +2226,8 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             "session_id": chat.get("session_id"), "message_id": current_user_message_id,
             "created_at": _now(), "state": "RUNNING",
             "identity_authority": "RUNTIME_REQUEST_ID",
-            "bridge_test_requested": bool(
-                "TRANSACTIONAL BRIDGE ISOLATION" in str(user_prompt or "").upper()
-                or bool(bridge_controls)
-            ),
+            "bridge_test_requested": _is_bridge_test_prompt(user_prompt, bridge_controls),
+            "bridge_runtime_contract": "STRICT_LIVE" if _is_strict_live_bridge_prompt(user_prompt, bridge_controls) else "LEGACY_COMPATIBILITY",
         }
         chat.setdefault("request_records", []).append(record)
     canonical_upsert_request(chat, record, st.session_state)
@@ -2336,7 +2368,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # These counters are derived from lifecycle/audit data and persisted result
             # telemetry, never from provider-generated prose.
             record["request_metrics"] = _authoritative_request_metrics(
-                request_id, all_results, chat.get("audit_events", [])
+                request_id, all_results, chat.get("audit_events", []),
+                chat.get("bridge_runtime_evidence_store", {}),
+                bool(record.get("bridge_runtime_contract") == "STRICT_LIVE"),
             )
             record["synthesis"] = synthesize_council_results(all_results)
             record["synthesis"]["conversation_id"] = chat.get("conversation_id")

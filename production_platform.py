@@ -43,6 +43,30 @@ def stable_message_id(request_id: str, role: str, ordinal: int) -> str:
     return hashlib.sha256(f"{request_id}:{role}:{ordinal}".encode()).hexdigest()[:24]
 
 
+def _canonical_round_binding(round_rows: list[Any], request_id: str, runtime: dict[str, Any]) -> bool:
+    """Fail closed unless strict Bridge evidence names the canonical Round for its Request."""
+    rid = str(request_id or "").strip()
+    canonical_round_id = str(runtime.get("canonical_round_id") or "").strip()
+    try:
+        runtime_ordinal = int(runtime.get("round_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if not rid or not canonical_round_id or runtime_ordinal <= 0:
+        return False
+    for row in round_rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            row_ordinal = int(row.get("ordinal") or row.get("round_number") or row.get("round") or 0)
+        except (TypeError, ValueError):
+            continue
+        if (str(row.get("request_id") or "") == rid
+                and str(row.get("round_id") or "") == canonical_round_id
+                and row_ordinal == runtime_ordinal):
+            return True
+    return False
+
+
 @dataclass
 class ConversationStore:
     """Session-owned persistence with deterministic export/import shape."""
@@ -166,6 +190,32 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
     record = next((r for r in records if str(r.get("request_id") or "") == rid), None) if rid else (records[-1] if records else None)
     canonical_request = next((r for r in canonical_requests if str(r.get("request_id") or "") == rid), None) if rid else (canonical_requests[-1] if canonical_requests else None)
     bridge_requested = bool(record and record.get("bridge_test_requested"))
+    strict_bridge_requested = bool(record and record.get("bridge_runtime_contract") == "STRICT_LIVE")
+    runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
+    runtime_bridge = runtime_store.get(rid) if rid and isinstance(runtime_store.get(rid), dict) else {}
+    canonical_round_bound = _canonical_round_binding(canonical_rounds, rid, runtime_bridge)
+    runtime_bridge_ok = bool(
+        runtime_bridge
+        and str(runtime_bridge.get("request_id") or "") == rid
+        and canonical_round_bound
+        and runtime_bridge.get("application_owned") == "PASS"
+        and runtime_bridge.get("runtime_sequence_valid") == "PASS"
+        and runtime_bridge.get("terminal_state") == "COMMITTED"
+        and runtime_bridge.get("bridge_state_terminal") == "COMMITTED"
+        and runtime_bridge.get("bridge_gate_status") == "PASS"
+        and runtime_bridge.get("bridge_state_contains_value") == "YES"
+        and all(runtime_bridge.get(key) == "PASS" for key in (
+            "source_execution_proven", "write_status", "validate_status", "commit_status",
+            "barrier_status", "target_dispatch_status", "target_response_status",
+            "read_status", "schema_validation_status", "match_status",
+        ))
+        and runtime_bridge.get("user_prompt_contains_value") == "NO"
+        and runtime_bridge.get("gemini_input_prompt_contains_value") == "NO"
+        and runtime_bridge.get("runtime_http_payload_attested") == "YES"
+        and runtime_bridge.get("runtime_http_payload_contains_value") == "NO"
+        and runtime_bridge.get("runtime_http_payload_contains_bridge_key") == "NO"
+        and runtime_bridge.get("gemini_received_sanitized_representation_only") == "PASS"
+    )
     required = {
         "SESSION_ID": bool(chat.get("id") or (canonical and canonical.get("session_id"))),
         "USER_MESSAGE": any(str(m.get("role") or "").lower() == "user" and str(m.get("message_id") or "").strip() for m in canonical_messages),
@@ -174,7 +224,7 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         "SEAT_RESULTS": bool(record and isinstance(record.get("results"), list)),
         "EXECUTED_MODELS": bool(record and isinstance(record.get("results"), list)),
         "CASCADE_SUMMARIES": bool(record and any(isinstance(r, dict) and (r.get("attempt_summaries") or r.get("attempt_telemetry")) for r in record.get("results", []))),
-        "BRIDGE_AUDIT": (bool(record and any(isinstance(r, dict) and r.get("bridge_transaction_audit") for r in record.get("results", []))) if bridge_requested else "NOT_REQUESTED"),
+        "BRIDGE_AUDIT": ((runtime_bridge_ok if strict_bridge_requested else bool(record and any(isinstance(r, dict) and r.get("bridge_transaction_audit") for r in record.get("results", [])))) if bridge_requested else "NOT_REQUESTED"),
         "FINAL_RESULT": bool(record and record.get("synthesis")),
         "AUTHORITATIVE_METRICS": bool(record and record.get("request_metrics")),
     }
@@ -279,9 +329,46 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
     seat_round_keys: list[tuple[str, int, str]] = []
     per_request: list[dict[str, Any]] = []
     contamination = False
+    bridge_runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
+    strict_bridge_proof_missing = False
+    canonical_record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    canonical_round_rows = canonical_record.get("rounds", []) if isinstance(canonical_record.get("rounds"), list) else []
     for r in recent:
         rid = str(r.get("request_id") or "").strip()
         bridges_for_request: list[str] = []
+        strict_live = r.get("bridge_runtime_contract") == "STRICT_LIVE"
+        if strict_live:
+            runtime = bridge_runtime_store.get(rid) if isinstance(bridge_runtime_store.get(rid), dict) else {}
+            canonical_round_bound = _canonical_round_binding(canonical_round_rows, rid, runtime)
+            complete = bool(
+                runtime
+                and str(runtime.get("request_id") or "") == rid
+                and canonical_round_bound
+                and str(runtime.get("bridge_id_hash") or "").strip()
+                and runtime.get("application_owned") == "PASS"
+                and runtime.get("runtime_sequence_valid") == "PASS"
+                and runtime.get("terminal_state") == "COMMITTED"
+                and runtime.get("bridge_state_terminal") == "COMMITTED"
+                and runtime.get("bridge_gate_status") == "PASS"
+                and runtime.get("bridge_state_contains_value") == "YES"
+                and all(runtime.get(key) == "PASS" for key in (
+                    "source_execution_proven", "write_status", "validate_status", "commit_status",
+                    "barrier_status", "target_dispatch_status", "target_response_status",
+                    "read_status", "schema_validation_status", "match_status",
+                ))
+                and runtime.get("user_prompt_contains_value") == "NO"
+                and runtime.get("gemini_input_prompt_contains_value") == "NO"
+                and runtime.get("runtime_http_payload_attested") == "YES"
+                and runtime.get("runtime_http_payload_contains_value") == "NO"
+                and runtime.get("runtime_http_payload_contains_bridge_key") == "NO"
+                and runtime.get("gemini_received_sanitized_representation_only") == "PASS"
+            )
+            if complete:
+                bid = str(runtime["bridge_id_hash"]).strip()
+                bridges_for_request.append(bid)
+                bridge_ids.append(bid)
+            else:
+                strict_bridge_proof_missing = True
         results = r.get("results") if isinstance(r.get("results"), list) else []
         for result in results:
             if not isinstance(result, dict):
@@ -302,16 +389,21 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
                 rnd = 0
             if seat and rnd > 0:
                 seat_round_keys.append((rid, rnd, seat))
-            audit = result.get("bridge_transaction_audit")
-            if isinstance(audit, dict) and audit.get("BRIDGE_ID"):
-                bid = str(audit["BRIDGE_ID"])
-                bridge_ids.append(bid)
-                bridges_for_request.append(bid)
-        per_request.append({"request_id": rid, "state": str(r.get("state") or ""), "rounds": r.get("rounds_executed") or r.get("rounds") or 0, "bridge_ids": sorted(set(bridges_for_request)), "provider_execution_events": r.get("request_metrics", {}).get("provider_execution_events", 0) if isinstance(r.get("request_metrics"), dict) else 0})
+            if not strict_live:
+                audit = result.get("bridge_transaction_audit")
+                if isinstance(audit, dict) and audit.get("BRIDGE_ID"):
+                    bid = str(audit["BRIDGE_ID"])
+                    bridge_ids.append(bid)
+                    bridges_for_request.append(bid)
+        per_request.append({"request_id": rid, "state": str(r.get("state") or ""), "rounds": r.get("rounds_executed") or r.get("rounds") or 0, "bridge_ids": sorted(set(bridges_for_request)), "bridge_runtime_contract": "STRICT_LIVE" if strict_live else "LEGACY_COMPATIBILITY", "provider_execution_events": r.get("request_metrics", {}).get("provider_execution_events", 0) if isinstance(r.get("request_metrics"), dict) else 0})
     duplicate_seat_round = len(seat_round_keys) - len(set(seat_round_keys))
     enough = len(recent) >= 2
     independent = enough and len(request_ids) == 2 and all(request_ids) and unique_request_ids == 2
-    unique_bridges = len(bridge_ids) == len(set(bridge_ids))
+    unique_bridges = len(bridge_ids) == len(set(bridge_ids)) and not strict_bridge_proof_missing
+    # For explicit strict Bridge requests, an empty evidence set cannot pass by vacuous uniqueness.
+    if any(r.get("bridge_runtime_contract") == "STRICT_LIVE" for r in recent):
+        expected_strict_bridges = sum(1 for r in recent if r.get("bridge_runtime_contract") == "STRICT_LIVE")
+        unique_bridges = unique_bridges and len(bridge_ids) == expected_strict_bridges
     checks = {
         "REQUEST_COUNT": enough,
         "MINIMUM_INDEPENDENT_REQUESTS": enough,
@@ -332,6 +424,8 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
         "unique_bridge_ids": len(set(bridge_ids)),
         "duplicate_seat_round_executions": max(0, duplicate_seat_round),
         "cross_request_result_contamination": contamination,
+        "strict_bridge_proof_missing": strict_bridge_proof_missing,
+        "bridge_ids_source": "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE" if any(r.get("bridge_runtime_contract") == "STRICT_LIVE" for r in recent) else "LEGACY_RESULT_AUDIT",
         "per_request": per_request,
         "evidence_source": "APPLICATION_OWNED_REQUEST_RECORDS_ONLY",
         "provider_or_agent_prose_used_as_identity": False,
@@ -409,15 +503,46 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     bridge_audits = []
     persisted_bridge = None
     bridge_test_requested = False
+    strict_bridge_requested = False
     for rec in chat.get("request_records", []):
         if not isinstance(rec, dict) or str(rec.get("request_id") or "") != str(request_id or ""):
             continue
         bridge_test_requested = bool(rec.get("bridge_test_requested"))
+        strict_bridge_requested = rec.get("bridge_runtime_contract") == "STRICT_LIVE"
         persisted_bridge = rec.get("application_owned_bridge_state")
         for item in rec.get("results", []) if isinstance(rec.get("results"), list) else []:
             if isinstance(item, dict) and isinstance(item.get("bridge_transaction_audit"), dict):
                 bridge_audits.append(item["bridge_transaction_audit"])
-    bridge = bridge_audits[-1] if bridge_audits else None
+    runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
+    runtime_bridge = runtime_store.get(str(request_id or "")) if isinstance(runtime_store.get(str(request_id or "")), dict) else None
+    if strict_bridge_requested and isinstance(runtime_bridge, dict) and str(runtime_bridge.get("request_id") or "") == str(request_id or ""):
+        persisted_bridge = runtime_bridge
+        bridge = {
+            "BRIDGE_ID": runtime_bridge.get("bridge_id_hash", ""),
+            "WRITE": runtime_bridge.get("write_status", "NOT_PROVEN"),
+            "VALIDATE": runtime_bridge.get("validate_status", "NOT_PROVEN"),
+            "COMMIT": runtime_bridge.get("commit_status", "NOT_PROVEN"),
+            "BARRIER": runtime_bridge.get("barrier_status", "NOT_PROVEN"),
+            "READ": runtime_bridge.get("read_status", "NOT_PROVEN"),
+            "SCHEMA_VALIDATION": runtime_bridge.get("schema_validation_status", "NOT_PROVEN"),
+            "MATCH": runtime_bridge.get("match_status", "NOT_PROVEN"),
+            "USER_PROMPT_CONTAINS_VALUE": runtime_bridge.get("user_prompt_contains_value", "NOT_PROVEN"),
+            "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": runtime_bridge.get("gemini_input_prompt_contains_value", "NOT_PROVEN"),
+            "BRIDGE_STATE_CONTAINS_VALUE": runtime_bridge.get("bridge_state_contains_value", "NOT_PROVEN"),
+            "SOURCE_EXECUTION_PROVEN": runtime_bridge.get("source_execution_proven", "NOT_PROVEN"),
+            "TARGET_DISPATCH_STATUS": runtime_bridge.get("target_dispatch_status", "NOT_PROVEN"),
+            "TARGET_RESPONSE_STATUS": runtime_bridge.get("target_response_status", "NOT_PROVEN"),
+            "RUNTIME_HTTP_PAYLOAD_ATTESTED": runtime_bridge.get("runtime_http_payload_attested", "NOT_PROVEN"),
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": runtime_bridge.get("runtime_http_payload_contains_value", "NOT_PROVEN"),
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": runtime_bridge.get("runtime_http_payload_contains_bridge_key", "NOT_PROVEN"),
+            "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": runtime_bridge.get("gemini_received_sanitized_representation_only", "NOT_PROVEN"),
+            "BRIDGE_RUNTIME_SEQUENCE_VALID": runtime_bridge.get("runtime_sequence_valid", "NOT_PROVEN"),
+            "APPLICATION_OWNED_RUNTIME_RECORD": runtime_bridge.get("application_owned", "NOT_PROVEN"),
+            "TERMINAL_STATE": runtime_bridge.get("terminal_state", "NOT_PROVEN"),
+            "BRIDGE_GATE_STATUS": runtime_bridge.get("bridge_gate_status", "NOT_PROVEN"),
+        }
+    else:
+        bridge = bridge_audits[-1] if bridge_audits else None
     # Runtime identity is a hard gate: a report cannot PASS if the actual persisted
     # Request ID differs from the requested/audited ID.
     persisted_record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id or "")), None)
@@ -469,6 +594,17 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             "USER_PROMPT_ISOLATED": bridge.get("USER_PROMPT_CONTAINS_VALUE") == "NO",
             "GEMINI_INPUT_ISOLATED": bridge.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE") == "NO",
             "BRIDGE_STATE_CONTAINS_VALUE": bridge.get("BRIDGE_STATE_CONTAINS_VALUE") == "YES",
+            "SOURCE_EXECUTION_PROVEN": (bridge.get("SOURCE_EXECUTION_PROVEN") == "PASS" if strict_bridge_requested else True),
+            "TARGET_DISPATCH_PROVEN": (bridge.get("TARGET_DISPATCH_STATUS") == "PASS" if strict_bridge_requested else True),
+            "TARGET_RESPONSE_PROVEN": (bridge.get("TARGET_RESPONSE_STATUS") == "PASS" if strict_bridge_requested else True),
+            "RUNTIME_HTTP_PAYLOAD_ATTESTED": (bridge.get("RUNTIME_HTTP_PAYLOAD_ATTESTED") == "YES" if strict_bridge_requested else True),
+            "RUNTIME_HTTP_PAYLOAD_VALUE_ABSENT": (bridge.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE") == "NO" if strict_bridge_requested else True),
+            "RUNTIME_HTTP_PAYLOAD_KEY_ABSENT": (bridge.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY") == "NO" if strict_bridge_requested else True),
+            "SANITIZED_REPRESENTATION_ONLY": (bridge.get("GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY") == "PASS" if strict_bridge_requested else True),
+            "RUNTIME_SEQUENCE_VALID": (bridge.get("BRIDGE_RUNTIME_SEQUENCE_VALID") == "PASS" if strict_bridge_requested else True),
+            "APPLICATION_OWNED_RUNTIME_RECORD": (bridge.get("APPLICATION_OWNED_RUNTIME_RECORD") == "PASS" if strict_bridge_requested else True),
+            "TERMINAL_COMMITTED": (bridge.get("TERMINAL_STATE") == "COMMITTED" if strict_bridge_requested else True),
+            "BRIDGE_RUNTIME_GATE": (bridge.get("BRIDGE_GATE_STATUS") == "PASS" if strict_bridge_requested else True),
             "NO_AGENT_PROSE_AUTHORITY": True,
             "REQUEST_ID_IDENTITY_MATCH": identity_match,
         }
@@ -498,15 +634,21 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
     # Never allow the last bridge audit to hide a second bridge created by a
     # secondary execution path. Count every persisted result for this request.
     persisted_bridge_ids = []
-    if persisted_record and isinstance(persisted_record.get("results"), list):
+    if strict_bridge_requested:
+        if isinstance(runtime_bridge, dict) and str(runtime_bridge.get("request_id") or "") == str(request_id or "") and str(runtime_bridge.get("bridge_id_hash") or "").strip():
+            persisted_bridge_ids.append(str(runtime_bridge.get("bridge_id_hash")).strip())
+    elif persisted_record and isinstance(persisted_record.get("results"), list):
         for item in persisted_record.get("results", []):
             if not isinstance(item, dict):
                 continue
             a = item.get("bridge_transaction_audit")
             if isinstance(a, dict) and str(a.get("BRIDGE_ID") or "").strip():
                 persisted_bridge_ids.append(str(a.get("BRIDGE_ID")).strip())
+    if strict_bridge_requested and not persisted_bridge_ids:
+        bridge_identity_status = "NOT_PROVEN"
+    else:
+        bridge_identity_status = "PASS" if len(set(persisted_bridge_ids)) == len(persisted_bridge_ids) and len(persisted_bridge_ids) <= 1 else "FAIL"
     unique_persisted_bridge_ids = sorted(set(persisted_bridge_ids))
-    bridge_identity_status = "PASS" if len(unique_persisted_bridge_ids) <= 1 else "FAIL"
     if bridge_identity_status == "FAIL":
         bridge_status = "FAIL"
         bridge_checks["UNIQUE_BRIDGE_ID"] = False

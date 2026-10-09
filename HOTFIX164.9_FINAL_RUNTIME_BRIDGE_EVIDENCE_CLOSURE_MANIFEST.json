@@ -1,0 +1,29 @@
+{
+  "release": "HOTFIX164.9_FINAL_RUNTIME_BRIDGE_EVIDENCE_CLOSURE",
+  "baseline_archive": "HOTFIX164.8_FINAL_BRIDGE_RUNTIME_EVIDENCE_CLOSURE.zip",
+  "frozen_provider_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "scope": "APPLICATION_OWNED_RUNTIME_BRIDGE_EVIDENCE_AND_FAIL_CLOSED_AUDITS",
+  "key_files": [
+    "main.py",
+    "conversation_store.py",
+    "production_platform.py",
+    "providers.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix1642_bridge_orchestration.py"
+  ],
+  "required_strict_sequence": [
+    "SOURCE_EXECUTION",
+    "WRITE",
+    "VALIDATE",
+    "COMMIT",
+    "BARRIER",
+    "TARGET_DISPATCH",
+    "TARGET_RESPONSE",
+    "READ",
+    "MATCH"
+  ],
+  "fail_closed_when_evidence_missing": true,
+  "raw_bridge_value_exported": false,
+  "raw_http_payload_exported": false,
+  "live_deployment_closure_claimed": false
+}
