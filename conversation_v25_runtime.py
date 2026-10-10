@@ -561,6 +561,24 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     runtime_store = runtime_store if isinstance(runtime_store, Mapping) else {}
     runtime_r1 = runtime_store.get(str(r1), {}) if r1 else {}
     runtime_r2 = runtime_store.get(str(r2), {}) if r2 else {}
+    request_row_1 = canonical_request_by_id.get(r1, {}) if r1 else {}
+    request_row_2 = canonical_request_by_id.get(r2, {}) if r2 else {}
+    # HOTFIX164.11: expose the Bridge proof obligation explicitly for each
+    # historical Message. A missing runtime record must not erase the fact that
+    # the Request declared a strict Bridge transaction. Presence of an
+    # application-owned runtime record also requires its completeness check.
+    bridge_runtime_proof_required_message_1 = bool(
+        r1 and (request_row_1.get("bridge_test_requested") or
+                request_row_1.get("bridge_runtime_contract") == "STRICT_LIVE" or
+                isinstance(runtime_r1, Mapping) and runtime_r1)
+    )
+    bridge_runtime_proof_required_message_2 = bool(
+        r2 and (request_row_2.get("bridge_test_requested") or
+                request_row_2.get("bridge_runtime_contract") == "STRICT_LIVE" or
+                isinstance(runtime_r2, Mapping) and runtime_r2)
+    )
+    strict_bridge_message_1 = request_row_1.get("bridge_runtime_contract") == "STRICT_LIVE"
+    strict_bridge_message_2 = request_row_2.get("bridge_runtime_contract") == "STRICT_LIVE"
     # HOTFIX164.5: FINAL_CLOSURE_AUDIT has one authoritative Bridge evidence
     # source: the dedicated Application-Owned runtime evidence store.  The
     # provider-result compatibility projection is intentionally NOT a fallback.
@@ -571,7 +589,9 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     b1 = [str(runtime_r1.get("bridge_id_hash"))] if isinstance(runtime_r1, Mapping) and runtime_r1.get("bridge_id_hash") else []
     b2 = [str(runtime_r2.get("bridge_id_hash"))] if isinstance(runtime_r2, Mapping) and runtime_r2.get("bridge_id_hash") else []
     bridge_history_expected = bool(
-        any(bool(x.get("bridge_test_requested")) for x in selected_request_records if isinstance(x, dict))
+        any(bool(x.get("bridge_test_requested") or x.get("bridge_runtime_contract") == "STRICT_LIVE") for x in selected_request_records if isinstance(x, dict))
+        or (isinstance(runtime_r1, Mapping) and bool(runtime_r1))
+        or (isinstance(runtime_r2, Mapping) and bool(runtime_r2))
     )
     srows = {_s(x.get("message_id")): x for x in synth}
     selected_round_identity_rows = [
@@ -718,6 +738,10 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         "bridge_request_2_id": r2 or "NOT_PROVEN",
         "bridge_lifecycle_message_1": (copy.deepcopy(runtime_r1) if isinstance(runtime_r1, Mapping) and runtime_r1 else "NOT_PROVEN"),
         "bridge_lifecycle_message_2": (copy.deepcopy(runtime_r2) if isinstance(runtime_r2, Mapping) and runtime_r2 else "NOT_PROVEN"),
+        "bridge_runtime_proof_required_message_1": bridge_runtime_proof_required_message_1,
+        "bridge_runtime_proof_required_message_2": bridge_runtime_proof_required_message_2,
+        "bridge_control_plane_identity_isolated_message_1": (runtime_r1.get("control_plane_identity_leak") == "NO" if bridge_runtime_proof_required_message_1 and isinstance(runtime_r1, Mapping) else (False if bridge_runtime_proof_required_message_1 else "NOT_REQUESTED")),
+        "bridge_control_plane_identity_isolated_message_2": (runtime_r2.get("control_plane_identity_leak") == "NO" if bridge_runtime_proof_required_message_2 and isinstance(runtime_r2, Mapping) else (False if bridge_runtime_proof_required_message_2 else "NOT_REQUESTED")),
         "bridge_runtime_record_count_message_1": 1 if runtime_r1 else 0,
         "bridge_runtime_record_count_message_2": 1 if runtime_r2 else 0,
         "bridge_trace_target_seat_zero_message_1": trace_zero_1,
@@ -988,7 +1012,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
         # HOTFIX164.4: Bridge proof comes from the dedicated runtime evidence store.
         # The canonical Message/Request/Round store remains the identity authority;
         # provider result dictionaries are never consulted for Bridge proof.
-        def _runtime_bridge_ok(row):
+        def _runtime_bridge_ok(row, rid_expected="", round_id_expected="", strict_live=False):
             if not isinstance(row, Mapping) or not row:
                 return False
             required = (
@@ -1000,7 +1024,7 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 "runtime_http_payload_contains_value", "runtime_http_payload_contains_bridge_key",
                 "gemini_received_sanitized_representation_only", "terminal_state",
             )
-            return (
+            base_complete = (
                 all(row.get(k) == "PASS" for k in required[:10])
                 and row.get("user_prompt_contains_value") == "NO"
                 and row.get("gemini_input_prompt_contains_value") == "NO"
@@ -1012,21 +1036,58 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 and row.get("runtime_sequence_valid") == "PASS"
                 and row.get("application_owned") == "PASS"
             )
+            if not base_complete:
+                return False
+            if not strict_live:
+                # Legacy compatibility rows remain readable, but never satisfy a
+                # STRICT_LIVE request's stronger identity/prompt-boundary contract.
+                return True
+            identity_fields = (
+                "user_prompt_contains_bridge_id", "provider_prompt_contains_bridge_id",
+                "gemini_input_prompt_contains_bridge_id", "gemini_input_prompt_contains_bridge_key",
+                "gemini_input_prompt_contains_request_id", "gemini_input_prompt_contains_canonical_round_id",
+                "runtime_http_payload_contains_bridge_id", "runtime_http_payload_contains_request_id",
+                "runtime_http_payload_contains_canonical_round_id",
+            )
+            return bool(
+                row.get("schema") == "bridge-runtime-evidence/v2"
+                and str(row.get("request_id") or "") == str(rid_expected or "")
+                and str(row.get("canonical_round_id") or "") == str(round_id_expected or "")
+                and str(row.get("bridge_id_hash") or "").strip()
+                and int(row.get("bridge_trace_count") or 0) == 2
+                and row.get("bridge_state_terminal") == "COMMITTED"
+                and row.get("bridge_gate_status") == "PASS"
+                and row.get("control_plane_identity_leak") == "NO"
+                and all(row.get(k) == "NO" for k in identity_fields)
+            )
+        def _canonical_round_id(mid):
+            rows = round_by_msg.get(mid, [])
+            return _s(rows[0].get("round_id")) if len(rows) == 1 else ""
         if two_message_window:
             bridge_window_proven = bool(
                 audit.get("bridge_exactly_one_message_1") is True
                 and audit.get("bridge_exactly_one_message_2") is True
                 and audit.get("bridge_ids_distinct_message_1_vs_message_2") is True
                 and audit.get("bridge_ids_unique_when_present") is True
-                and _runtime_bridge_ok(runtime_r1)
-                and _runtime_bridge_ok(runtime_r2)
+                and _runtime_bridge_ok(runtime_r1, r1, _canonical_round_id(m1), strict_bridge_message_1)
+                and _runtime_bridge_ok(runtime_r2, r2, _canonical_round_id(m2), strict_bridge_message_2)
             )
         else:
             bridge_window_proven = bool(
                 audit.get("bridge_exactly_one_message_1") is True
                 and audit.get("bridge_ids_unique_when_present") is True
-                and _runtime_bridge_ok(runtime_r1)
+                and _runtime_bridge_ok(runtime_r1, r1, _canonical_round_id(m1), strict_bridge_message_1)
             )
+    audit["bridge_runtime_proof_status_message_1"] = (
+        "NOT_REQUESTED" if not bridge_runtime_proof_required_message_1 else
+        ("PASS" if _runtime_bridge_ok(runtime_r1, r1, _canonical_round_id(m1), strict_bridge_message_1) else
+         ("FAIL" if isinstance(runtime_r1, Mapping) and runtime_r1.get("control_plane_identity_leak") == "YES" else "NOT_PROVEN"))
+    )
+    audit["bridge_runtime_proof_status_message_2"] = (
+        "NOT_REQUESTED" if not bridge_runtime_proof_required_message_2 else
+        ("PASS" if _runtime_bridge_ok(runtime_r2, r2, _canonical_round_id(m2), strict_bridge_message_2) else
+         ("FAIL" if isinstance(runtime_r2, Mapping) and runtime_r2.get("control_plane_identity_leak") == "YES" else "NOT_PROVEN"))
+    )
     audit["bridge_history_proven"] = bridge_window_proven if bridge_history_expected else "NOT_REQUESTED"
     audit["conversation_runtime_audit"] = "PASS" if structural_pass and bridge_window_proven and audit["api_keys_in_state"] == "NO" and audit["auth_headers_in_state"] == "NO" and audit["raw_provider_payloads_in_history"] == "NO" and audit["sensitive_diagnostics_in_history"] == "NO" else "NOT_PROVEN"
     # Strict regression gate: complete two-message history without direct
