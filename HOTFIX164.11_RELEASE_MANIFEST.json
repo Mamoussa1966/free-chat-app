@@ -1,0 +1,30 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.11",
+  "title": "STRICT LIVE CONTROL-PLANE IDENTITY CLOSURE",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "version_txt_sha256": "de5a5d916559ce86c0a39e39b175968cbe479d3919ca6502322eb3004a533b26",
+  "changed_files": [
+    "main.py",
+    "conversation_v25_runtime.py",
+    "production_platform.py",
+    "tests/test_hotfix16410_strict_bridge_security_audit.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "HOTFIX164.11_STRICT_LIVE_CONTROL_PLANE_IDENTITY_CLOSURE_RELEASE.md"
+  ],
+  "validation": {
+    "targeted_closure_tests": "4 passed",
+    "related_bridge_tests": "17 passed",
+    "full_suite": "611 passed, 0 failed",
+    "fresh_zip_roundtrip": "611 passed, 0 failed"
+  },
+  "guardrails": {
+    "provider_identity_changed": false,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "missing_strict_bridge_proof_fails_closed": true
+  }
+}

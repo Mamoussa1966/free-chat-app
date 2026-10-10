@@ -8,6 +8,7 @@ the inherited Production Core/orchestrator.
 """
 
 from dataclasses import dataclass, field
+import copy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -189,8 +190,11 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         canonical_rounds = [r for r in canonical.get("rounds", []) if isinstance(r, dict)]
     record = next((r for r in records if str(r.get("request_id") or "") == rid), None) if rid else (records[-1] if records else None)
     canonical_request = next((r for r in canonical_requests if str(r.get("request_id") or "") == rid), None) if rid else (canonical_requests[-1] if canonical_requests else None)
-    bridge_requested = bool(record and record.get("bridge_test_requested"))
-    strict_bridge_requested = bool(record and record.get("bridge_runtime_contract") == "STRICT_LIVE")
+    # HOTFIX164.11: a narrow direct projection must not erase authoritative Request artifacts.
+    if record is None and isinstance(canonical_request, dict):
+        record = canonical_request
+    bridge_requested = bool((record or {}).get("bridge_test_requested"))
+    strict_bridge_requested = bool((record or {}).get("bridge_runtime_contract") == "STRICT_LIVE")
     runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
     runtime_bridge = runtime_store.get(rid) if rid and isinstance(runtime_store.get(rid), dict) else {}
     canonical_round_bound = _canonical_round_binding(canonical_rounds, rid, runtime_bridge)
@@ -321,7 +325,26 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
     application-owned request/result records.
     """
     chat = chat if isinstance(chat, dict) else {}
-    records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
+    direct_records = [r for r in chat.get("request_records", []) if isinstance(r, dict)]
+    direct_by_id = {str(r.get("request_id") or "").strip(): r for r in direct_records if str(r.get("request_id") or "").strip()}
+    canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    canonical_records = [r for r in canonical.get("requests", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip()]
+    # Canonical history owns the sequence; direct rows can enrich but cannot erase it.
+    records = []
+    seen_request_ids = set()
+    for canonical_row in canonical_records:
+        rid_key = str(canonical_row.get("request_id") or "").strip()
+        merged = copy.deepcopy(canonical_row)
+        for key, value in direct_by_id.get(rid_key, {}).items():
+            if value not in (None, "", [], {}):
+                merged[key] = copy.deepcopy(value)
+        records.append(merged)
+        seen_request_ids.add(rid_key)
+    for direct in direct_records:
+        rid_key = str(direct.get("request_id") or "").strip()
+        if rid_key and rid_key not in seen_request_ids:
+            records.append(copy.deepcopy(direct))
+            seen_request_ids.add(rid_key)
     recent = records[-2:]
     request_ids = [str(r.get("request_id") or "").strip() for r in recent]
     unique_request_ids = len(set(x for x in request_ids if x))
@@ -362,6 +385,19 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
                 and runtime.get("runtime_http_payload_contains_value") == "NO"
                 and runtime.get("runtime_http_payload_contains_bridge_key") == "NO"
                 and runtime.get("gemini_received_sanitized_representation_only") == "PASS"
+                and runtime.get("user_prompt_contains_bridge_id") == "NO"
+                and runtime.get("provider_prompt_contains_bridge_id") == "NO"
+                and runtime.get("gemini_input_prompt_contains_bridge_id") == "NO"
+                and runtime.get("bridge_id_in_gemini_input_prompt") == "NO"
+                and runtime.get("bridge_id_in_provider_prompt") == "NO"
+                and runtime.get("bridge_id_in_user_prompt") == "NO"
+                and runtime.get("gemini_input_prompt_contains_bridge_key") == "NO"
+                and runtime.get("gemini_input_prompt_contains_request_id") == "NO"
+                and runtime.get("gemini_input_prompt_contains_canonical_round_id") == "NO"
+                and runtime.get("runtime_http_payload_contains_bridge_id") == "NO"
+                and runtime.get("runtime_http_payload_contains_request_id") == "NO"
+                and runtime.get("runtime_http_payload_contains_canonical_round_id") == "NO"
+                and runtime.get("control_plane_identity_leak") == "NO"
             )
             if complete:
                 bid = str(runtime["bridge_id_hash"]).strip()
@@ -515,6 +551,18 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
                 bridge_audits.append(item["bridge_transaction_audit"])
     runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
     runtime_bridge = runtime_store.get(str(request_id or "")) if isinstance(runtime_store.get(str(request_id or "")), dict) else None
+    canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    canonical_requests = canonical.get("requests", []) if isinstance(canonical.get("requests"), list) else []
+    canonical_request = next((r for r in canonical_requests if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id or "")), None)
+    # HOTFIX164.11: the current projection may omit an outer RequestRecord while
+    # the canonical request and runtime evidence already exist. Bridge proof must
+    # not be demoted to NOT_REQUESTED merely because that projection is narrow.
+    if isinstance(canonical_request, dict):
+        bridge_test_requested = bridge_test_requested or bool(canonical_request.get("bridge_test_requested"))
+        strict_bridge_requested = strict_bridge_requested or str(canonical_request.get("bridge_runtime_contract") or "") == "STRICT_LIVE"
+    if isinstance(runtime_bridge, dict) and str(runtime_bridge.get("request_id") or "") == str(request_id or ""):
+        bridge_test_requested = True
+        strict_bridge_requested = strict_bridge_requested or str(runtime_bridge.get("schema") or "") == "bridge-runtime-evidence/v2"
     if strict_bridge_requested and isinstance(runtime_bridge, dict) and str(runtime_bridge.get("request_id") or "") == str(request_id or ""):
         persisted_bridge = runtime_bridge
         bridge = {
@@ -540,12 +588,25 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             "APPLICATION_OWNED_RUNTIME_RECORD": runtime_bridge.get("application_owned", "NOT_PROVEN"),
             "TERMINAL_STATE": runtime_bridge.get("terminal_state", "NOT_PROVEN"),
             "BRIDGE_GATE_STATUS": runtime_bridge.get("bridge_gate_status", "NOT_PROVEN"),
+            "USER_PROMPT_CONTAINS_BRIDGE_ID": "YES" if runtime_bridge.get("user_prompt_contains_bridge_id") == "YES" else ("NO" if runtime_bridge.get("user_prompt_contains_bridge_id") == "NO" else "NOT_PROVEN"),
+            "PROVIDER_PROMPT_CONTAINS_BRIDGE_ID": "YES" if runtime_bridge.get("provider_prompt_contains_bridge_id") == "YES" else ("NO" if runtime_bridge.get("provider_prompt_contains_bridge_id") == "NO" else "NOT_PROVEN"),
+            "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_ID": "YES" if runtime_bridge.get("gemini_input_prompt_contains_bridge_id") == "YES" else ("NO" if runtime_bridge.get("gemini_input_prompt_contains_bridge_id") == "NO" else "NOT_PROVEN"),
+            "BRIDGE_ID_IN_GEMINI_INPUT_PROMPT": "YES" if runtime_bridge.get("bridge_id_in_gemini_input_prompt") == "YES" else ("NO" if runtime_bridge.get("bridge_id_in_gemini_input_prompt") == "NO" else "NOT_PROVEN"),
+            "BRIDGE_ID_IN_PROVIDER_PROMPT": "YES" if runtime_bridge.get("bridge_id_in_provider_prompt") == "YES" else ("NO" if runtime_bridge.get("bridge_id_in_provider_prompt") == "NO" else "NOT_PROVEN"),
+            "BRIDGE_ID_IN_USER_PROMPT": "YES" if runtime_bridge.get("bridge_id_in_user_prompt") == "YES" else ("NO" if runtime_bridge.get("bridge_id_in_user_prompt") == "NO" else "NOT_PROVEN"),
+            "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_KEY": "YES" if runtime_bridge.get("gemini_input_prompt_contains_bridge_key") == "YES" else ("NO" if runtime_bridge.get("gemini_input_prompt_contains_bridge_key") == "NO" else "NOT_PROVEN"),
+            "CONTROL_PLANE_IDENTITY_LEAK": runtime_bridge.get("control_plane_identity_leak", "NOT_PROVEN"),
         }
     else:
         bridge = bridge_audits[-1] if bridge_audits else None
     # Runtime identity is a hard gate: a report cannot PASS if the actual persisted
     # Request ID differs from the requested/audited ID.
     persisted_record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id or "")), None)
+    # The canonical Request record is authoritative even when a UI/current-request
+    # projection is intentionally narrow. It is a valid identity source, unlike
+    # the latest-request display projection or agent-generated text.
+    if persisted_record is None and isinstance(canonical_request, dict):
+        persisted_record = canonical_request
     actual_request_id = str((persisted_record or {}).get("request_id") or "").strip()
     identity_match = bool(request_id and actual_request_id and actual_request_id == str(request_id).strip())
     continuation_audit = {}
@@ -605,6 +666,10 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
             "APPLICATION_OWNED_RUNTIME_RECORD": (bridge.get("APPLICATION_OWNED_RUNTIME_RECORD") == "PASS" if strict_bridge_requested else True),
             "TERMINAL_COMMITTED": (bridge.get("TERMINAL_STATE") == "COMMITTED" if strict_bridge_requested else True),
             "BRIDGE_RUNTIME_GATE": (bridge.get("BRIDGE_GATE_STATUS") == "PASS" if strict_bridge_requested else True),
+            "CONTROL_PLANE_IDENTITY_ISOLATED": (bridge.get("CONTROL_PLANE_IDENTITY_LEAK") == "NO" if strict_bridge_requested else True),
+            "NO_BRIDGE_ID_IN_USER_PROMPT": (bridge.get("USER_PROMPT_CONTAINS_BRIDGE_ID") == "NO" if strict_bridge_requested else True),
+            "NO_BRIDGE_ID_IN_PROVIDER_PROMPTS": (bridge.get("PROVIDER_PROMPT_CONTAINS_BRIDGE_ID") == "NO" if strict_bridge_requested else True),
+            "NO_BRIDGE_ID_OR_KEY_IN_GEMINI_INPUT": (bridge.get("GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_ID") == "NO" and bridge.get("BRIDGE_ID_IN_GEMINI_INPUT_PROMPT") == "NO" and bridge.get("GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_KEY") == "NO" if strict_bridge_requested else True),
             "NO_AGENT_PROSE_AUTHORITY": True,
             "REQUEST_ID_IDENTITY_MATCH": identity_match,
         }
@@ -667,7 +732,7 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         "session_integrity": session,
         "provider_health": {"status": health_status, "rows": health_rows},
         "regression_core": {"status": regression_status, **regression},
-        "bridge_isolation": {"status": bridge_status, "requested": bridge_test_requested, "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}, "unique_persisted_bridge_ids": unique_persisted_bridge_ids},
+        "bridge_isolation": {"status": bridge_status, "requested": bridge_test_requested, "bridge_runtime_proof_required": bool(bridge_test_requested and strict_bridge_requested), "bridge_runtime_proof_complete": bool(bridge_status == "PASS" and (not strict_bridge_requested or isinstance(runtime_bridge, dict))), "checks": bridge_checks, "persisted_state": bool(persisted_bridge), "audit": bridge or {}, "unique_persisted_bridge_ids": unique_persisted_bridge_ids},
         "continuation_runtime_gate": {"status": continuation_status, "audit": continuation_audit, "REQUEST_ID_IDENTITY_MATCH": identity_match},
     }
 
@@ -729,6 +794,22 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
         "runtime_http_payload_contains_value": "NO",
         "runtime_http_payload_contains_bridge_key": "NO",
         "gemini_received_sanitized_representation_only": "PASS",
+        # HOTFIX164.11: control-plane identities are application-private and
+        # must not cross any user/provider/HTTP boundary. Missing attestations
+        # in STRICT_LIVE mode are unproven, never silently treated as safe.
+        "user_prompt_contains_bridge_id": "NO",
+        "provider_prompt_contains_bridge_id": "NO",
+        "gemini_input_prompt_contains_bridge_id": "NO",
+        "bridge_id_in_gemini_input_prompt": "NO",
+        "bridge_id_in_provider_prompt": "NO",
+        "bridge_id_in_user_prompt": "NO",
+        "gemini_input_prompt_contains_bridge_key": "NO",
+        "gemini_input_prompt_contains_request_id": "NO",
+        "gemini_input_prompt_contains_canonical_round_id": "NO",
+        "runtime_http_payload_contains_bridge_id": "NO",
+        "runtime_http_payload_contains_request_id": "NO",
+        "runtime_http_payload_contains_canonical_round_id": "NO",
+        "control_plane_identity_leak": "NO",
         "runtime_sequence_valid": "PASS",
         "application_owned": "PASS",
         "bridge_gate_status": "PASS",
@@ -784,9 +865,29 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
         # merely containing a conflicting identity label.
         "PROSE_ISOLATION_AUTHORITATIVE_GATE": True,
         "STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE": True,
+        "STRICT_LIVE_CONTROL_PLANE_IDENTITY_ISOLATED": True,
     }
     for chat in chats or []:
         strict_bridge_hashes: list[str] = []
+        canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+        canonical_rows = [r for r in canonical.get("requests", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip()]
+        direct_rows = [r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "").strip()]
+        direct_by_id = {str(r.get("request_id") or "").strip(): r for r in direct_rows}
+        authoritative_request_rows = []
+        seen_request_ids = set()
+        for canonical_row in canonical_rows:
+            rid_key = str(canonical_row.get("request_id") or "").strip()
+            merged = dict(canonical_row)
+            for key, value in direct_by_id.get(rid_key, {}).items():
+                if value not in (None, "", [], {}):
+                    merged[key] = value
+            authoritative_request_rows.append(merged)
+            seen_request_ids.add(rid_key)
+        for direct_row in direct_rows:
+            rid_key = str(direct_row.get("request_id") or "").strip()
+            if rid_key and rid_key not in seen_request_ids:
+                authoritative_request_rows.append(dict(direct_row))
+                seen_request_ids.add(rid_key)
         raw = json.dumps(chat, ensure_ascii=False, default=str)
         if re.search(r"(?i)(api[_ -]?key|authorization|x-api-key|x-goog-api-key)\s*[:=]", raw):
             checks["NO_CREDENTIALS_IN_CHAT_STATE"] = False
@@ -814,7 +915,7 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                 continue
             if str(event.get("type") or "").upper() == "CONTINUATION_GATE" and str(event.get("runtime_gate") or "").upper() != "PASS":
                 checks["REQUEST_ID_AUTHORITY_PRESERVED"] = False
-        for record in chat.get("request_records", []):
+        for record in authoritative_request_rows:
             if not isinstance(record, dict):
                 continue
             requested = bool(record.get("bridge_test_requested"))
@@ -827,6 +928,19 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                 if not complete:
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
                     checks["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] = False
+                    store = chat.get("bridge_runtime_evidence_store")
+                    evidence = store.get(str(record.get("request_id") or "")) if isinstance(store, dict) else None
+                    if not isinstance(evidence, dict) or evidence.get("control_plane_identity_leak") != "NO" or any(
+                        evidence.get(field) != "NO" for field in (
+                            "user_prompt_contains_bridge_id", "provider_prompt_contains_bridge_id",
+                            "gemini_input_prompt_contains_bridge_id", "bridge_id_in_gemini_input_prompt",
+                            "bridge_id_in_provider_prompt", "bridge_id_in_user_prompt", "gemini_input_prompt_contains_bridge_key",
+                            "gemini_input_prompt_contains_request_id", "gemini_input_prompt_contains_canonical_round_id",
+                            "runtime_http_payload_contains_bridge_id", "runtime_http_payload_contains_request_id",
+                            "runtime_http_payload_contains_canonical_round_id",
+                        )
+                    ):
+                        checks["STRICT_LIVE_CONTROL_PLANE_IDENTITY_ISOLATED"] = False
                 else:
                     store = chat.get("bridge_runtime_evidence_store")
                     evidence = store.get(str(record.get("request_id") or "")) if isinstance(store, dict) else None
@@ -853,11 +967,12 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
         if len(strict_bridge_hashes) != len(set(strict_bridge_hashes)):
             checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
             checks["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] = False
+            checks["STRICT_LIVE_CONTROL_PLANE_IDENTITY_ISOLATED"] = False
 
         # HOTFIX144: verify authoritative identity from persisted application-owned
         # request records and runtime execution events only. Never inspect agent prose
         # to decide this gate.
-        for record in chat.get("request_records", []):
+        for record in authoritative_request_rows:
             if not isinstance(record, dict):
                 continue
             rid = str(record.get("request_id") or "").strip()

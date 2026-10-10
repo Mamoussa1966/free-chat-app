@@ -69,6 +69,33 @@ BRIDGE_READ_PATTERN = re.compile(
 )
 
 
+def _contains_control_plane_identity(text: str, identity: str) -> bool:
+    """Match an opaque runtime identity without substring false positives.
+
+    Production UUID/hash IDs are checked exactly. Short symbolic IDs used by
+    unit fixtures are checked as whole tokens (so ``rid`` is not found inside
+    ``bridge``).
+    """
+    value = str(identity or "").strip()
+    body = str(text or "")
+    if not value:
+        return False
+    if len(value) < 8:
+        return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])", body, re.IGNORECASE))
+    return value in body
+
+
+def _replace_control_plane_identity(text: str, identity: str, replacement: str = "[REDACTED_CONTROL_PLANE_IDENTITY]") -> str:
+    """Redact an identity with the same exact/whole-token semantics as audit."""
+    value = str(identity or "").strip()
+    body = str(text or "")
+    if not value:
+        return body
+    if len(value) < 8:
+        return re.sub(rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])", replacement, body, flags=re.IGNORECASE)
+    return body.replace(value, replacement)
+
+
 def _extract_bridge_writes(content: str) -> list[tuple[str, str]]:
     """Extract only explicit provider bridge-write records."""
     writes: list[tuple[str, str]] = []
@@ -314,6 +341,10 @@ class SharedContextBridge:
         self.trace: list[dict] = []
         self._source_values: dict[str, str] = {}
         self._provider_input_prompts: dict[int, str] = {}
+        # HOTFIX164.11: attest the actual sanitized user-message portion and the
+        # shared-context portion separately.  The previous release captured only
+        # shared context, which could not prove the complete Gemini input boundary.
+        self._provider_user_prompts: dict[int, str] = {}
         self._resolved_reads: dict[str, dict] = {}
         self._runtime_payload_attestations: dict[int, dict] = {}
         # HOTFIX164.3: one immutable application-owned bridge evidence ledger per
@@ -349,6 +380,12 @@ class SharedContextBridge:
         exact value can never cross the provider-prompt boundary.
         """
         raw = "\n\n".join(self._entries)
+        # HOTFIX164.11: control-plane identity is private to the application.
+        # Do not forward the Bridge ID, Request ID, or canonical Round ID to any
+        # provider, even if one was echoed into prior shared-context prose.
+        canonical_round_id = str(self._runtime_bridge_evidence.get("canonical_round_id") or "")
+        for identity in (self.bridge_id, self.request_id, canonical_round_id):
+            raw = _replace_control_plane_identity(raw, identity)
         for record in self._values.values():
             value = str(record.get("value") or "")
             if value:
@@ -394,9 +431,17 @@ class SharedContextBridge:
             base = re.sub(r"\bBRIDGE_[A-Z0-9_]+\b", "[REDACTED_BRIDGE_KEY]", base)
         return base[-self.max_chars:]
 
-    def record_provider_input(self, seat, prompt: str) -> None:
-        """Record the exact final provider input for post-request isolation auditing."""
-        self._provider_input_prompts[int(getattr(seat, "room_slot", 0) or 0)] = str(prompt or "")
+    def record_provider_input(self, seat, prompt: str, provider_user_prompt: str = "") -> None:
+        """Record both actual prompt components for post-request isolation auditing."""
+        slot = int(getattr(seat, "room_slot", 0) or 0)
+        self._provider_input_prompts[slot] = str(prompt or "")
+        self._provider_user_prompts[slot] = str(provider_user_prompt or "")
+
+    def _provider_input_text(self, seat_slot: int) -> str:
+        """Return the sanitized user + shared-context input that is sent to a seat."""
+        user_part = str(self._provider_user_prompts.get(int(seat_slot)) or "")
+        context_part = str(self._provider_input_prompts.get(int(seat_slot)) or "")
+        return "\n\n".join(part for part in (user_part, context_part) if part)
 
     def record_runtime_payload_attestation(self, seat, attestation: dict) -> None:
         """Capture the exact JSON payload passed to the official HTTP transport."""
@@ -606,6 +651,19 @@ class SharedContextBridge:
             "match_status": audit.get("MATCH", "NOT_PROVEN"),
             "user_prompt_contains_value": audit.get("USER_PROMPT_CONTAINS_VALUE", "NOT_PROVEN"),
             "gemini_input_prompt_contains_value": audit.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE", "NOT_PROVEN"),
+            "user_prompt_contains_bridge_id": audit.get("USER_PROMPT_CONTAINS_BRIDGE_ID", "NOT_PROVEN"),
+            "provider_prompt_contains_bridge_id": audit.get("PROVIDER_PROMPT_CONTAINS_BRIDGE_ID", "NOT_PROVEN"),
+            "gemini_input_prompt_contains_bridge_id": audit.get("GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_ID", "NOT_PROVEN"),
+            "bridge_id_in_gemini_input_prompt": audit.get("BRIDGE_ID_IN_GEMINI_INPUT_PROMPT", "NOT_PROVEN"),
+            "bridge_id_in_provider_prompt": audit.get("BRIDGE_ID_IN_PROVIDER_PROMPT", "NOT_PROVEN"),
+            "bridge_id_in_user_prompt": audit.get("BRIDGE_ID_IN_USER_PROMPT", "NOT_PROVEN"),
+            "gemini_input_prompt_contains_bridge_key": audit.get("GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_KEY", "NOT_PROVEN"),
+            "gemini_input_prompt_contains_request_id": audit.get("GEMINI_INPUT_PROMPT_CONTAINS_REQUEST_ID", "NOT_PROVEN"),
+            "gemini_input_prompt_contains_canonical_round_id": audit.get("GEMINI_INPUT_PROMPT_CONTAINS_CANONICAL_ROUND_ID", "NOT_PROVEN"),
+            "runtime_http_payload_contains_bridge_id": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_ID", "NOT_PROVEN"),
+            "runtime_http_payload_contains_request_id": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_REQUEST_ID", "NOT_PROVEN"),
+            "runtime_http_payload_contains_canonical_round_id": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_CANONICAL_ROUND_ID", "NOT_PROVEN"),
+            "control_plane_identity_leak": audit.get("CONTROL_PLANE_IDENTITY_LEAK", "NOT_PROVEN"),
             "runtime_http_payload_attested": audit.get("RUNTIME_HTTP_PAYLOAD_ATTESTED", "NOT_PROVEN"),
             "runtime_http_payload_contains_value": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE", "NOT_PROVEN"),
             "runtime_http_payload_contains_bridge_key": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY", "NOT_PROVEN"),
@@ -795,13 +853,27 @@ class SharedContextBridge:
         record = self._values.get(key)
         source_value = self._source_values.get(key, "")
         read = self._resolved_reads.get(key)
-        target_prompt = self._provider_input_prompts.get(int(target_seat), "")
+        target_context_prompt = self._provider_input_prompts.get(int(target_seat), "")
+        target_user_prompt = self._provider_user_prompts.get(int(target_seat), "")
+        target_prompt = self._provider_input_text(int(target_seat))
+        provider_prompts = [self._provider_input_text(slot) for slot in set(self._provider_input_prompts) | set(self._provider_user_prompts)]
         target_payload = self._runtime_payload_text(int(target_seat))
         source_payload = self._runtime_payload_text(int(source_seat))
+        canonical_round_id = str(self._runtime_bridge_evidence.get("canonical_round_id") or "")
+        bridge_id_in_user = _contains_control_plane_identity(str(user_prompt or ""), self.bridge_id)
+        bridge_id_in_provider = any(_contains_control_plane_identity(text, self.bridge_id) for text in provider_prompts)
+        bridge_id_in_target_prompt = _contains_control_plane_identity(target_prompt, self.bridge_id)
+        request_id_in_target_prompt = _contains_control_plane_identity(target_prompt, self.request_id)
+        canonical_round_id_in_target_prompt = _contains_control_plane_identity(target_prompt, canonical_round_id)
+        bridge_id_in_payload = _contains_control_plane_identity(target_payload, self.bridge_id)
+        request_id_in_payload = _contains_control_plane_identity(target_payload, self.request_id)
+        canonical_round_id_in_payload = _contains_control_plane_identity(target_payload, canonical_round_id)
         user_has = bool(source_value and source_value in str(user_prompt or ""))
         target_prompt_has = bool(source_value and source_value in target_prompt)
+        target_key_prompt_has = bool(key and key in target_prompt)
         target_payload_has = bool(source_value and source_value in target_payload)
         target_key_has = bool(key and key in target_payload)
+        control_plane_identity_leak = any((bridge_id_in_user, bridge_id_in_provider, bridge_id_in_target_prompt, request_id_in_target_prompt, canonical_round_id_in_target_prompt, bridge_id_in_payload, request_id_in_payload, canonical_round_id_in_payload))
         target_value_outside_sanitized = target_payload_has
         target_value = str(read.get("value")) if read else ""
         sequence_valid = self._bridge_runtime_sequence_valid()
@@ -817,7 +889,10 @@ class SharedContextBridge:
         )
         target_ok = bool(read and int(read.get("target_seat", 0)) == int(target_seat))
         runtime_attestation_present = bool(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256"))
-        runtime_payload_is_sanitized = runtime_attestation_present and not target_value_outside_sanitized and not target_key_has
+        runtime_payload_is_sanitized = (
+            runtime_attestation_present and not target_value_outside_sanitized and not target_key_has
+            and not bridge_id_in_payload and not request_id_in_payload and not canonical_round_id_in_payload
+        )
         proven = bool(source_value)
         user_isolation = ("NO" if not user_has else "YES") if proven else "NOT_PROVEN"
         gemini_isolation = ("NO" if not target_prompt_has else "YES") if proven else "NOT_PROVEN"
@@ -843,6 +918,20 @@ class SharedContextBridge:
             "READ_AFTER_TARGET_RESPONSE": "PASS" if (self.strict_live_source and sequence_valid) else "NOT_PROVEN",
             "USER_PROMPT_CONTAINS_VALUE": user_isolation,
             "GEMINI_INPUT_PROMPT_CONTAINS_VALUE": gemini_isolation,
+            # HOTFIX164.11: explicit control-plane identity/key boundary attestations.
+            "USER_PROMPT_CONTAINS_BRIDGE_ID": "YES" if bridge_id_in_user else "NO",
+            "PROVIDER_PROMPT_CONTAINS_BRIDGE_ID": "YES" if bridge_id_in_provider else "NO",
+            "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_ID": "YES" if bridge_id_in_target_prompt else "NO",
+            "BRIDGE_ID_IN_GEMINI_INPUT_PROMPT": "YES" if bridge_id_in_target_prompt else "NO",
+            "BRIDGE_ID_IN_PROVIDER_PROMPT": "YES" if bridge_id_in_provider else "NO",
+            "BRIDGE_ID_IN_USER_PROMPT": "YES" if bridge_id_in_user else "NO",
+            "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_KEY": "YES" if target_key_prompt_has else "NO",
+            "GEMINI_INPUT_PROMPT_CONTAINS_REQUEST_ID": "YES" if request_id_in_target_prompt else "NO",
+            "GEMINI_INPUT_PROMPT_CONTAINS_CANONICAL_ROUND_ID": "YES" if canonical_round_id_in_target_prompt else "NO",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_ID": "YES" if bridge_id_in_payload else "NO",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_REQUEST_ID": "YES" if request_id_in_payload else "NO",
+            "RUNTIME_HTTP_PAYLOAD_CONTAINS_CANONICAL_ROUND_ID": "YES" if canonical_round_id_in_payload else "NO",
+            "CONTROL_PLANE_IDENTITY_LEAK": "YES" if control_plane_identity_leak else "NO",
             "BRIDGE_STATE_CONTAINS_VALUE": bridge_state,
             "SOURCE_EXECUTION_PROVEN": "PASS" if self._source_execution_proven is True else "FAIL" if self._source_execution_proven is False else "NOT_PROVEN",
             "BRIDGE_SOURCE_PROVENANCE": str(self._source_execution_mode or "NOT_PROVEN"),
@@ -896,6 +985,19 @@ class SharedContextBridge:
                 "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": "NO",
                 "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS",
                 "APPLICATION_OWNED_RUNTIME_RECORD": "PASS",
+                "USER_PROMPT_CONTAINS_BRIDGE_ID": "NO",
+                "PROVIDER_PROMPT_CONTAINS_BRIDGE_ID": "NO",
+                "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_ID": "NO",
+                "BRIDGE_ID_IN_GEMINI_INPUT_PROMPT": "NO",
+                "BRIDGE_ID_IN_PROVIDER_PROMPT": "NO",
+                "BRIDGE_ID_IN_USER_PROMPT": "NO",
+                "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_KEY": "NO",
+                "GEMINI_INPUT_PROMPT_CONTAINS_REQUEST_ID": "NO",
+                "GEMINI_INPUT_PROMPT_CONTAINS_CANONICAL_ROUND_ID": "NO",
+                "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_ID": "NO",
+                "RUNTIME_HTTP_PAYLOAD_CONTAINS_REQUEST_ID": "NO",
+                "RUNTIME_HTTP_PAYLOAD_CONTAINS_CANONICAL_ROUND_ID": "NO",
+                "CONTROL_PLANE_IDENTITY_LEAK": "NO",
             }
             failures.extend([k for k, expected in strict_required.items() if report.get(k) != expected])
         return {
@@ -1486,7 +1588,7 @@ def _provider_identity_matches(seat_key: str, executed_model: str, reported_mode
     return reported_model.lower() == executed_model.lower()
 
 
-def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls: list[tuple[str, str]] | None = None, allow_bridge_result_key: bool = False) -> None:
+def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls: list[tuple[str, str]] | None = None, allow_bridge_result_key: bool = False, forbidden_control_plane_ids: list[str] | None = None) -> None:
     """HOTFIX132: validate the *actual provider input*, not the user's diagnostic instructions.
 
     The previous implementation concatenated ``prompt`` with ``provider_prompt``.
@@ -1496,6 +1598,16 @@ def _assert_provider_boundary(prompt: str, provider_prompt: str, bridge_controls
     prompt is subject to the no-leak invariant.
     """
     provider_text = str(provider_prompt or "")
+    for identity in forbidden_control_plane_ids or []:
+        identity_text = str(identity or "").strip()
+        if not identity_text:
+            continue
+        # Runtime fixtures may use short symbolic IDs such as ``rid``. Match
+        # those as complete tokens so they do not false-positive on ordinary
+        # words (for example ``bridge`` contains the letters ``rid``). Real
+        # production IDs are long opaque strings and are checked exactly.
+        if _contains_control_plane_identity(provider_text, identity_text):
+            raise RuntimeError("control-plane identity leaked into provider-layer prompt")
     if not allow_bridge_result_key and re.search(r"(?i)\bBRIDGE_RESULT\b", provider_text):
         raise RuntimeError("BRIDGE_RESULT leaked into provider-layer prompt")
     for key, value in (bridge_controls or []):
@@ -1764,11 +1876,18 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # This records only booleans; credentials themselves never enter state.
             result_request_routed = bool(credentials.get(seat.key) and model_candidates.get(seat.key))
             provider_user_prompt = bridge.sanitize_user_prompt(user_prompt, seat)
+            forbidden_control_plane_ids = []
+            if strict_live_bridge:
+                forbidden_control_plane_ids = [
+                    bridge.bridge_id, request_id,
+                    str(bridge._runtime_bridge_evidence.get("canonical_round_id") or ""),
+                ]
             _assert_provider_boundary(
                 provider_user_prompt, provider_prompt, bridge_controls,
                 allow_bridge_result_key=bool(strict_live_bridge and seat.key == "deepseek"),
+                forbidden_control_plane_ids=forbidden_control_plane_ids,
             )
-            bridge.record_provider_input(seat, provider_prompt)
+            bridge.record_provider_input(seat, provider_prompt, provider_user_prompt=provider_user_prompt)
             if strict_live_bridge and seat.key == "gemini":
                 # The provider boundary and readiness gate have passed; this is the
                 # application-owned dispatch decision immediately before transport.
