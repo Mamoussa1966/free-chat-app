@@ -66,7 +66,12 @@ def test_hotfix89_resolves_gemini_read_without_putting_value_in_gemini_prompt(mo
     assert "BRIDGE CONTEXT CAPABILITY (SANITIZED)" in seen["gemini"]
     assert gemini["bridge_read_status"] == "PASS"
     assert gemini["bridge_schema_validation"] == "PASS"
-    assert gemini["content"] == "DS89-ONLY-IN-BRIDGE-STATE"
+    # HOTFIX164.12 security contract: the app-owned READ is separately recorded;
+    # it must not overwrite Gemini's provider response and create false echo evidence.
+    assert gemini["content"] == "[AGENT_CONTROL_PROSE_SUPPRESSED]"
+    assert gemini["bridge_read_value"] == "DS89-ONLY-IN-BRIDGE-STATE"
+    assert gemini["bridge_read_value_source"] == "APPLICATION_OWNED_BRIDGE_STORE"
+    assert gemini["target_response_used_as_bridge_read_proof"] is False
     assert gemini["bridge_trace"][-1]["target_seat"] == 2
     assert gemini["bridge_trace"][-1]["read_sequence"] == 1
     assert gemini["bridge_trace"][-1]["commit_status"] == "COMMITTED"

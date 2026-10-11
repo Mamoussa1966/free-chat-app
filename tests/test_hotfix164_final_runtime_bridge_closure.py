@@ -53,6 +53,7 @@ def _live_result(seat, request_id: str, round_no: int, content: str, user_prompt
         result["_runtime_payload_attestation"] = {
             "payload_json": payload_json,
             "payload_sha256": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+            "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True,
         }
     return result
 
@@ -169,6 +170,15 @@ def test_hotfix164_two_message_real_orchestrator_bridge_closes_fail_closed(monke
     chat, ss, calls = _two_turn_chat(monkeypatch)
     assert calls == [("closure-request-1-a71f9c0e", "deepseek"), ("closure-request-1-a71f9c0e", "gemini"),
                      ("closure-request-2-a71f9c0e", "deepseek"), ("closure-request-2-a71f9c0e", "gemini")]
+    # Provider response and application-owned Bridge READ are separate evidence.
+    # A copied Bridge value must never overwrite Gemini's actual response content.
+    for ordinal, request in enumerate(chat["request_records"], 1):
+        gemini = next(row for row in request["results"] if row.get("seat") == "gemini")
+        assert gemini["content"] == f"Gemini target response {ordinal}"
+        assert gemini["bridge_read_value"] == f"LIVE_BRIDGE_VALUE_{ordinal}_UNIQUE"
+        assert gemini["bridge_read_value_source"] == "APPLICATION_OWNED_BRIDGE_STORE"
+        assert gemini["bridge_read_matches_source_write"] is True
+        assert gemini["target_response_used_as_bridge_read_proof"] is False
     audit = authoritative_audit(chat, ss)
     assert audit["bridge_runtime_proof_required_message_1"] is True
     assert audit["bridge_runtime_proof_required_message_2"] is True
@@ -247,3 +257,56 @@ def test_hotfix164_gemini_bridge_prompt_has_no_control_plane_identity():
     assert canonical_round_id not in prompt
     assert "BRIDGE_RESULT" not in prompt
     assert "SECRET_BRIDGE_VALUE_16411" not in prompt
+
+
+def test_hotfix16413_wrong_or_synthetic_http_payload_hash_fails_closed():
+    rid = "closure-request-bad-http-hash-16413"
+    source, target = _seat("deepseek", "DeepSeek", 7), _seat("gemini", "Gemini", 2)
+    bridge = main.SharedContextBridge(request_id=rid, round_no=1, strict_live_source=True)
+    bridge._runtime_bridge_evidence["canonical_round_id"] = f"closure-conversation:{rid}:r1"
+    source_result = _live_result(source, rid, 1, "SOURCE_WRITE_VALUE_16413")
+    assert bridge.write_live_source_result(source, source_result) is True
+    bridge.commit(target); bridge.barrier()
+    bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
+    bridge.record_provider_input(target, "sanitized Gemini input")
+    payload = '{"contents":[{"parts":[{"text":"sanitized Gemini input"}]}]}'
+    bridge.record_runtime_payload_attestation(target, {
+        "payload_json": payload,
+        "payload_sha256": "x",  # Deliberately fabricated, not SHA-256(payload).
+        "transport_boundary": "requests.PreparedRequest.body",
+        "prepared_request_verified": True,
+    })
+    bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status="SUCCESS")
+    value = bridge.read("BRIDGE_RESULT", target)
+    bridge._record_bridge_event("MATCH", seat=2, provider="Application", status="PASS" if value else "FAIL")
+    audit = bridge.seal_runtime_audit(user_prompt="closure test prompt")
+    gate = bridge.bridge_security_regression_gate(audit)
+    assert audit["RUNTIME_HTTP_PAYLOAD_ATTESTED"] == "NO"
+    assert audit["RUNTIME_HTTP_PAYLOAD_HASH_INTEGRITY"] == "FAIL"
+    assert gate["status"] == "FAIL"
+    assert "RUNTIME_HTTP_PAYLOAD_ATTESTED" in gate["failures"]
+
+
+def test_hotfix16412_missing_independent_http_payload_attestation_fails_closed():
+    rid = "closure-request-no-http-attestation-16412"
+    source, target = _seat("deepseek", "DeepSeek", 7), _seat("gemini", "Gemini", 2)
+    bridge = main.SharedContextBridge(request_id=rid, round_no=1, strict_live_source=True)
+    bridge._runtime_bridge_evidence["canonical_round_id"] = f"closure-conversation:{rid}:r1"
+    source_result = _live_result(source, rid, 1, "SOURCE_WRITE_VALUE_16412")
+    assert bridge.write_live_source_result(source, source_result) is True
+    bridge.commit(target)
+    bridge.barrier()
+    bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
+    bridge.record_provider_input(target, "sanitized Gemini input")
+    # Deliberately omit record_runtime_payload_attestation: prompt text alone is
+    # not independent proof of the HTTP body sent to the provider.
+    bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status="SUCCESS")
+    value = bridge.read("BRIDGE_RESULT", target)
+    bridge._record_bridge_event("MATCH", seat=2, provider="Application", status="PASS" if value else "FAIL")
+    audit = bridge.seal_runtime_audit(user_prompt="closure test prompt")
+    gate = bridge.bridge_security_regression_gate(audit)
+    assert audit["RUNTIME_HTTP_PAYLOAD_ATTESTED"] == "NO"
+    assert audit["TARGET_RESPONSE_USED_AS_BRIDGE_READ_PROOF"] == "NO"
+    assert audit["SOURCE_WRITE_READ_RELATION_PROVEN"] == "PASS"
+    assert gate["status"] == "FAIL"
+    assert "RUNTIME_HTTP_PAYLOAD_ATTESTED" in gate["failures"]

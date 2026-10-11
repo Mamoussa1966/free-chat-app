@@ -30,3 +30,20 @@ def test_404_model_classification_wins_over_quota_wording():
 def test_429_distinguishes_rate_limit_from_explicit_quota():
     assert providers._classify(429, "too many requests") == "http_429_rate_limit_or_quota"
     assert providers._classify(429, "quota exceeded") == "billing_or_quota"
+
+
+def test_hotfix16413_attests_exact_prepared_http_body_bytes():
+    import hashlib
+    import json
+    response = type("Response", (), {"status_code": 200, "text": "{}", "headers": {}, "json": lambda self: {}})()
+    payload = {"input": "safe café", "model": "configured-free-model"}
+    with patch("providers.requests.post", return_value=response) as post:
+        assert _post("https://example.invalid/v1/messages", {"Content-Type": "application/json"}, payload, 5) == {}
+    sent_body = post.call_args.kwargs["data"]
+    assert isinstance(sent_body, bytes)
+    assert json.loads(sent_body.decode("utf-8")) == payload
+    attestation = providers._take_runtime_payload_attestation()
+    assert attestation["prepared_request_verified"] is True
+    assert attestation["transport_boundary"] == "requests.PreparedRequest.body"
+    assert attestation["payload_sha256"] == hashlib.sha256(sent_body).hexdigest()
+    assert attestation["payload_json"].encode("utf-8") == sent_body

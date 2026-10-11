@@ -1,4 +1,5 @@
 import json
+import hashlib
 
 import main
 from conversation_store import authoritative_snapshot
@@ -20,7 +21,9 @@ def _live_result(seat, request_id, round_no, content):
         "runtime_execution_events": [{"execution_started": True, "status": "SUCCESS",
                                       "request_id": request_id, "round": round_no, "provider": seat.key}],
         "content": content, "_provider_input_prompt": "sanitized runtime prompt",
-        "_runtime_payload_attestation": ({"payload_json": payload, "payload_sha256": "attested"}
+        "_runtime_payload_attestation": ({"payload_json": payload,
+            "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+            "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True}
                                          if seat.key == "gemini" else {}),
     }
 

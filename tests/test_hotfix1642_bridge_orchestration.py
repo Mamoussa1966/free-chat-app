@@ -1,3 +1,4 @@
+import hashlib
 import main
 from providers import Seat
 from conversation_store import canonical_upsert_request, canonical_identity_counts
@@ -16,7 +17,9 @@ def _runtime_success(seat, rid, round_no, content="live result"):
         "runtime_execution_events": [{"execution_started": True, "status": "SUCCESS",
                                       "request_id": rid, "round": round_no, "provider": seat.key}],
         "content": content, "_provider_input_prompt": "runtime prompt",
-        "_runtime_payload_attestation": ({"payload_json": '{"input":"runtime prompt"}', "payload_sha256": "x"}
+        "_runtime_payload_attestation": ({"payload_json": '{"input":"runtime prompt"}',
+            "payload_sha256": hashlib.sha256('{"input":"runtime prompt"}'.encode()).hexdigest(),
+            "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True}
                                          if seat.key == "gemini" else {}),
     }
 
