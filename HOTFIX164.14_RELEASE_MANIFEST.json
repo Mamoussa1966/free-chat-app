@@ -1,0 +1,38 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.14",
+  "title": "HTTP BODY INTEGRITY AND RELEASE IDENTITY CLOSURE",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "changed_files": [
+    "providers.py",
+    "tests/test_provider_runtime.py",
+    "HOTFIX164.14_FINAL_CLOSURE_RELEASE.md",
+    "HOTFIX164.14_AUDIT_REPORT.md",
+    "HOTFIX164.14_RELEASE_MANIFEST.json"
+  ],
+  "file_sha256": {
+    "providers.py": "3d2ecbd8050fdc7f93b832a10ed3b103f929b8b1a1dbc5f4e5e03f0c7f86b479",
+    "tests/test_provider_runtime.py": "2871efb7122fb98a8771dbdac034b6053cc7c038a6f9c72fad99750211851bdb",
+    "HOTFIX164.14_FINAL_CLOSURE_RELEASE.md": "91dc0c0406a226e85513bbf6f965f27481855d85f3eed14add92d9ce12690489",
+    "HOTFIX164.14_AUDIT_REPORT.md": "62f7de958af2c6287bb7f1aeb1f9af7ef4ea8466987a5747a8059b8c01d5d167",
+    "VERSION.txt": "de5a5d916559ce86c0a39e39b175968cbe479d3919ca6502322eb3004a533b26"
+  },
+  "validation": {
+    "full_suite_source": "615 passed, 0 failed",
+    "fresh_zip_roundtrip": "615 passed, 0 failed",
+    "zip_root_layout": "PASS",
+    "http_body_hash_integrity_regression": "PASS",
+    "fabricated_hash_fails_closed": "PASS",
+    "live_two_message_room_export": "NOT RUN — deployed Streamlit endpoint was unreachable from this verification environment; fresh deployed export required"
+  },
+  "guardrails": {
+    "provider_identity_changed": false,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "invalid_or_missing_payload_hash_fails_closed": true,
+    "runtime_release_label_matches_manifest": true,
+    "live_final_closure_proven": false
+  }
+}

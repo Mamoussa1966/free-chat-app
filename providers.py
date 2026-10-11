@@ -16,7 +16,7 @@ from production_core import FreeCascadeController, ProviderExecutionContract, Ti
 
 VERSION = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 HOTFIX_RELEASE_VERSION = "V23.0-HOTFIX144-PROSE-RUNTIME-TRUTH-SEPARATION-AUTHORITATIVE-GATE"
-CURRENT_HOTFIX_RELEASE_VERSION = "HOTFIX164.10 — STRICT BRIDGE SECURITY AUDIT INTEGRATION"
+CURRENT_HOTFIX_RELEASE_VERSION = "HOTFIX164.14 — HTTP BODY INTEGRITY AND RELEASE IDENTITY CLOSURE"
 PLATFORM_RELEASE_VERSION = "V24.0-HOTFIX145-CONVERSATION-RUNTIME-PROFESSIONAL-CHAT-FOUNDATION"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
@@ -763,6 +763,10 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
         prepared_body = prepared_request.body or b""
         _RUNTIME_ATTESTATION_LOCAL.value = _runtime_payload_attestation(url, payload, prepared_body)
         try:
+            # requests uses the non-empty data argument as the transmitted body;
+            # json= is retained for compatibility with existing adapter contracts.
+            # The integrity gate hashes the exact bytes supplied as data, and the
+            # regression test checks that these are the same bytes passed to transport.
             response = requests.post(
                 url, headers=dict(prepared_request.headers), data=prepared_body,
                 json=payload, timeout=request_timeout,
