@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import hashlib
 import main
 from release_identity import deployed_release_identity, assert_deployed_release_identity
 
@@ -48,7 +49,8 @@ def test_hotfix123_bridge_negative_target_prompt_leak_fails():
     bridge.seed_application_state("BRIDGE_RESULT", value, source="DeepSeek", source_seat=7)
     bridge.commit(gem); bridge.barrier(); bridge.read("BRIDGE_RESULT", gem)
     bridge.record_provider_input(gem, "LEAK " + value)
-    bridge.record_runtime_payload_attestation(gem, {"payload_json":json.dumps({"input":"LEAK " + value}), "payload_sha256":"attested"})
+    leaking_payload = json.dumps({"input":"LEAK " + value})
+    bridge.record_runtime_payload_attestation(gem, {"payload_json": leaking_payload, "payload_sha256": hashlib.sha256(leaking_payload.encode("utf-8")).hexdigest()})
     audit = bridge.transaction_audit(user_prompt="clean")
     assert audit["GEMINI_INPUT_PROMPT_CONTAINS_VALUE"] == "YES"
     assert audit["RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE"] == "YES"

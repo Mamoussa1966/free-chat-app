@@ -1,4 +1,5 @@
 import json
+import hashlib
 from unittest.mock import patch
 import main
 
@@ -25,7 +26,7 @@ def _success(seat, user_prompt, shared_context, round_no, local_fallback, creden
         "_provider_input_prompt": shared_context,
         "_runtime_payload_attestation": {
             "payload_json": json.dumps({"input": shared_context}, ensure_ascii=False),
-            "payload_sha256": "attested",
+            "payload_sha256": hashlib.sha256(json.dumps({"input": shared_context}, ensure_ascii=False).encode("utf-8")).hexdigest(),
         },
     }
 
@@ -81,7 +82,8 @@ def test_hotfix124_raw_user_prompt_canary_leak_is_detected():
     bridge.seed_application_state("BRIDGE_RESULT", canary, source="DeepSeek", source_seat=7)
     bridge.commit(_seats()["gemini"]); bridge.barrier(); bridge.read("BRIDGE_RESULT", _seats()["gemini"])
     bridge.record_provider_input(_seats()["gemini"], bridge.prompt_snapshot(_seats()["gemini"]))
-    bridge.record_runtime_payload_attestation(_seats()["gemini"], {"payload_json":"{\"input\":\"sanitized\"}", "payload_sha256":"attested"})
+    safe_payload = "{\"input\":\"sanitized\"}"
+    bridge.record_runtime_payload_attestation(_seats()["gemini"], {"payload_json": safe_payload, "payload_sha256": hashlib.sha256(safe_payload.encode()).hexdigest()})
     audit = bridge.transaction_audit(user_prompt="malicious " + canary)
     assert audit["USER_PROMPT_CONTAINS_VALUE"] == "YES"
     assert bridge.bridge_security_regression_gate(audit)["status"] == "FAIL"
