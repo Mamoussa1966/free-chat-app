@@ -1,0 +1,47 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.13",
+  "title": "HTTP BODY INTEGRITY GATE AND BRIDGE CLOSURE HARDENING",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "changed_files": [
+    "providers.py",
+    "main.py",
+    "tests/test_provider_runtime.py",
+    "tests/test_hotfix1642_bridge_orchestration.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix124_bridge_only_release.py",
+    "tests/test_hotfix123_bridge_security_release.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "HOTFIX164.13_FINAL_CLOSURE_RELEASE.md",
+    "VERSION.txt"
+  ],
+  "file_sha256": {
+    "providers.py": "c70943dc58bd7d5dc2d620c6b8ac16a6331370290f98b12eb9b2a6f859765642",
+    "main.py": "27aacd450955d5d69e8a62ad889db0b988730eefc99755c431cf0f619650b698",
+    "tests/test_provider_runtime.py": "19f8ed0b6616b8a2a790bf91757b6f15b982ef7f1973295a55695f7f35035217",
+    "tests/test_hotfix1642_bridge_orchestration.py": "85ef1abb60f7ea8ab9d45b5474dc199b7a4fcef7e8cbdeb93c74bbb6c0efc26c",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py": "7becc091f2ccb39c5a5f3e4ad55f5067bdefae87baef4b046c934e71f7a746e3",
+    "tests/test_hotfix124_bridge_only_release.py": "1229f2e5eca116e26d4a43dd8842f8412d49ff981a50d7ee166ba203b33eef7e",
+    "tests/test_hotfix123_bridge_security_release.py": "0d17d2d847b736189a26afaa5762d4c2821decb572311f7f9d7ebf8ff2c36efa",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py": "b9f3fe5f20b205f96398a46b9e756840c485ad491eca735191d4a85a236ca013",
+    "HOTFIX164.13_FINAL_CLOSURE_RELEASE.md": "20738de376088ed95b89480f6f6c73674a62077d56ed6d88aaeba9f7286934bf",
+    "VERSION.txt": "de5a5d916559ce86c0a39e39b175968cbe479d3919ca6502322eb3004a533b26"
+  },
+  "validation": {
+    "full_suite_source": "614 passed, 0 failed",
+    "fresh_zip_roundtrip": "614 passed, 0 failed",
+    "zip_root_layout": "PASS",
+    "http_body_hash_integrity_regression": "PASS",
+    "fabricated_hash_fails_closed": "PASS",
+    "live_two_message_room_export": "NOT RUN — requires deployed live room and fresh export"
+  },
+  "guardrails": {
+    "provider_identity_changed": false,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "invalid_or_missing_payload_hash_fails_closed": true,
+    "live_final_closure_proven": false
+  }
+}

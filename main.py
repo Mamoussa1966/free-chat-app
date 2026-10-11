@@ -444,10 +444,23 @@ class SharedContextBridge:
         return "\n\n".join(part for part in (user_part, context_part) if part)
 
     def record_runtime_payload_attestation(self, seat, attestation: dict) -> None:
-        """Capture the exact JSON payload passed to the official HTTP transport."""
-        if not isinstance(attestation, dict) or not attestation.get("payload_json"):
+        """Capture an integrity-checked attestation for the prepared HTTP JSON body.
+
+        An arbitrary non-empty digest is not proof. Require SHA-256(payload_json)
+        to match the supplied digest before this record can satisfy a security gate.
+        """
+        slot = int(getattr(seat, "room_slot", 0) or 0)
+        if not isinstance(attestation, dict) or not isinstance(attestation.get("payload_json"), str):
+            self._runtime_payload_attestations.pop(slot, None)
             return
-        self._runtime_payload_attestations[int(getattr(seat, "room_slot", 0) or 0)] = copy.deepcopy(attestation)
+        payload_json = attestation.get("payload_json")
+        supplied = str(attestation.get("payload_sha256") or "").strip().lower()
+        computed = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        valid_format = bool(re.fullmatch(r"[0-9a-f]{64}", supplied))
+        checked = copy.deepcopy(attestation)
+        checked["payload_sha256_computed"] = computed
+        checked["integrity_valid"] = bool(valid_format and supplied == computed)
+        self._runtime_payload_attestations[slot] = checked
 
     def _runtime_payload_text(self, seat_slot: int) -> str:
         record = self._runtime_payload_attestations.get(int(seat_slot)) or {}
@@ -888,7 +901,14 @@ class SharedContextBridge:
             )
         )
         target_ok = bool(read and int(read.get("target_seat", 0)) == int(target_seat))
-        runtime_attestation_present = bool(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256"))
+        runtime_attestation = self._runtime_payload_attestations.get(int(target_seat), {})
+        runtime_attestation_present = bool(
+            runtime_attestation.get("integrity_valid") is True
+            and (not self.strict_live_source or (
+                runtime_attestation.get("prepared_request_verified") is True
+                and runtime_attestation.get("transport_boundary") == "requests.PreparedRequest.body"
+            ))
+        )
         runtime_payload_is_sanitized = (
             runtime_attestation_present and not target_value_outside_sanitized and not target_key_has
             and not bridge_id_in_payload and not request_id_in_payload and not canonical_round_id_in_payload
@@ -939,6 +959,14 @@ class SharedContextBridge:
             "TERMINAL_REASON": self._terminal_reason,
             "APPLICATION_OWNED_RUNTIME_RECORD": "PASS" if control_record_proven and self._runtime_bridge_evidence.get("sealed") else "NOT_PROVEN",
             "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES" if runtime_attestation_present else "NO",
+            # This is derived from the app-owned transaction ordering, not from
+            # provider response prose. Missing ordered runtime evidence is unknown.
+            "TARGET_RESPONSE_USED_AS_BRIDGE_READ_PROOF": (
+                "NO" if self.strict_live_source and sequence_valid and read and target_ok else "NOT_PROVEN"
+            ),
+            "SOURCE_WRITE_READ_RELATION_PROVEN": (
+                "PASS" if self.strict_live_source and sequence_valid and record and read and source_value and target_value == source_value else "NOT_PROVEN"
+            ),
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": ("NO" if not target_value_outside_sanitized else "YES") if runtime_attestation_present else "NOT_PROVEN",
             "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": ("NO" if not target_key_has else "YES") if runtime_attestation_present else "NOT_PROVEN",
             "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS" if runtime_payload_is_sanitized else "FAIL",
@@ -946,6 +974,7 @@ class SharedContextBridge:
             "read_sequence": int(read.get("read_sequence", 0)) if read else 0,
             "request_id": self.request_id,
             "runtime_payload_sha256": str(self._runtime_payload_attestations.get(int(target_seat), {}).get("payload_sha256") or ""),
+            "RUNTIME_HTTP_PAYLOAD_HASH_INTEGRITY": "PASS" if runtime_attestation_present else "FAIL",
         }
 
     def transaction_audit(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
@@ -981,6 +1010,8 @@ class SharedContextBridge:
                 "SOURCE_EXECUTION_PROVEN": "PASS",
                 "BRIDGE_SOURCE_PROVENANCE": "LIVE_PROVIDER_RESULT",
                 "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES",
+                "TARGET_RESPONSE_USED_AS_BRIDGE_READ_PROOF": "NO",
+                "SOURCE_WRITE_READ_RELATION_PROVEN": "PASS",
                 "RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE": "NO",
                 "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": "NO",
                 "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS",
@@ -1983,13 +2014,17 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 )
                 result["bridge_schema_validation"] = resolution.get("schema_validation", "")
                 if resolution.get("status") == "RESOLVED" and resolution.get("value") is not None:
-                    # The provider was deliberately not given the bridge value
-                    # in its input. The bridge resolves its explicit read request
-                    # here and publishes the canonical read result as the seat's
-                    # response. No second provider call is made, so there is no
-                    # prompt injection of BRIDGE_RESULT.
-                    result["content"] = str(resolution["value"])
+                    # Keep the provider's actual response immutable as response evidence.
+                    # The application-owned Bridge READ is a separate field and must
+                    # never be copied into Gemini content: doing so makes the export
+                    # appear to show Gemini echoed the secret, and conflates response
+                    # data with independent proof of the post-response application read.
                     result["bridge_read_value"] = str(resolution["value"])
+                    result["bridge_read_value_source"] = "APPLICATION_OWNED_BRIDGE_STORE"
+                    result["bridge_read_matches_source_write"] = bool(
+                        str(resolution["value"]) == str((bridge._values.get("BRIDGE_RESULT") or {}).get("value") or "")
+                    )
+                    result["target_response_used_as_bridge_read_proof"] = False
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
             result["bridge_trace"] = bridge.transaction_trace()

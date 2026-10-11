@@ -723,19 +723,31 @@ def _take_runtime_payload_attestation() -> dict:
     _RUNTIME_ATTESTATION_LOCAL.value = {}
     return value
 
-def _runtime_payload_attestation(url: str, payload: dict) -> dict:
-    """Transient attestation of the exact JSON payload passed to requests.post.
+def _runtime_payload_attestation(url: str, payload: dict, prepared_body=None) -> dict:
+    """Attest the exact prepared HTTP body supplied to requests.post(data=...).
 
-    The raw payload is retained only in-process so the caller can inspect the
-    actual HTTP JSON argument. Persistent/UI paths receive hashes and metadata,
-    never provider credentials or raw payloads.
+    The prepared body is retained only transiently so the application can inspect
+    the actual body bytes at the transport boundary. Persistent/UI paths receive
+    hashes and metadata, never credentials or raw payloads.
     """
-    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    if prepared_body is None:
+        prepared = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    elif isinstance(prepared_body, bytes):
+        prepared = prepared_body
+    else:
+        prepared = str(prepared_body).encode("utf-8")
+    try:
+        body_text = prepared.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProviderError("prepared provider request body is not UTF-8 JSON", error_class="invalid_request") from exc
     return {
-        "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-        "payload_bytes": len(canonical.encode("utf-8")),
+        "payload_sha256": hashlib.sha256(prepared).hexdigest(),
+        "payload_bytes": len(prepared),
         "endpoint_sha256": hashlib.sha256(str(url).encode("utf-8")).hexdigest(),
-        "payload_json": canonical,
+        "payload_json": body_text,
+        "transport_boundary": "requests.PreparedRequest.body",
+        "prepared_request_verified": True,
+        "http_method": "POST",
     }
 
 
@@ -744,8 +756,17 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
     retry_budget = RETRIES if retries is None else max(0, int(retries))
     for attempt in range(retry_budget + 1):
         request_timeout = _bounded_timeout(timeout, deadline)
+        # Prepare the request once and send those exact body bytes. This lets the
+        # audit hash the same body passed to the HTTP transport, rather than a
+        # separately re-serialized Python dictionary.
+        prepared_request = requests.Request("POST", url, headers=headers, json=payload).prepare()
+        prepared_body = prepared_request.body or b""
+        _RUNTIME_ATTESTATION_LOCAL.value = _runtime_payload_attestation(url, payload, prepared_body)
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=request_timeout)
+            response = requests.post(
+                url, headers=dict(prepared_request.headers), data=prepared_body,
+                json=payload, timeout=request_timeout,
+            )
         except requests.Timeout as exc:
             last = ProviderError("network timeout", error_class="timeout")
             if attempt < retry_budget and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
@@ -782,7 +803,6 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
             raise ProviderError("invalid JSON response", response.status_code, "invalid_response") from exc
         if not isinstance(data, dict):
             raise ProviderError("provider returned a non-object JSON response", response.status_code, "invalid_response")
-        _RUNTIME_ATTESTATION_LOCAL.value = _runtime_payload_attestation(url, payload)
         return data
     raise last or ProviderError("provider request failed")
 
