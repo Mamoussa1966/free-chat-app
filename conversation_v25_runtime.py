@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 """V25 authoritative Conversation Ledger / Message Runtime.
 
 Additive reconciliation layer on top of HOTFIX145/V24.  It consumes only
@@ -1023,6 +1024,8 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 "gemini_input_prompt_contains_value", "runtime_http_payload_attested",
                 "runtime_http_payload_contains_value", "runtime_http_payload_contains_bridge_key",
                 "gemini_received_sanitized_representation_only", "terminal_state",
+                "runtime_http_payload_hash_integrity", "runtime_payload_transport_boundary",
+                "runtime_payload_prepared_request_verified", "runtime_sequence_target_identity_status",
             )
             base_complete = (
                 all(row.get(k) == "PASS" for k in required[:10])
@@ -1049,11 +1052,48 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 "runtime_http_payload_contains_bridge_id", "runtime_http_payload_contains_request_id",
                 "runtime_http_payload_contains_canonical_round_id",
             )
+            events = row.get("runtime_sequence")
+            phases = ["SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
+                      "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH"]
+            statuses = ["SUCCESS", "RECORDED", "PASS", "PASS", "PASS", "ACCEPTED", "SUCCESS", "PASS", "PASS"]
+            sequence_valid = isinstance(events, list) and len(events) == len(phases)
+            if sequence_valid:
+                for idx, (event, phase, status) in enumerate(zip(events, phases, statuses), start=1):
+                    if not isinstance(event, dict):
+                        sequence_valid = False; break
+                    if (event.get("seq") != idx or event.get("phase") != phase
+                            or str(event.get("request_id") or "") != str(rid_expected or "")
+                            or str(event.get("round_id") or "") != str(row.get("round_id") or "")
+                            or event.get("status") != status):
+                        sequence_valid = False; break
+                    if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"}:
+                        if str(event.get("seat") or "") != "7" or str(event.get("provider") or "").lower() != "deepseek":
+                            sequence_valid = False; break
+                    elif phase == "COMMIT":
+                        if str(event.get("target_seat") or "") != "2": sequence_valid = False; break
+                    else:
+                        expected_provider = "application" if phase == "MATCH" else "gemini"
+                        if (str(event.get("seat") or "") != "2" or str(event.get("target_seat") or "") != "2"
+                                or str(event.get("provider") or "").lower() != expected_provider):
+                            sequence_valid = False; break
             return bool(
-                row.get("schema") == "bridge-runtime-evidence/v2"
+                row.get("schema") == "bridge-runtime-evidence/v3"
                 and str(row.get("request_id") or "") == str(rid_expected or "")
                 and str(row.get("canonical_round_id") or "") == str(round_id_expected or "")
-                and str(row.get("bridge_id_hash") or "").strip()
+                and re.fullmatch(r"[0-9a-f]{64}", str(row.get("bridge_id_hash") or "").lower())
+                and re.fullmatch(r"[0-9a-f]{64}", str(row.get("runtime_payload_sha256") or "").lower())
+                and str(row.get("source_provider") or "").lower() == "deepseek"
+                and str(row.get("source_seat") or "") == "7"
+                and str(row.get("target_provider") or "").lower() == "gemini"
+                and str(row.get("target_seat") or "") == "2"
+                and str(row.get("commit_target_seat") or "") == "2"
+                and str(row.get("barrier_target_seat") or "") == "2"
+                and str(row.get("read_target_seat") or "") == "2"
+                and row.get("runtime_sequence_target_identity_status") == "PASS"
+                and row.get("runtime_http_payload_hash_integrity") == "PASS"
+                and row.get("runtime_payload_transport_boundary") == "requests.PreparedRequest.body"
+                and row.get("runtime_payload_prepared_request_verified") == "YES"
+                and sequence_valid
                 and int(row.get("bridge_trace_count") or 0) == 2
                 and row.get("bridge_state_terminal") == "COMMITTED"
                 and row.get("bridge_gate_status") == "PASS"

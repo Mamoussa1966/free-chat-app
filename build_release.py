@@ -42,6 +42,7 @@ ALLOWED_BASELINE_CHANGES = {
     "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
     "tests/test_hotfix26_release_roundtrip.py",
     "tests/test_grok_integration.py", "tests/test_deepseek_integration.py", "tests/test_multiagent_architecture.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
     "tests/test_hotfix60_fixes.py", "tests/test_hotfix61_integration.py",
     "tests/test_hotfix88_bridge_transaction.py", "tests/test_hotfix87_production_hardened.py",
     "tests/test_hotfix92_production_core.py", "tests/test_hotfix92_release_core.py",

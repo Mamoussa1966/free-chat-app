@@ -2,6 +2,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from conversation_schema import SCHEMA_VERSION
@@ -874,6 +875,206 @@ def append_once(rows: list, row: dict, identity_keys: tuple[str, ...]) -> None:
             return
     rows.append(copy.deepcopy(row))
 
+_BRIDGE_RUNTIME_PHASES = [
+    "SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
+    "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH",
+]
+_BRIDGE_RUNTIME_STATUSES = ["SUCCESS", "RECORDED", "PASS", "PASS", "PASS", "ACCEPTED", "SUCCESS", "PASS", "PASS"]
+_BRIDGE_ISOLATION_NO_FIELDS = (
+    "user_prompt_contains_value", "gemini_input_prompt_contains_value",
+    "user_prompt_contains_bridge_id", "provider_prompt_contains_bridge_id",
+    "gemini_input_prompt_contains_bridge_id", "bridge_id_in_gemini_input_prompt",
+    "bridge_id_in_provider_prompt", "bridge_id_in_user_prompt",
+    "gemini_input_prompt_contains_bridge_key", "gemini_input_prompt_contains_request_id",
+    "gemini_input_prompt_contains_canonical_round_id", "runtime_http_payload_contains_bridge_id",
+    "runtime_http_payload_contains_request_id", "runtime_http_payload_contains_canonical_round_id",
+    "control_plane_identity_leak", "runtime_http_payload_contains_value",
+    "runtime_http_payload_contains_bridge_key",
+)
+_BRIDGE_PASS_FIELDS = (
+    "source_execution_proven", "write_status", "validate_status", "commit_status",
+    "barrier_status", "target_dispatch_status", "target_response_status", "read_status",
+    "schema_validation_status", "match_status", "application_owned", "bridge_gate_status",
+)
+
+
+def _bridge_export_record_status(request_id: str, evidence: dict, canonical_rounds: list) -> tuple[str, str, str]:
+    """Independently validate one sanitized Bridge record against canonical request/round rows.
+
+    Returns (overall_status, target_identity_status, round_binding_status). This check only
+    reads persisted application-owned evidence. It never derives a missing PASS from prose.
+    """
+    rid = str(request_id or "").strip()
+    if not rid or not isinstance(evidence, dict):
+        return "NOT_PROVEN", "NOT_PROVEN", "NOT_PROVEN"
+    if str(evidence.get("request_id") or "") != rid:
+        return "FAIL", "NOT_PROVEN", "FAIL"
+
+    bound_rounds = [r for r in canonical_rounds if isinstance(r, dict) and str(r.get("request_id") or "") == rid]
+    if len(bound_rounds) != 1:
+        round_binding = "FAIL" if len(bound_rounds) > 1 else "NOT_PROVEN"
+    else:
+        row_round_id = str(bound_rounds[0].get("round_id") or bound_rounds[0].get("canonical_round_record_id") or "")
+        evidence_round_id = str(evidence.get("canonical_round_id") or "")
+        if not row_round_id or not evidence_round_id:
+            round_binding = "NOT_PROVEN"
+        else:
+            round_binding = "PASS" if row_round_id == evidence_round_id else "FAIL"
+
+    events = evidence.get("runtime_sequence")
+    target_status = "NOT_PROVEN"
+    sequence_status = "NOT_PROVEN"
+    if isinstance(events, list) and events:
+        phases = [str(e.get("phase") or "") for e in events if isinstance(e, dict)]
+        if len(events) != len(_BRIDGE_RUNTIME_PHASES) or phases != _BRIDGE_RUNTIME_PHASES:
+            sequence_status = "FAIL" if len(phases) == len(_BRIDGE_RUNTIME_PHASES) else "NOT_PROVEN"
+        else:
+            required = []
+            target_status = "PASS"
+            try:
+                ordinal = str(int(evidence.get("round_id")))
+            except (TypeError, ValueError):
+                ordinal = ""
+            if not ordinal or not rid:
+                sequence_status = "NOT_PROVEN"
+                target_status = "NOT_PROVEN"
+            else:
+                for index, (event, phase, status) in enumerate(zip(events, _BRIDGE_RUNTIME_PHASES, _BRIDGE_RUNTIME_STATUSES), start=1):
+                    if not isinstance(event, dict):
+                        required.append("NOT_PROVEN"); continue
+                    expected_common = {
+                        "seq": index, "phase": phase, "request_id": rid,
+                        "round_id": ordinal, "status": status,
+                    }
+                    for key, expected in expected_common.items():
+                        if key not in event or event.get(key) in (None, ""):
+                            required.append("NOT_PROVEN")
+                        elif event.get(key) != expected and str(event.get(key)) != str(expected):
+                            required.append("FAIL")
+                    if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"}:
+                        identity = {"seat": 7, "provider": "DeepSeek"}
+                    elif phase == "COMMIT":
+                        identity = {"target_seat": 2}
+                    else:
+                        identity = {"seat": 2, "target_seat": 2,
+                                    "provider": "Application" if phase == "MATCH" else "Gemini"}
+                    for key, expected in identity.items():
+                        actual = event.get(key)
+                        if actual in (None, ""):
+                            required.append("NOT_PROVEN")
+                            if key in {"seat", "target_seat", "provider"}:
+                                target_status = "NOT_PROVEN"
+                        elif str(actual).lower() != str(expected).lower():
+                            required.append("FAIL")
+                            if key in {"seat", "target_seat", "provider"}:
+                                target_status = "FAIL"
+                if "FAIL" in required:
+                    sequence_status = "FAIL"
+                elif "NOT_PROVEN" in required:
+                    sequence_status = "NOT_PROVEN"
+                else:
+                    sequence_status = "PASS"
+                if sequence_status != "PASS" and target_status == "PASS":
+                    target_status = sequence_status
+
+    missing, failures = [], []
+    for field in _BRIDGE_PASS_FIELDS:
+        value = evidence.get(field)
+        if value in (None, ""):
+            missing.append(field)
+        elif value != "PASS":
+            failures.append(field)
+    for field in _BRIDGE_ISOLATION_NO_FIELDS:
+        value = evidence.get(field)
+        if value in (None, ""):
+            missing.append(field)
+        elif value != "NO":
+            failures.append(field)
+    if evidence.get("bridge_state_contains_value") != "YES":
+        (missing if evidence.get("bridge_state_contains_value") in (None, "") else failures).append("bridge_state_contains_value")
+    if evidence.get("runtime_http_payload_attested") != "YES":
+        (missing if evidence.get("runtime_http_payload_attested") in (None, "") else failures).append("runtime_http_payload_attested")
+    for field in ("runtime_http_payload_hash_integrity", "runtime_sequence_target_identity_status"):
+        if evidence.get(field) != "PASS":
+            (missing if evidence.get(field) in (None, "") else failures).append(field)
+    if evidence.get("runtime_payload_transport_boundary") != "requests.PreparedRequest.body":
+        (missing if evidence.get("runtime_payload_transport_boundary") in (None, "") else failures).append("runtime_payload_transport_boundary")
+    if evidence.get("runtime_payload_prepared_request_verified") != "YES":
+        (missing if evidence.get("runtime_payload_prepared_request_verified") in (None, "") else failures).append("runtime_payload_prepared_request_verified")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("bridge_id_hash") or "").lower()):
+        (missing if not evidence.get("bridge_id_hash") else failures).append("bridge_id_hash")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("runtime_payload_sha256") or "").lower()):
+        (missing if not evidence.get("runtime_payload_sha256") else failures).append("runtime_payload_sha256")
+    if evidence.get("terminal_state") != "COMMITTED" or evidence.get("bridge_state_terminal") != "COMMITTED":
+        failures.append("terminal_state") if evidence.get("terminal_state") or evidence.get("bridge_state_terminal") else missing.append("terminal_state")
+    if round_binding == "FAIL": failures.append("canonical_round_binding")
+    elif round_binding != "PASS": missing.append("canonical_round_binding")
+    if sequence_status == "FAIL": failures.append("runtime_sequence")
+    elif sequence_status != "PASS": missing.append("runtime_sequence")
+    if target_status == "FAIL": failures.append("target_identity")
+    elif target_status != "PASS": missing.append("target_identity")
+    status = "FAIL" if failures else ("NOT_PROVEN" if missing else "PASS")
+    return status, target_status, round_binding
+
+
+def _safe_bridge_evidence_export(runtime_store: dict, canonical_requests: list, canonical_rounds: list, safe_runtime_store: dict) -> dict:
+    """Export independent request-scoped sanitized evidence, including explicit NOT_PROVEN rows."""
+    strict_ids = []
+    for row in canonical_requests:
+        if not isinstance(row, dict):
+            continue
+        if row.get("bridge_test_requested") is True or str(row.get("bridge_runtime_contract") or "") == "STRICT_LIVE":
+            rid = str(row.get("request_id") or "").strip()
+            if rid and rid not in strict_ids:
+                strict_ids.append(rid)
+    if isinstance(runtime_store, dict):
+        for rid in runtime_store:
+            rid = str(rid or "").strip()
+            if rid and rid not in strict_ids:
+                strict_ids.append(rid)
+    records = []
+    for rid in strict_ids:
+        raw = runtime_store.get(rid) if isinstance(runtime_store, dict) else None
+        safe = safe_runtime_store.get(rid) if isinstance(safe_runtime_store, dict) else None
+        if not isinstance(raw, dict) or not isinstance(safe, dict):
+            records.append({"request_id": rid, "bridge_id": "[REDACTED]", "export_status": "NOT_PROVEN",
+                            "target_identity_status": "NOT_PROVEN", "canonical_round_binding_status": "NOT_PROVEN",
+                            "missing_evidence": ["APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"]})
+            continue
+        status, target_status, binding_status = _bridge_export_record_status(rid, raw, canonical_rounds)
+        item = copy.deepcopy(safe)
+        item["export_status"] = status
+        item["target_identity_status"] = target_status
+        item["canonical_round_binding_status"] = binding_status
+        item["bridge_id_uniqueness_status"] = "NOT_PROVEN"  # set after comparing the whole request set
+        records.append(item)
+    nonempty_hashes = [str(item.get("bridge_id_hash") or "") for item in records if item.get("bridge_id_hash")]
+    if len(records) >= 2:
+        duplicate = len(nonempty_hashes) != len(records) or len(set(nonempty_hashes)) != len(records)
+        uniqueness = "FAIL" if duplicate else "PASS"
+    else:
+        uniqueness = "NOT_PROVEN"
+    for item in records:
+        item["bridge_id_uniqueness_status"] = uniqueness
+        if uniqueness == "FAIL":
+            item["export_status"] = "FAIL"
+    if records and all(item.get("export_status") == "PASS" for item in records) and uniqueness == "PASS":
+        overall = "PASS"
+    elif any(item.get("export_status") == "FAIL" for item in records) or uniqueness == "FAIL":
+        overall = "FAIL"
+    else:
+        overall = "NOT_PROVEN"
+    return {
+        "schema": "bridge-runtime-evidence-export/v1",
+        "authoritative_source": "APPLICATION_OWNED_RUNTIME_RECORDS_ONLY",
+        "status": overall,
+        "request_count": len(records),
+        "bridge_id_uniqueness_status": uniqueness,
+        "records": records,
+        "fail_closed_rule": "NOT_PROVEN_WHEN_REQUIRED_APPLICATION_OWNED_EVIDENCE_IS_MISSING",
+    }
+
+
 def authoritative_snapshot(chat: dict) -> dict:
     ensure_store(chat)
     rec = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
@@ -899,6 +1100,10 @@ def authoritative_snapshot(chat: dict) -> dict:
         "gemini_input_prompt_contains_canonical_round_id",
         "runtime_http_payload_contains_bridge_id", "runtime_http_payload_contains_request_id",
         "runtime_http_payload_contains_canonical_round_id", "control_plane_identity_leak",
+        "source_provider", "source_seat", "target_provider", "target_seat",
+        "runtime_http_payload_hash_integrity", "runtime_payload_sha256",
+        "runtime_payload_transport_boundary", "runtime_payload_prepared_request_verified",
+        "runtime_sequence_target_identity_status", "commit_target_seat", "barrier_target_seat", "read_target_seat",
     }
     runtime_store = chat.get("bridge_runtime_evidence_store", {})
     safe_runtime_store = {}
@@ -920,6 +1125,12 @@ def authoritative_snapshot(chat: dict) -> dict:
     projection_rounds = copy.deepcopy(chat.get("round_ledger_v24", []))
     if not projection_rounds and canonical_rounds:
         projection_rounds = copy.deepcopy(canonical_rounds)
+    bridge_evidence_export = _safe_bridge_evidence_export(
+        runtime_store if isinstance(runtime_store, dict) else {},
+        rec.get("requests", []) if isinstance(rec.get("requests"), list) else [],
+        canonical_rounds if isinstance(canonical_rounds, list) else [],
+        safe_runtime_store,
+    )
     return {
         "schema": SCHEMA_VERSION,
         "conversation_id": chat.get("conversation_id"),
@@ -935,6 +1146,7 @@ def authoritative_snapshot(chat: dict) -> dict:
         },
         "bridges": copy.deepcopy(chat.get("bridge_ledger_v24", [])),
         "bridge_runtime_evidence_store": safe_runtime_store,
+        "bridge_runtime_evidence_export": bridge_evidence_export,
         "results": copy.deepcopy(chat.get("result_ledger_v24", [])),
         "provenance": copy.deepcopy(chat.get("provenance_ledger_v24", [])),
         "timeline": copy.deepcopy(chat.get("timeline_ledger_v24", [])),
