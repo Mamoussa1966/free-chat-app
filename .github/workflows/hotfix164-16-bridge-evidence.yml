@@ -1,0 +1,70 @@
+name: HOTFIX164.16 Bridge Runtime Evidence Closure
+
+on:
+  push:
+    branches:
+      - gitops-v0.4-final
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hotfix164-16-bridge-evidence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    name: Full regression suite and fresh ZIP round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Build, run full regression, and verify extracted ZIP
+        run: |
+          python build_release.py --output HOTFIX164.16_BRIDGE_RUNTIME_EVIDENCE_CLOSURE.zip
+
+      - name: Verify frozen core identity and evidence-export scope
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          expected = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+          if Path("VERSION.txt").read_text(encoding="utf-8").strip() != expected:
+              raise SystemExit("VERSION_CONTRACT_FAILED")
+          manifest = json.loads(Path("HOTFIX164.16_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+          if manifest.get("release") != "HOTFIX164.16" or manifest.get("provider_core_identity") != expected:
+              raise SystemExit("HOTFIX164.16_MANIFEST_IDENTITY_FAILED")
+          guards = manifest.get("guardrails", {})
+          if guards.get("v26_3_identity_logic_changed") is not False or guards.get("canonical_counter_logic_changed") is not False:
+              raise SystemExit("CANONICAL_SCOPE_GUARD_FAILED")
+          print("VERSION_CONTRACT=PASS")
+          print("HOTFIX164.16_SCOPE_GUARDS=PASS")
+          PY
+
+      - name: Upload verified ZIP and manifests
+        if: ${{ success() && hashFiles('HOTFIX164.16_BRIDGE_RUNTIME_EVIDENCE_CLOSURE.zip') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: HOTFIX164.16-bridge-runtime-evidence-closure
+          path: |
+            HOTFIX164.16_BRIDGE_RUNTIME_EVIDENCE_CLOSURE.zip
+            HOTFIX164.16_BRIDGE_RUNTIME_EVIDENCE_CLOSURE.zip.sha256
+            RELEASE_MANIFEST.json
+            HOTFIX164.16_RELEASE_MANIFEST.json
+            HOTFIX164.16_RELEASE_NOTES.md
+          if-no-files-found: error
+          retention-days: 14
