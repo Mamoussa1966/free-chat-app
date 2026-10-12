@@ -6,7 +6,9 @@
   "parent_release": "HOTFIX164.15",
   "changed_files": [
     "main.py",
+    "providers.py",
     "conversation_store.py",
+    "tests/test_provider_runtime.py",
     "tests/test_hotfix1649_live_bridge_evidence_export.py",
     "HOTFIX164.16_RELEASE_NOTES.md",
     "HOTFIX164.16_RELEASE_MANIFEST.json",
