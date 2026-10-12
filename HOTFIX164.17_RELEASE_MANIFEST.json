@@ -1,0 +1,98 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.17",
+  "title": "Per-Request Bridge Runtime Proof Closure",
+  "parent_release": "HOTFIX164.16",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "changed_files": [
+    "main.py",
+    "conversation_store.py",
+    "build_release.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "conversation_v25_runtime.py",
+    "production_platform.py",
+    "providers.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix16410_strict_bridge_security_audit.py",
+    "tests/test_hotfix16415_bridge_target_seat_identity.py",
+    "tests/test_provider_runtime.py",
+    "HOTFIX164.17_RELEASE_NOTES.md",
+    "HOTFIX164.17_RELEASE_MANIFEST.json",
+    ".github/workflows/hotfix164-17-bridge-proof.yml"
+  ],
+  "bridge_proof_contract": {
+    "one_application_owned_record_per_request": true,
+    "canonical_round_binding_required": true,
+    "required_sequence": [
+      "SOURCE_EXECUTION",
+      "WRITE",
+      "VALIDATE",
+      "COMMIT",
+      "BARRIER",
+      "TARGET_DISPATCH",
+      "TARGET_RESPONSE",
+      "READ",
+      "MATCH"
+    ],
+    "source": {
+      "provider": "DeepSeek",
+      "seat": 7
+    },
+    "target": {
+      "provider": "Gemini",
+      "seat": 2
+    },
+    "commit_target_seat_must_be_observed": true,
+    "target_seat_must_not_be_inferred_from_key_or_phase": true,
+    "payload_sha256_and_prepared_request_attestation_required": true,
+    "raw_bridge_id_exported": false,
+    "raw_bridge_value_exported_in_new_proof_projection": false,
+    "raw_http_body_exported": false,
+    "missing_evidence_status": "NOT_PROVEN",
+    "contradictory_evidence_status": "FAIL"
+  },
+  "guardrails": {
+    "provider_core_identity_changed": false,
+    "version_txt_contract_preserved": true,
+    "v26_3_identity_logic_changed": false,
+    "canonical_counter_logic_changed": false,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "live_final_closure_proven": false
+  },
+  "validation_results": {
+    "status": "PASS_WITH_LIVE_CLOSURE_NOT_PROVEN",
+    "performed_locally": true,
+    "python_version": "3.13.5",
+    "targeted_bridge_identity_export_tests": {
+      "status": "PASS",
+      "passed": 39,
+      "failed": 0,
+      "errors": 0
+    },
+    "full_regression_suite": {
+      "status": "PASS",
+      "passed": 623,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 166
+    },
+    "fresh_zip_extraction_regression_suite": {
+      "status": "PASS",
+      "passed": 623,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 166
+    },
+    "production_core_gate": "PASS",
+    "file_preservation_gate": "PASS",
+    "zip_roundtrip": "PASS",
+    "archive_entry_count": 370,
+    "frozen_version_contract": "PASS",
+    "v26_3_identity_and_counters": "UNCHANGED_BY_PATCH",
+    "github_push_or_release": "NOT_PUBLISHED; GitHub integration write blocked by HTTP 403 Resource not accessible by integration",
+    "live_two_request_provider_bridge_closure": "NOT_PROVEN; not executed against deployed Streamlit runtime and official provider APIs"
+  }
+}

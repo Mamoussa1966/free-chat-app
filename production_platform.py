@@ -811,6 +811,10 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
         "runtime_http_payload_contains_canonical_round_id": "NO",
         "control_plane_identity_leak": "NO",
         "runtime_sequence_valid": "PASS",
+        "runtime_sequence_target_identity_status": "PASS",
+        "runtime_http_payload_hash_integrity": "PASS",
+        "runtime_payload_transport_boundary": "requests.PreparedRequest.body",
+        "runtime_payload_prepared_request_verified": "YES",
         "application_owned": "PASS",
         "bridge_gate_status": "PASS",
         "terminal_state": "COMMITTED",
@@ -818,7 +822,17 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
     }
     if any(evidence.get(field) != expected for field, expected in required_equal.items()):
         return False
-    if not str(evidence.get("bridge_id_hash") or "").strip():
+    bridge_hash = str(evidence.get("bridge_id_hash") or "").strip().lower()
+    if not __import__("re").fullmatch(r"[0-9a-f]{64}", bridge_hash):
+        return False
+    try:
+        if not __import__("re").fullmatch(r"[0-9a-f]{64}", str(evidence.get("runtime_payload_sha256") or "").strip().lower()):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if str(evidence.get("source_seat") or "") != "7" or str(evidence.get("source_provider") or "").lower() != "deepseek":
+        return False
+    if str(evidence.get("target_seat") or "") != "2" or str(evidence.get("target_provider") or "").lower() != "gemini":
         return False
     # In strict live mode, the source WRITE and target READ are the only two
     # Bridge trace records. Reject duplicate writes, synthetic seeds, and reads
@@ -859,9 +873,11 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
             if str(event.get("target_seat") or "") != "2":
                 return False
         else:
-            if str(event.get("seat") or "") != "2":
+            if str(event.get("seat") or "") != "2" or str(event.get("target_seat") or "") != "2":
                 return False
-            if phase == "BARRIER" and str(event.get("target_seat") or "") != "2":
+            provider = str(event.get("provider") or "").lower()
+            expected_provider = "application" if phase == "MATCH" else "gemini"
+            if provider != expected_provider:
                 return False
     return ordinal > 0
 

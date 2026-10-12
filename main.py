@@ -488,12 +488,60 @@ class SharedContextBridge:
     def _final_bridge_sequence(self) -> list[str]:
         return [str(e.get("phase") or "") for e in self._runtime_bridge_evidence.get("events", [])]
 
-    def _bridge_runtime_sequence_valid(self) -> bool:
+    def _bridge_runtime_sequence_target_identity_status(self) -> str:
+        """Validate phase order, request/round binding, and observed source/target seats.
+
+        Never infer COMMIT/BARRIER/READ target identity from the Bridge key or a later
+        phase. Missing evidence remains NOT_PROVEN; contradictory evidence is FAIL.
+        """
         expected = [
             "SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
             "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH",
         ]
-        return self._final_bridge_sequence() == expected
+        events = self._runtime_bridge_evidence.get("events", [])
+        if not isinstance(events, list) or [str(e.get("phase") or "") for e in events if isinstance(e, dict)] != expected or len(events) != len(expected):
+            return "NOT_PROVEN"
+        statuses = ["SUCCESS", "RECORDED", "PASS", "PASS", "PASS", "ACCEPTED", "SUCCESS", "PASS", "PASS"]
+        for idx, (event, phase, status) in enumerate(zip(events, expected, statuses), start=1):
+            if not isinstance(event, dict):
+                return "NOT_PROVEN"
+            common = {"seq": idx, "phase": phase, "request_id": self.request_id,
+                      "round_id": str(self.round_no), "status": status}
+            for field, expected_value in common.items():
+                actual = event.get(field)
+                if actual in (None, ""):
+                    return "NOT_PROVEN"
+                if str(actual) != str(expected_value):
+                    return "FAIL"
+            if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"}:
+                for field, expected_value in (("seat", "7"), ("provider", "deepseek")):
+                    actual = event.get(field)
+                    if actual in (None, ""):
+                        return "NOT_PROVEN"
+                    if str(actual).lower() != expected_value:
+                        return "FAIL"
+            elif phase == "COMMIT":
+                actual = event.get("target_seat")
+                if actual in (None, ""):
+                    return "NOT_PROVEN"
+                if str(actual) != "2":
+                    return "FAIL"
+            else:
+                for field, expected_value in (("seat", "2"), ("target_seat", "2"),
+                                               ("provider", "application" if phase == "MATCH" else "gemini")):
+                    actual = event.get(field)
+                    if actual in (None, ""):
+                        return "NOT_PROVEN"
+                    if str(actual).lower() != expected_value:
+                        return "FAIL"
+        if self.round_no <= 0 or not self.request_id:
+            return "FAIL"
+        if self.strict_live_source and not str(self._runtime_bridge_evidence.get("canonical_round_id") or "").strip():
+            return "NOT_PROVEN"
+        return "PASS"
+
+    def _bridge_runtime_sequence_valid(self) -> bool:
+        return self._bridge_runtime_sequence_target_identity_status() == "PASS"
 
     def _bridge_control_record_proven(self, source_seat: int, target_seat: int) -> bool:
         e = self._runtime_bridge_evidence
@@ -609,7 +657,7 @@ class SharedContextBridge:
         )
         self._record_trace(source_seat=int(getattr(seat, "room_slot", 0) or 0),
                            source_provider=str(getattr(seat, "name", "") or ""),
-                           target_seat=2, key="BRIDGE_RESULT",
+                           target_seat=0, key="BRIDGE_RESULT",
                            write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
         self._record_bridge_event("WRITE", seat=7, provider="DeepSeek", status="RECORDED", write_sequence=self._write_sequence)
         self._record_bridge_event("VALIDATE", seat=7, provider="DeepSeek", status="PASS", write_sequence=self._write_sequence)
@@ -632,7 +680,11 @@ class SharedContextBridge:
             "value": value, "source_seat": source_seat, "source_provider": source,
             "write_sequence": self._write_sequence, "write_origin": "APPLICATION_TEST_CONTROL",
         }
-        self._record_trace(source_seat=source_seat, source_provider=source, target_seat=(2 if key == "BRIDGE_RESULT" and source_seat == 7 else 0), key=key,
+        # This explicit application-owned test seed is a fixture for the known
+        # DeepSeek-7 -> Gemini-2 contract. Live provider writes never infer this;
+        # their target remains unknown until COMMIT verifies the actual Seat object.
+        seeded_target = 2 if self.application_owned_test and key == "BRIDGE_RESULT" and source_seat == 7 else 0
+        self._record_trace(source_seat=source_seat, source_provider=source, target_seat=seeded_target, key=key,
                            write_sequence=self._write_sequence, commit_status="PENDING", schema_validation="PASS")
 
     def runtime_evidence_record(self) -> dict:
@@ -644,13 +696,20 @@ class SharedContextBridge:
         """
         audit = self.transaction_audit(7, 2, "BRIDGE_RESULT", "")
         e = self._runtime_bridge_evidence
+        events = [x for x in e.get("events", []) if isinstance(x, dict)]
+        by_phase = {str(x.get("phase") or ""): x for x in events}
+        payload_attestation = self._runtime_payload_attestations.get(2, {})
         return {
-            "schema": "bridge-runtime-evidence/v2",
+            "schema": "bridge-runtime-evidence/v3",
             "request_id": self.request_id,
             "round_id": self.round_no,
             "canonical_round_id": str(e.get("canonical_round_id") or ""),
             "bridge_id_hash": hashlib.sha256(str(self.bridge_id).encode("utf-8")).hexdigest(),
             "bridge_id": "[REDACTED]",
+            "source_provider": str(by_phase.get("SOURCE_EXECUTION", {}).get("provider") or "NOT_PROVEN"),
+            "source_seat": by_phase.get("SOURCE_EXECUTION", {}).get("seat", "NOT_PROVEN"),
+            "target_provider": str(by_phase.get("BARRIER", {}).get("provider") or "NOT_PROVEN"),
+            "target_seat": by_phase.get("COMMIT", {}).get("target_seat", "NOT_PROVEN"),
             "source_execution_proven": audit.get("SOURCE_EXECUTION_PROVEN", "NOT_PROVEN"),
             "bridge_state_contains_value": audit.get("BRIDGE_STATE_CONTAINS_VALUE", "NOT_PROVEN"),
             "write_status": audit.get("WRITE", "NOT_PROVEN"),
@@ -678,6 +737,14 @@ class SharedContextBridge:
             "runtime_http_payload_contains_canonical_round_id": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_CANONICAL_ROUND_ID", "NOT_PROVEN"),
             "control_plane_identity_leak": audit.get("CONTROL_PLANE_IDENTITY_LEAK", "NOT_PROVEN"),
             "runtime_http_payload_attested": audit.get("RUNTIME_HTTP_PAYLOAD_ATTESTED", "NOT_PROVEN"),
+            "runtime_http_payload_hash_integrity": audit.get("RUNTIME_HTTP_PAYLOAD_HASH_INTEGRITY", "NOT_PROVEN"),
+            "runtime_payload_sha256": str(payload_attestation.get("payload_sha256") or ""),
+            "runtime_payload_transport_boundary": str(payload_attestation.get("transport_boundary") or "NOT_PROVEN"),
+            "runtime_payload_prepared_request_verified": "YES" if payload_attestation.get("prepared_request_verified") is True else "NOT_PROVEN",
+            "runtime_sequence_target_identity_status": audit.get("RUNTIME_SEQUENCE_TARGET_IDENTITIES_VALID", "NOT_PROVEN"),
+            "commit_target_seat": audit.get("COMMIT_TARGET_SEAT", "NOT_PROVEN"),
+            "barrier_target_seat": audit.get("BARRIER_TARGET_SEAT", "NOT_PROVEN"),
+            "read_target_seat": audit.get("READ_TARGET_SEAT", "NOT_PROVEN"),
             "runtime_http_payload_contains_value": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_VALUE", "NOT_PROVEN"),
             "runtime_http_payload_contains_bridge_key": audit.get("RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY", "NOT_PROVEN"),
             "gemini_received_sanitized_representation_only": audit.get("GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY", "NOT_PROVEN"),
@@ -714,11 +781,8 @@ class SharedContextBridge:
         source_seat = int(fields.get("source_seat", 0) or 0)
         target_seat = int(fields.get("target_seat", 0) or 0)
         key = str(fields.get("key", "") or "")
-        # FINAL CLOSURE: the transactional production Bridge contract is
-        # exclusively DeepSeek Seat 7 -> Gemini Seat 2.  A zero/unknown target
-        # is not valid evidence for BRIDGE_RESULT when the source is Seat 7.
-        if key == "BRIDGE_RESULT" and source_seat == 7 and target_seat == 0:
-            target_seat = 2
+        # HOTFIX164.17: preserve unknown target identity as 0. The target is set
+        # only after a verified COMMIT binds a concrete Gemini seat 2 object.
         safe = {
             "bridge_id": self.bridge_id,
             "round_id": self.round_no,
@@ -843,6 +907,15 @@ class SharedContextBridge:
         key = str(key or "").strip()
         if not key or not self._committed or not self._barrier_open:
             return None
+        target_slot_check = int(getattr(target_seat, "room_slot", 0) or 0) if target_seat else 0
+        if self.strict_live_source and (
+            not target_seat
+            or str(getattr(target_seat, "key", "") or "").lower() != "gemini"
+            or target_slot_check != 2
+        ):
+            self._record_bridge_event("READ", seat=target_slot_check, target_seat=target_slot_check,
+                                      provider=str(getattr(target_seat, "name", "") or "UNKNOWN"), status="FAIL")
+            return None
         record = self._values.get(key)
         if not record:
             return None
@@ -897,6 +970,11 @@ class SharedContextBridge:
         target_value_outside_sanitized = target_payload_has
         target_value = str(read.get("value")) if read else ""
         sequence_valid = self._bridge_runtime_sequence_valid()
+        sequence_target_identity_status = self._bridge_runtime_sequence_target_identity_status()
+        events_by_phase = {str(e.get("phase") or ""): e for e in self._runtime_bridge_evidence.get("events", []) if isinstance(e, dict)}
+        commit_event = events_by_phase.get("COMMIT", {})
+        barrier_event = events_by_phase.get("BARRIER", {})
+        read_event = events_by_phase.get("READ", {})
         control_record_proven = self._bridge_control_record_proven(source_seat, target_seat)
         application_owned = bool(record and record.get("write_origin") == "APPLICATION_TEST_CONTROL")
         source_ok = bool(
@@ -930,17 +1008,21 @@ class SharedContextBridge:
             "SOURCE": "DeepSeek / Seat 7" if int(source_seat) == 7 else f"Seat {source_seat}",
             "TARGET": "Gemini / Seat 2" if int(target_seat) == 2 else f"Seat {target_seat}",
             "KEY": key,
-            "WRITE": "PASS" if record and source_ok else "FAIL",
-            "VALIDATE": "PASS" if record else "FAIL",
-            "COMMIT": "PASS" if self._committed and record else "FAIL",
-            "BARRIER": "PASS" if self._barrier_open and self._committed and record else "FAIL",
-            "READ": "PASS" if read and target_ok else "FAIL",
+            "WRITE": ("PASS" if record and source_ok and events_by_phase.get("WRITE", {}).get("status") == "RECORDED" else "FAIL") if self.strict_live_source else ("PASS" if record and source_ok else "FAIL"),
+            "VALIDATE": ("PASS" if record and events_by_phase.get("VALIDATE", {}).get("status") == "PASS" else "FAIL") if self.strict_live_source else ("PASS" if record else "FAIL"),
+            "COMMIT": ("PASS" if self._committed and record and str(commit_event.get("target_seat") or "") == str(target_seat) and commit_event.get("status") == "PASS" else ("FAIL" if self._terminal_state == "ABORTED" else ("NOT_PROVEN" if not commit_event else "FAIL"))) if self.strict_live_source else ("PASS" if self._committed and record else "FAIL"),
+            "BARRIER": ("PASS" if self._barrier_open and self._committed and record and str(barrier_event.get("target_seat") or "") == str(target_seat) and barrier_event.get("status") == "PASS" else ("NOT_PROVEN" if not barrier_event else "FAIL")) if self.strict_live_source else ("PASS" if self._barrier_open and self._committed and record else "FAIL"),
+            "READ": ("PASS" if read and target_ok and str(read_event.get("target_seat") or "") == str(target_seat) and read_event.get("status") == "PASS" else ("NOT_PROVEN" if not read_event else "FAIL")) if self.strict_live_source else ("PASS" if read and target_ok else "FAIL"),
             "SCHEMA_VALIDATION": "PASS" if read and target_ok else "FAIL",
             "SOURCE_VALUE": "[REDACTED]", "TARGET_VALUE": "[REDACTED]",
             "MATCH": match,
             "BRIDGE_CONTROL_RECORD_REDACTED": "PASS" if (self.strict_live_source and control_record_proven) else "NOT_PROVEN",
             "BRIDGE_RUNTIME_SEQUENCE": self._final_bridge_sequence(),
-            "BRIDGE_RUNTIME_SEQUENCE_VALID": "PASS" if (self.strict_live_source and sequence_valid) else "NOT_PROVEN",
+            "BRIDGE_RUNTIME_SEQUENCE_VALID": "PASS" if (self.strict_live_source and sequence_valid) else ("FAIL" if self.strict_live_source and self._runtime_bridge_evidence.get("events") else "NOT_PROVEN"),
+            "RUNTIME_SEQUENCE_TARGET_IDENTITIES_VALID": sequence_target_identity_status if self.strict_live_source else "NOT_PROVEN",
+            "COMMIT_TARGET_SEAT": commit_event.get("target_seat", "NOT_PROVEN"),
+            "BARRIER_TARGET_SEAT": barrier_event.get("target_seat", "NOT_PROVEN"),
+            "READ_TARGET_SEAT": read_event.get("target_seat", "NOT_PROVEN"),
             "TARGET_DISPATCH_AFTER_BARRIER": "PASS" if (self.strict_live_source and sequence_valid) else "NOT_PROVEN",
             "READ_AFTER_TARGET_RESPONSE": "PASS" if (self.strict_live_source and sequence_valid) else "NOT_PROVEN",
             "USER_PROMPT_CONTAINS_VALUE": user_isolation,
@@ -1023,6 +1105,8 @@ class SharedContextBridge:
                 "RUNTIME_HTTP_PAYLOAD_CONTAINS_BRIDGE_KEY": "NO",
                 "GEMINI_RECEIVED_SANITIZED_REPRESENTATION_ONLY": "PASS",
                 "APPLICATION_OWNED_RUNTIME_RECORD": "PASS",
+                "RUNTIME_SEQUENCE_TARGET_IDENTITIES_VALID": "PASS",
+                "RUNTIME_HTTP_PAYLOAD_HASH_INTEGRITY": "PASS",
                 "USER_PROMPT_CONTAINS_BRIDGE_ID": "NO",
                 "PROVIDER_PROMPT_CONTAINS_BRIDGE_ID": "NO",
                 "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_ID": "NO",
