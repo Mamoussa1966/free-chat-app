@@ -36,3 +36,14 @@ def test_strict_live_commit_binds_verified_gemini_seat_two():
     event = next(e for e in bridge._runtime_bridge_evidence["events"] if e.get("phase") == "COMMIT")
     assert event["target_seat"] == 2
     assert bridge._terminal_state == "COMMITTED"
+
+
+
+def test_hotfix16417_live_write_does_not_assume_target_before_commit():
+    bridge = main.SharedContextBridge(request_id="live-target-proof", round_no=1, strict_live_source=True)
+    # A raw trace row with unknown target must remain unknown; no key/source-based inference.
+    bridge._record_trace(source_seat=7, source_provider="DeepSeek", target_seat=0,
+                         key="BRIDGE_RESULT", write_sequence=1, commit_status="PENDING")
+    row = bridge.transaction_trace()[0]
+    assert row["target_seat"] == 0
+    assert bridge._bridge_runtime_sequence_target_identity_status() == "NOT_PROVEN"

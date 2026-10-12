@@ -39,6 +39,12 @@ def _strict_bridge_evidence(rid, round_no, bridge_hash):
         "user_prompt_contains_value": "NO", "gemini_input_prompt_contains_value": "NO",
         "runtime_http_payload_attested": "YES", "runtime_http_payload_contains_value": "NO",
         "runtime_http_payload_contains_bridge_key": "NO", "gemini_received_sanitized_representation_only": "PASS",
+        "runtime_http_payload_hash_integrity": "PASS", "runtime_payload_sha256": "a" * 64,
+        "runtime_payload_transport_boundary": "requests.PreparedRequest.body",
+        "runtime_payload_prepared_request_verified": "YES",
+        "runtime_sequence_target_identity_status": "PASS",
+        "source_provider": "DeepSeek", "source_seat": 7, "target_provider": "Gemini", "target_seat": 2,
+        "commit_target_seat": 2, "barrier_target_seat": 2, "read_target_seat": 2,
         "user_prompt_contains_bridge_id": "NO", "provider_prompt_contains_bridge_id": "NO",
         "gemini_input_prompt_contains_bridge_id": "NO",
         "bridge_id_in_gemini_input_prompt": "NO",
@@ -50,6 +56,17 @@ def _strict_bridge_evidence(rid, round_no, bridge_hash):
         "terminal_state": "COMMITTED", "bridge_state_terminal": "COMMITTED",
         "runtime_sequence_valid": "PASS", "application_owned": "PASS",
         "bridge_gate_status": "PASS",
+        "runtime_sequence": [
+            {"seq": 1, "phase": "SOURCE_EXECUTION", "request_id": rid, "round_id": round_no, "status": "SUCCESS", "seat": 7, "provider": "DeepSeek"},
+            {"seq": 2, "phase": "WRITE", "request_id": rid, "round_id": round_no, "status": "RECORDED", "seat": 7, "provider": "DeepSeek", "write_sequence": 1},
+            {"seq": 3, "phase": "VALIDATE", "request_id": rid, "round_id": round_no, "status": "PASS", "seat": 7, "provider": "DeepSeek", "write_sequence": 1},
+            {"seq": 4, "phase": "COMMIT", "request_id": rid, "round_id": round_no, "status": "PASS", "target_seat": 2},
+            {"seq": 5, "phase": "BARRIER", "request_id": rid, "round_id": round_no, "status": "PASS", "seat": 2, "target_seat": 2, "provider": "Gemini"},
+            {"seq": 6, "phase": "TARGET_DISPATCH", "request_id": rid, "round_id": round_no, "status": "ACCEPTED", "seat": 2, "target_seat": 2, "provider": "Gemini"},
+            {"seq": 7, "phase": "TARGET_RESPONSE", "request_id": rid, "round_id": round_no, "status": "SUCCESS", "seat": 2, "target_seat": 2, "provider": "Gemini"},
+            {"seq": 8, "phase": "READ", "request_id": rid, "round_id": round_no, "status": "PASS", "seat": 2, "target_seat": 2, "provider": "Gemini", "read_sequence": 1},
+            {"seq": 9, "phase": "MATCH", "request_id": rid, "round_id": round_no, "status": "PASS", "seat": 2, "target_seat": 2, "provider": "Application"},
+        ],
     }
 
 
@@ -210,3 +227,72 @@ def test_hotfix16416_export_does_not_mask_detected_control_plane_leaks():
     assert exported["provider_prompt_contains_bridge_id"] == "YES"
     assert exported["runtime_http_payload_contains_bridge_id"] == "YES"
     assert exported["control_plane_identity_leak"] == "YES"
+
+
+
+def test_hotfix16417_exports_two_independent_redacted_bridge_records_from_runtime_store():
+    r1 = _strict_bridge_evidence("r1", 1, "1" * 64)
+    r2 = _strict_bridge_evidence("r2", 2, "2" * 64)
+    chat = {
+        "conversation_id": "c", "session_id": "s",
+        "conversation_record": {
+            "messages": [],
+            "requests": [
+                {"request_id": "r1", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE"},
+                {"request_id": "r2", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE"},
+            ],
+            "rounds": [
+                {"round_id": "c:r1:r1", "request_id": "r1", "round_number": 1, "ordinal": 1},
+                {"round_id": "c:r2:r2", "request_id": "r2", "round_number": 2, "ordinal": 2},
+            ],
+        },
+        "round_ledger_v24": [],
+        "bridge_runtime_evidence_store": {"r1": r1, "r2": r2},
+    }
+    snapshot = authoritative_snapshot(chat)
+    exported = snapshot["bridge_runtime_evidence_export"]
+    assert exported["authoritative_source"] == "APPLICATION_OWNED_RUNTIME_RECORDS_ONLY"
+    assert exported["status"] == "PASS"
+    assert exported["request_count"] == 2
+    assert exported["bridge_id_uniqueness_status"] == "PASS"
+    records = {x["request_id"]: x for x in exported["records"]}
+    assert set(records) == {"r1", "r2"}
+    assert records["r1"]["export_status"] == records["r2"]["export_status"] == "PASS"
+    assert records["r1"]["canonical_round_id"] == "c:r1:r1"
+    assert records["r2"]["canonical_round_id"] == "c:r2:r2"
+    assert records["r1"]["bridge_id_hash"] != records["r2"]["bridge_id_hash"]
+    for record in records.values():
+        assert record["bridge_id"] == "[REDACTED]"
+        assert [x["phase"] for x in record["runtime_sequence"]] == [
+            "SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
+            "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH",
+        ]
+        assert record["runtime_sequence_target_identity_status"] == "PASS"
+        assert record["runtime_http_payload_attested"] == "YES"
+        assert record["runtime_http_payload_hash_integrity"] == "PASS"
+        assert record["runtime_payload_prepared_request_verified"] == "YES"
+    serialized = json.dumps(exported, sort_keys=True)
+    assert "RAW_BRIDGE_ID" not in serialized
+    assert "RAW_BRIDGE_VALUE" not in serialized
+    assert '"payload_json"' not in serialized
+
+
+def test_hotfix16417_export_fails_when_commit_did_not_bind_target_seat_two():
+    evidence = _strict_bridge_evidence("r1", 1, "1" * 64)
+    evidence["runtime_sequence"][3]["target_seat"] = 0
+    evidence["commit_target_seat"] = 0
+    chat = {
+        "conversation_id": "c", "session_id": "s",
+        "conversation_record": {
+            "messages": [], "requests": [
+                {"request_id": "r1", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE"},
+            ],
+            "rounds": [{"round_id": "c:r1:r1", "request_id": "r1", "round_number": 1, "ordinal": 1}],
+        },
+        "round_ledger_v24": [],
+        "bridge_runtime_evidence_store": {"r1": evidence},
+    }
+    exported = authoritative_snapshot(chat)["bridge_runtime_evidence_export"]
+    assert exported["records"][0]["export_status"] == "FAIL"
+    assert exported["records"][0]["target_identity_status"] == "FAIL"
+    assert exported["status"] == "FAIL"

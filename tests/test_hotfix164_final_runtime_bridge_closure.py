@@ -308,7 +308,7 @@ def test_hotfix16412_missing_independent_http_payload_attestation_fails_closed()
     audit = bridge.seal_runtime_audit(user_prompt="closure test prompt")
     gate = bridge.bridge_security_regression_gate(audit)
     assert audit["RUNTIME_HTTP_PAYLOAD_ATTESTED"] == "NO"
-    assert audit["TARGET_RESPONSE_USED_AS_BRIDGE_READ_PROOF"] == "NO"
-    assert audit["SOURCE_WRITE_READ_RELATION_PROVEN"] == "PASS"
+    assert audit["TARGET_RESPONSE_USED_AS_BRIDGE_READ_PROOF"] == "NOT_PROVEN"
+    assert audit["SOURCE_WRITE_READ_RELATION_PROVEN"] == "NOT_PROVEN"
     assert gate["status"] == "FAIL"
     assert "RUNTIME_HTTP_PAYLOAD_ATTESTED" in gate["failures"]

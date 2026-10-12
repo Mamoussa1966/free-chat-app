@@ -1,4 +1,5 @@
 from copy import deepcopy
+import hashlib
 
 from production_platform import security_audit
 
@@ -21,7 +22,12 @@ def _runtime_record(rid: str, round_no: int, bridge_hash: str):
         "request_id": rid,
         "round_id": round_no,
         "canonical_round_id": f"conv:{rid}:r{round_no}",
-        "bridge_id_hash": bridge_hash,
+        "bridge_id_hash": hashlib.sha256(bridge_hash.encode()).hexdigest(),
+        "source_provider": "DeepSeek", "source_seat": 7, "target_provider": "Gemini", "target_seat": 2,
+        "commit_target_seat": 2, "barrier_target_seat": 2, "read_target_seat": 2,
+        "runtime_http_payload_hash_integrity": "PASS", "runtime_payload_sha256": "a" * 64,
+        "runtime_payload_transport_boundary": "requests.PreparedRequest.body",
+        "runtime_payload_prepared_request_verified": "YES", "runtime_sequence_target_identity_status": "PASS",
         "source_execution_proven": "PASS",
         "bridge_state_contains_value": "YES",
         "write_status": "PASS",
@@ -65,8 +71,8 @@ def _runtime_record(rid: str, round_no: int, bridge_hash: str):
                 "request_id": rid,
                 "round_id": round_no,
                 "status": status,
-                **({"seat": 7} if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"} else {"seat": 2}),
-                **({"target_seat": 2} if phase in {"COMMIT", "BARRIER"} else {}),
+                **({"seat": 7, "provider": "DeepSeek"} if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"} else {"seat": 2, "target_seat": 2, "provider": "Application" if phase == "MATCH" else "Gemini"}),
+                **({"target_seat": 2} if phase == "COMMIT" else {}),
             }
             for i, (phase, status) in enumerate(PHASES, start=1)
         ],
