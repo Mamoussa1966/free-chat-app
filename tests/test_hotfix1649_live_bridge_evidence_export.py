@@ -145,6 +145,20 @@ def test_hotfix1649_export_includes_only_redacted_runtime_bridge_evidence():
     assert "RAW_BRIDGE_VALUE_SHOULD_NOT_EXPORT" not in serialized
     assert "RAW_HTTP_PAYLOAD_SHOULD_NOT_EXPORT" not in serialized
     assert snapshot["rounds"][0]["round_id"] == "c:r1:r1"
+    # HOTFIX164.16: sanitized prompt/HTTP boundary assertions must survive export.
+    for field in (
+        "user_prompt_contains_bridge_id", "provider_prompt_contains_bridge_id",
+        "gemini_input_prompt_contains_bridge_id", "bridge_id_in_gemini_input_prompt",
+        "bridge_id_in_provider_prompt", "bridge_id_in_user_prompt",
+        "gemini_input_prompt_contains_bridge_key", "gemini_input_prompt_contains_request_id",
+        "gemini_input_prompt_contains_canonical_round_id",
+        "runtime_http_payload_contains_bridge_id", "runtime_http_payload_contains_request_id",
+        "runtime_http_payload_contains_canonical_round_id", "control_plane_identity_leak",
+    ):
+        assert exported[field] == "NO", field
+    assert exported["runtime_http_payload_attested"] == "YES"
+    assert exported["runtime_http_payload_contains_value"] == "NO"
+    assert exported["runtime_http_payload_contains_bridge_key"] == "NO"
 
 
 def test_hotfix1649_strict_two_request_bridge_regression_fails_closed_on_missing_record():
@@ -174,3 +188,25 @@ def test_hotfix1649_strict_two_request_bridge_regression_fails_closed_on_missing
     assert failed["gate"] == "FAIL"
     assert failed["strict_bridge_proof_missing"] is True
     assert failed["checks"]["BRIDGE_ID_REQUEST_ISOLATION"] is False
+
+
+
+def test_hotfix16416_export_does_not_mask_detected_control_plane_leaks():
+    evidence = _strict_bridge_evidence("r1", 1, "sha256-safe-hash")
+    evidence["provider_prompt_contains_bridge_id"] = "YES"
+    evidence["runtime_http_payload_contains_bridge_id"] = "YES"
+    evidence["control_plane_identity_leak"] = "YES"
+    chat = {
+        "conversation_id": "c",
+        "session_id": "s",
+        "conversation_record": {
+            "messages": [], "requests": [],
+            "rounds": [{"round_id": "c:r1:r1", "request_id": "r1", "round_number": 1, "ordinal": 1}],
+        },
+        "round_ledger_v24": [],
+        "bridge_runtime_evidence_store": {"r1": evidence},
+    }
+    exported = authoritative_snapshot(chat)["bridge_runtime_evidence_store"]["r1"]
+    assert exported["provider_prompt_contains_bridge_id"] == "YES"
+    assert exported["runtime_http_payload_contains_bridge_id"] == "YES"
+    assert exported["control_plane_identity_leak"] == "YES"
