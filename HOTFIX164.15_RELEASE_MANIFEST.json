@@ -1,0 +1,44 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.15",
+  "title": "STRICT BRIDGE TARGET-SEAT IDENTITY CLOSURE",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "changed_files": [
+    "main.py",
+    "production_platform.py",
+    "providers.py",
+    "tests/test_hotfix16410_strict_bridge_security_audit.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "tests/test_hotfix16415_bridge_target_seat_identity.py",
+    "HOTFIX164.15_FINAL_CLOSURE_RELEASE.md",
+    "HOTFIX164.15_RELEASE_MANIFEST.json"
+  ],
+  "validation": {
+    "full_suite_source": "619 passed, 0 failed (pytest -q and pytest -x -q)",
+    "fresh_zip_roundtrip": "619 passed, 0 failed after extracting the exact final ZIP into a fresh directory (PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -x -q)",
+    "zip_root_layout": "PASS \u2014 364 archive entries; main.py, conversation_store.py, VERSION.txt, manifest, and tests/ at root; no nested ZIP",
+    "strict_target_seat_regression": "PASS (missing target and wrong seat rejected; seat 2 accepted; target_seat=0 rejected by strict evidence gate)",
+    "version_txt": "PASS \u2014 V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+    "live_two_message_room_export": "NOT RUN \u2014 requires deployed Streamlit runtime with official API credentials"
+  },
+  "guardrails": {
+    "provider_core_identity_changed": false,
+    "version_txt_contract_preserved": true,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "missing_or_wrong_bridge_target_fails_closed": true,
+    "live_final_closure_proven": false,
+    "live_runtime_validation": "NOT RUN \u2014 deployed Streamlit runtime and official API credentials are required"
+  },
+  "file_sha256": {
+    "main.py": "f96117fff5a36a56ea6b7e60e8436cdeca815f434432baf7bfb76c06dffaece1",
+    "production_platform.py": "b7432d5e137258d170f67aa7f172c3c0304ed4df6edf6ada579baf06f749924c",
+    "providers.py": "be17c58bf872a50c23a610e9c59c8ff3dec067f107a4bcf105ea3b42a31dc6b7",
+    "tests/test_hotfix16410_strict_bridge_security_audit.py": "b0c4d85940746e801ff2a957a4a7b71be0c682a3bbd53f72c12ce52d71fe1b90",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py": "1f4288fa0a471234004e251a499a7a855249c901534189baed7a3df934fe78fe",
+    "tests/test_hotfix16415_bridge_target_seat_identity.py": "44aae42f497a2a51b19dd1d9195d2060ca2b4313d733c33741ba1d4472b77e59",
+    "HOTFIX164.15_FINAL_CLOSURE_RELEASE.md": "5d01d071cab57101ca72d3c242a602c97e651d2a2bbd3f2475a68300bb531d07"
+  }
+}

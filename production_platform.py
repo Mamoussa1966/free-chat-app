@@ -848,6 +848,21 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
                 or str(event.get("round_id") or "") != str(ordinal)
                 or str(event.get("status") or "") != status):
             return False
+        # HOTFIX164.15: phase order/status alone is insufficient. Bind the
+        # source-side phases to DeepSeek seat 7 and all target-side phases to
+        # Gemini seat 2. COMMIT must explicitly name target_seat=2; 0/missing
+        # is NOT_PROVEN and must never pass the strict live evidence gate.
+        if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"}:
+            if str(event.get("seat") or "") != "7":
+                return False
+        elif phase == "COMMIT":
+            if str(event.get("target_seat") or "") != "2":
+                return False
+        else:
+            if str(event.get("seat") or "") != "2":
+                return False
+            if phase == "BARRIER" and str(event.get("target_seat") or "") != "2":
+                return False
     return ordinal > 0
 
 

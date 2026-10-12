@@ -812,6 +812,13 @@ class SharedContextBridge:
         if self.strict_live_source:
             if record.get("write_origin") != "PROVIDER_UNTRUSTED_DATA" or self._source_execution_proven is not True:
                 raise RuntimeError("Bridge commit requires proven live source execution")
+            # Strict live closure must bind COMMIT to the exact configured target.
+            # A missing target previously became target_seat=0 and could still be
+            # followed by Gemini events, producing internally inconsistent proof.
+            if (not target_seat
+                    or str(getattr(target_seat, "key", "") or "").lower() != "gemini"
+                    or target_slot != 2):
+                raise RuntimeError("Bridge commit requires verified Gemini target seat 2")
         elif self.application_owned_test:
             if self._source_execution_proven is False:
                 raise RuntimeError("Bridge commit rejected by failed application-test attestation")
@@ -829,7 +836,7 @@ class SharedContextBridge:
         if self._terminal_state != "COMMITTED" or not self._committed:
             raise RuntimeError("Bridge barrier reached before commit")
         self._barrier_open = True
-        self._record_bridge_event("BARRIER", target_seat=2, status="PASS")
+        self._record_bridge_event("BARRIER", seat=2, target_seat=2, provider="Gemini", status="PASS")
         self._runtime_bridge_evidence["terminal_state"] = self._terminal_state
 
     def read(self, key: str, target_seat) -> str | None:
@@ -859,7 +866,7 @@ class SharedContextBridge:
             read_sequence=self._read_sequence,
             schema_validation="PASS",
         )
-        self._record_bridge_event("READ", seat=2, provider="Gemini", status="PASS", read_sequence=self._read_sequence)
+        self._record_bridge_event("READ", seat=2, target_seat=2, provider="Gemini", status="PASS", read_sequence=self._read_sequence)
         return str(record["value"])
 
     def _transaction_audit_unsealed(self, source_seat: int = 7, target_seat: int = 2, key: str = "BRIDGE_RESULT", user_prompt: str = "") -> dict:
@@ -1835,6 +1842,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # remaining seats retain canonical room order. Results are returned in
     # canonical room order, so seat identity/history/UI ordering is unchanged.
     by_key = {seat.key: seat for seat in seats}
+    # Keep an immutable lookup: bridge_order construction pops DeepSeek/Gemini
+    # out of by_key, so later target resolution must not query the depleted map.
+    seat_by_key = dict(by_key)
     bridge_order = []
     for key in ("deepseek", "gemini"):
         if key in by_key:
@@ -1922,7 +1932,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             if strict_live_bridge and seat.key == "gemini":
                 # The provider boundary and readiness gate have passed; this is the
                 # application-owned dispatch decision immediately before transport.
-                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
+                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, target_seat=2, provider="Gemini", status="ACCEPTED")
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, model_candidates.get(seat.key),
@@ -1954,9 +1964,16 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 proven, proof_reason = _actual_execution_proven(result, request_id, round_no, seat.key)
                 result["execution_proof"] = "PROVEN" if proven else "NOT_PROVEN"
                 result["execution_proof_reason"] = proof_reason
-                gemini_target = by_key.get("gemini")
+                gemini_target = seat_by_key.get("gemini")
+                target_identity_ok = bool(
+                    gemini_target
+                    and str(getattr(gemini_target, "key", "") or "").lower() == "gemini"
+                    and int(getattr(gemini_target, "room_slot", 0) or 0) == 2
+                )
                 if not proven or not bridge.write_live_source_result(seat, result):
                     bridge.abort("SOURCE_EXECUTION_NOT_PROVEN" if not proven else "SOURCE_BRIDGE_WRITE_FAILED")
+                elif not target_identity_ok:
+                    bridge.abort("TARGET_SEAT_IDENTITY_NOT_PROVEN")
                 else:
                     bridge.commit(gemini_target)
                     bridge.barrier()
@@ -1970,7 +1987,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     else (str(result.get("status") or "PROVIDER_ERROR").upper() or "PROVIDER_ERROR")
                 )
                 bridge._record_bridge_event(
-                    "TARGET_RESPONSE", seat=2, provider="Gemini", status=target_response_status
+                    "TARGET_RESPONSE", seat=2, target_seat=2, provider="Gemini", status=target_response_status
                 )
             actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
             runtime_attestation = result.pop("_runtime_payload_attestation", {}) if isinstance(result, dict) else {}
@@ -1989,7 +2006,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     if strict_live_bridge:
                         source_value = str((bridge._values.get("BRIDGE_RESULT") or {}).get("value") or "")
                         target_value = str((bridge._resolved_reads.get("BRIDGE_RESULT") or {}).get("value") or "")
-                        bridge._record_bridge_event("MATCH", seat=2, provider="Application", status="PASS" if source_value and source_value == target_value else "FAIL")
+                        bridge._record_bridge_event("MATCH", seat=2, target_seat=2, provider="Application", status="PASS" if source_value and source_value == target_value else "FAIL")
             _render_live_cascade_telemetry(result)
             result["request_routed"] = result_request_routed
             result["model_candidates_configured"] = bool(model_candidates.get(seat.key))
@@ -2001,7 +2018,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # introduce a Request ID/status/result row or expose bridge values.
             result["content"] = bridge.sanitize_agent_prose(result.get("content", ""))
             if seat.key == "deepseek":
-                gemini_target = by_key.get("gemini")
+                gemini_target = seat_by_key.get("gemini")
                 if not strict_live_bridge:
                     bridge.commit(gemini_target)
                     bridge.barrier()
@@ -2058,8 +2075,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 # call_seat() is an execution/provider failure.  Record both
                 # phases explicitly after the attempted provider call so the
                 # runtime ledger cannot claim a successful target transport.
-                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, provider="Gemini", status="ACCEPTED")
-                bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status="PROVIDER_ERROR")
+                bridge._record_bridge_event("TARGET_DISPATCH", seat=2, target_seat=2, provider="Gemini", status="ACCEPTED")
+                bridge._record_bridge_event("TARGET_RESPONSE", seat=2, target_seat=2, provider="Gemini", status="PROVIDER_ERROR")
             results[seat.key] = failure
 
     for seat in seats:
@@ -2710,7 +2727,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.divider()
         st.subheader("🧭 V24 Conversation Platform")
         ensure_store(chat)
-        st.caption(f"Conversation: `{str(chat.get('conversation_id') or '')[:18]}…` · Session: `{str(chat.get('session_id') or '')[:18]}…`")
+        st.caption(f"Conversation: `{str(chat.get('conversation_id') or "")[:18]}…` · Session: `{str(chat.get('session_id') or "")[:18]}…`")
         if st.button("🔍 لماذا هذه الإجابة؟", use_container_width=True): st.session_state.v24_show_provenance = not st.session_state.get("v24_show_provenance", False)
         if st.button("🕒 Timeline", use_container_width=True): st.session_state.v24_show_timeline = not st.session_state.get("v24_show_timeline", False)
         if st.button("📦 Export Conversation", use_container_width=True): st.session_state.v24_export = export_conversation(chat)
