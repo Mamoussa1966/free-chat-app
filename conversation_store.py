@@ -891,6 +891,14 @@ def authoritative_snapshot(chat: dict) -> dict:
         "terminal_state", "terminal_reason", "runtime_sequence", "runtime_sequence_valid",
         "application_owned", "audit_seal_hash", "bridge_gate_status",
         "bridge_state_terminal", "bridge_trace_count",
+        # HOTFIX164.16: preserve redacted control-plane boundary assertions in exports.
+        "user_prompt_contains_bridge_id", "provider_prompt_contains_bridge_id",
+        "gemini_input_prompt_contains_bridge_id", "bridge_id_in_gemini_input_prompt",
+        "bridge_id_in_provider_prompt", "bridge_id_in_user_prompt",
+        "gemini_input_prompt_contains_bridge_key", "gemini_input_prompt_contains_request_id",
+        "gemini_input_prompt_contains_canonical_round_id",
+        "runtime_http_payload_contains_bridge_id", "runtime_http_payload_contains_request_id",
+        "runtime_http_payload_contains_canonical_round_id", "control_plane_identity_leak",
     }
     runtime_store = chat.get("bridge_runtime_evidence_store", {})
     safe_runtime_store = {}
