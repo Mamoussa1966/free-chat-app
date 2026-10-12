@@ -160,7 +160,9 @@ def _strict_evidence(rid, round_no, bridge_hash, canonical_round_id):
         "runtime_sequence_valid": "PASS", "application_owned": "PASS", "bridge_gate_status": "PASS",
         "bridge_trace_count": 2,
         "runtime_sequence": [
-            {"seq": i, "phase": phase, "request_id": rid, "round_id": round_no, "status": status}
+            {"seq": i, "phase": phase, "request_id": rid, "round_id": round_no, "status": status,
+             **({"seat": 7} if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"} else {"seat": 2}),
+             **({"target_seat": 2} if phase in {"COMMIT", "BARRIER"} else {})}
             for i, (phase, status) in enumerate(phases, 1)
         ],
     }

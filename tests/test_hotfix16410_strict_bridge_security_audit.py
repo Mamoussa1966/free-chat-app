@@ -65,6 +65,8 @@ def _runtime_record(rid: str, round_no: int, bridge_hash: str):
                 "request_id": rid,
                 "round_id": round_no,
                 "status": status,
+                **({"seat": 7} if phase in {"SOURCE_EXECUTION", "WRITE", "VALIDATE"} else {"seat": 2}),
+                **({"target_seat": 2} if phase in {"COMMIT", "BARRIER"} else {}),
             }
             for i, (phase, status) in enumerate(PHASES, start=1)
         ],
@@ -149,3 +151,10 @@ def test_hotfix16410_security_audit_does_not_accept_agent_result_audit_as_strict
     report = security_audit([chat])
     assert report["status"] == "FAIL"
     assert report["checks"]["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] is False
+
+
+def test_hotfix16415_strict_live_gate_rejects_commit_with_target_seat_zero():
+    chat = _chat_with_strict_requests()
+    chat["bridge_runtime_evidence_store"]["req-one"]["runtime_sequence"][3]["target_seat"] = 0
+    result = security_audit([chat])
+    assert result["checks"]["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] is False
