@@ -2727,7 +2727,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.divider()
         st.subheader("🧭 V24 Conversation Platform")
         ensure_store(chat)
-        st.caption(f"Conversation: `{str(chat.get('conversation_id') or "")[:18]}…` · Session: `{str(chat.get('session_id') or "")[:18]}…`")
+        st.caption(f"Conversation: `{str(chat.get('conversation_id') or '')[:18]}…` · Session: `{str(chat.get('session_id') or '')[:18]}…`")
         if st.button("🔍 لماذا هذه الإجابة؟", use_container_width=True): st.session_state.v24_show_provenance = not st.session_state.get("v24_show_provenance", False)
         if st.button("🕒 Timeline", use_container_width=True): st.session_state.v24_show_timeline = not st.session_state.get("v24_show_timeline", False)
         if st.button("📦 Export Conversation", use_container_width=True): st.session_state.v24_export = export_conversation(chat)
