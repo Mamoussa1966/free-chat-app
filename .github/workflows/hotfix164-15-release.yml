@@ -1,0 +1,182 @@
+name: HOTFIX164.15 Regression and Final Closure Gate
+
+on:
+  push:
+    branches:
+      - gitops-v0.4-final
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hotfix164-15-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    name: Release validator, full tests, and ZIP round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Run the repository's complete release validator
+        run: >-
+          python build_release.py
+          --output HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip
+
+      - name: Verify the frozen provider release identity
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          expected = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+          actual = Path("VERSION.txt").read_text(encoding="utf-8").strip()
+          if actual != expected:
+              raise SystemExit(f"VERSION_CONTRACT_FAILED: {actual!r} != {expected!r}")
+          print(f"VERSION_CONTRACT=PASS: {actual}")
+          PY
+
+      - name: Upload diagnostics and verified release candidate
+        if: ${{ always() && hashFiles('HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: HOTFIX164.15-regression-artifacts
+          path: |
+            HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip
+            HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip.sha256
+            RELEASE_MANIFEST.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish:
+    name: Publish only after explicit final-closure evidence
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the selected target ref
+        uses: actions/checkout@v4
+
+      - name: Download the exact tested ZIP and its generated manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: HOTFIX164.15-regression-artifacts
+          path: dist
+
+      - name: Verify generated ZIP checksum and release identity
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+
+          expected_version = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+          zip_path = Path("dist/HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip")
+          manifest_path = Path("dist/RELEASE_MANIFEST.json")
+          checksum_path = Path("dist/HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip.sha256")
+          for path in (zip_path, manifest_path, checksum_path):
+              if not path.is_file():
+                  raise SystemExit(f"RELEASE_ARTIFACT_MISSING: {path}")
+
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          actual_hash = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+          expected_line = f"{actual_hash}  {zip_path.name}\n"
+          if checksum_path.read_text(encoding="utf-8") != expected_line:
+              raise SystemExit("ZIP_SHA256_FILE_MISMATCH")
+          if manifest.get("sha256") != actual_hash:
+              raise SystemExit("RELEASE_MANIFEST_SHA256_MISMATCH")
+          if manifest.get("zip") != zip_path.name:
+              raise SystemExit("RELEASE_MANIFEST_FILENAME_MISMATCH")
+          if manifest.get("version") != expected_version:
+              raise SystemExit("RELEASE_MANIFEST_VERSION_MISMATCH")
+          print("ZIP_SHA256=PASS")
+          print("ZIP_RELEASE_IDENTITY=PASS")
+          PY
+
+      - name: Fail closed unless HOTFIX164.15 live bridge closure is proven
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+
+          manifest_path = Path("HOTFIX164.15_RELEASE_MANIFEST.json")
+          evidence_path = Path("HOTFIX164.15_BRIDGE_RUNTIME_EVIDENCE.json")
+          notes_path = Path("HOTFIX164.15_FINAL_CLOSURE_RELEASE.md")
+          for path in (manifest_path, evidence_path, notes_path):
+              if not path.is_file():
+                  raise SystemExit(f"FINAL_CLOSURE_BLOCKED: required file missing: {path}")
+
+          release = json.loads(manifest_path.read_text(encoding="utf-8"))
+          evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+          if release.get("release") != "HOTFIX164.15":
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: release identity mismatch")
+          if release.get("provider_core_identity") != "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE":
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: provider identity changed")
+          if release.get("guardrails", {}).get("live_final_closure_proven") is not True:
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: live_final_closure_proven is not true")
+          expected_evidence_hash = release.get("bridge_runtime_evidence_sha256")
+          actual_evidence_hash = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+          if not expected_evidence_hash or expected_evidence_hash != actual_evidence_hash:
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: runtime evidence hash missing or mismatched")
+
+          if evidence.get("schema") != "hotfix164.15-bridge-runtime-evidence/v1":
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: runtime evidence schema mismatch")
+          if evidence.get("status") != "PASS":
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: runtime bridge evidence is not PASS")
+          required_true = (
+              "request_id_identity_match",
+              "canonical_audit_proven",
+              "bridge_id_uniqueness_proven",
+          )
+          for key in required_true:
+              if evidence.get(key) is not True:
+                  raise SystemExit(f"FINAL_CLOSURE_BLOCKED: {key} is not true")
+          required_false = (
+              "read_side_effects",
+              "hydration_side_effects",
+              "bridge_value_in_provider_prompt",
+              "bridge_value_in_http_payload",
+          )
+          for key in required_false:
+              if evidence.get(key) is not False:
+                  raise SystemExit(f"FINAL_CLOSURE_BLOCKED: {key} is not false")
+          if evidence.get("transaction_sequence") != ["WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ"]:
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: transaction sequence mismatch")
+          if [evidence.get(k) for k in ("commit_target_seat", "barrier_target_seat", "read_target_seat")] != [2, 2, 2]:
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: COMMIT/BARRIER/READ target seat mismatch")
+          if evidence.get("canonical_counts") != {"messages": 2, "requests": 2, "rounds": 2}:
+              raise SystemExit("FINAL_CLOSURE_BLOCKED: canonical two-message counts mismatch")
+
+          print("HOTFIX164.15_LIVE_BRIDGE_CLOSURE=PASS")
+          PY
+
+      - name: Create the immutable-named Release and upload verified assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v164.15-closure"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "RELEASE_BLOCKED: $tag already exists; refusing to overwrite or relabel it."
+            exit 1
+          fi
+          gh release create "$tag" \
+            dist/HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip \
+            dist/HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip.sha256 \
+            dist/RELEASE_MANIFEST.json \
+            HOTFIX164.15_RELEASE_MANIFEST.json \
+            HOTFIX164.15_BRIDGE_RUNTIME_EVIDENCE.json \
+            --target "$GITHUB_SHA" \
+            --title "HOTFIX164.15 Final Regression Closure" \
+            --notes-file HOTFIX164.15_FINAL_CLOSURE_RELEASE.md
