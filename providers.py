@@ -1298,7 +1298,7 @@ def _diagnostic(exc: Optional[ProviderError], credential: Optional[str] = None) 
     if exc is None:
         return "class=provider_error; Unknown provider failure."
     status = f"HTTP {exc.status_code}; " if exc.status_code else ""
-    return f"{status}class={exc.error_class}; {_sanitize(str(exc), (credential or "",))}"
+    return f"{status}class={exc.error_class}; {_sanitize(str(exc), (credential or '',))}"
 
 
 def _validate_provider_output_schema(seat: Seat, result: dict, expected_model: str) -> None:
