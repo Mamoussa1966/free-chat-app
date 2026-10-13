@@ -1,0 +1,99 @@
+name: Build and Publish Verified Release Asset
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verified-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Validate project, build ZIP, and publish release asset
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact tagged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Run release validation and build the tested ZIP
+        run: python build_release.py --output project_release.zip
+
+      - name: Fail closed if credentials or unsafe paths entered the ZIP
+        run: |
+          python - <<'PY'
+          import json
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path("project_release.zip")
+          manifest_path = Path("RELEASE_MANIFEST.json")
+          checksum_path = Path("project_release.zip.sha256")
+          for path in (archive, manifest_path, checksum_path):
+              if not path.is_file():
+                  raise SystemExit(f"RELEASE_FILE_MISSING: {path}")
+
+          with zipfile.ZipFile(archive) as zf:
+              names = zf.namelist()
+              if len(names) != len(set(names)):
+                  raise SystemExit("ZIP_DUPLICATE_PATHS")
+              for name in names:
+                  path = PurePosixPath(name)
+                  if path.is_absolute() or ".." in path.parts or "\\" in name:
+                      raise SystemExit(f"ZIP_UNSAFE_PATH: {name}")
+                  if name in {".streamlit/secrets.toml", ".env"} or name.startswith(".env/"):
+                      raise SystemExit(f"ZIP_SECRET_FILE_BLOCKED: {name}")
+              top_level = {PurePosixPath(name).parts[0] for name in names if PurePosixPath(name).parts}
+              required = {"main.py", "conversation_store.py", "VERSION.txt", "tests"}
+              missing = sorted(required - top_level)
+              if missing:
+                  raise SystemExit(f"ZIP_ROOT_LAYOUT_MISSING: {missing}")
+
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if manifest.get("zip") != archive.name:
+              raise SystemExit("RELEASE_MANIFEST_FILENAME_MISMATCH")
+          print("RELEASE_VALIDATION=PASS")
+          print("ZIP_ROOT_LAYOUT=PASS")
+          print("SECRET_FILE_CHECK=PASS")
+          print("ZIP_SHA256=" + str(manifest.get("sha256", "")))
+          PY
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "RELEASE_BLOCKED: release $GITHUB_REF_NAME already exists; refusing to overwrite it."
+            exit 1
+          fi
+
+      - name: Publish the tested ZIP and verification files as Release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            project_release.zip \
+            project_release.zip.sha256 \
+            RELEASE_MANIFEST.json \
+            --target "$GITHUB_SHA" \
+            --title "AI Council $GITHUB_REF_NAME" \
+            --notes-file RELEASE_NOTES.md
