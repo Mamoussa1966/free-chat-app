@@ -1,0 +1,113 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.19",
+  "title": "Read-Only Request-3 Forensics and Fail-Closed Closure",
+  "parent_release": "HOTFIX164.18",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "changed_files": [
+    "main.py",
+    "production_platform.py",
+    "v23_final_closure_audit.py",
+    "providers.py",
+    "build_release.py",
+    "tests/test_provider_runtime.py",
+    "tests/test_hotfix16419_read_only_existing_records.py",
+    "HOTFIX164.19_RELEASE_NOTES.md",
+    "HOTFIX164.19_RELEASE_MANIFEST.json",
+    ".github/workflows/hotfix164-19-read-only-forensics.yml"
+  ],
+  "diagnostic_contract": {
+    "schema": "hotfix164.19-read-only-existing-records-audit/v1",
+    "read_only_mode": true,
+    "audits_each_existing_canonical_request": true,
+    "does_not_create_request_or_round": true,
+    "does_not_execute_provider_or_cascade": true,
+    "does_not_write_bridge": true,
+    "missing_execution_evidence_remains_not_proven": true,
+    "missing_required_artifacts_remain_not_proven": true,
+    "state_unchanged_fingerprint_check": true,
+    "raw_prompt_or_http_body_exported": false,
+    "bridge_value_exported": false,
+    "bridge_hash_exported": false
+  },
+  "observed_audit_root_cause": {
+    "source": "V23_FULL_PLATFORM_AUDIT (24).json",
+    "canonical_counts": {
+      "messages": 3,
+      "requests": 3,
+      "rounds": 3
+    },
+    "canonical_preflight": "PASS",
+    "latest_request_id": "4cec624c0c98491a8831d34fe6b37255",
+    "latest_request_execution_status": "NOT_PROVEN",
+    "latest_request_missing_artifacts": [
+      "SEAT_RESULTS",
+      "EXECUTED_MODELS",
+      "CASCADE_SUMMARIES",
+      "FINAL_RESULT",
+      "AUTHORITATIVE_METRICS"
+    ],
+    "execution_started_events": 4,
+    "execution_started_request_ids": [
+      "2443a952134646bdb1a83481187694fd",
+      "7f3c2aac3477470f8f787ae169631d34"
+    ],
+    "strict_live_bridge_requests_proven": 2,
+    "third_request_bridge_was_requested": false
+  },
+  "guardrails": {
+    "provider_core_identity_changed": false,
+    "version_txt_contract_preserved": true,
+    "v26_3_identity_allocation_changed": false,
+    "provider_execution_changed": false,
+    "execution_or_results_synthesized": false,
+    "counter_semantics_decoupled_from_artifact_completeness": true,
+    "failed_platform_audit_can_be_overridden_by_consistent_counts": false,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "github_push_or_release_claimed": false,
+    "live_streamlit_deployment_claimed": false,
+    "live_request_3_execution_claimed": false
+  },
+  "validation_results": {
+    "status": "PASS_WITH_REQUEST3_LIVE_EXECUTION_NOT_PROVEN",
+    "targeted_regression": {
+      "status": "PASS",
+      "passed": 7,
+      "failed": 0,
+      "errors": 0
+    },
+    "full_regression_suite": {
+      "status": "PASS",
+      "passed": 631,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 168
+    },
+    "fresh_zip_extraction_regression_suite": {
+      "status": "PASS",
+      "passed": 631,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 168
+    },
+    "production_core_gate": "PASS",
+    "file_preservation_gate": {
+      "status": "PASS",
+      "previous_release_files": 75,
+      "current_files": 391,
+      "deleted_previous_release_files": 0
+    },
+    "zip_roundtrip": {
+      "status": "PASS",
+      "archive_entry_count": 391,
+      "all_project_files_at_archive_root": true,
+      "nested_zips": 0
+    },
+    "frozen_version_contract": "PASS",
+    "github_push_or_release": "NOT_PUBLISHED",
+    "live_request_3_execution": "NOT_PROVEN"
+  }
+}

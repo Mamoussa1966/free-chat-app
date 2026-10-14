@@ -172,10 +172,30 @@ def build_v23_final_closure_audit(
         )
 
     ui_isolation = counters.get("ui_message_count_authoritative") is False
+    platform_status = str((platform_report or {}).get("status") or "NOT_RUN").upper() if isinstance(platform_report, dict) else "NOT_RUN"
+    persistence_status = str((persistence or {}).get("status") or platform_status).upper() if isinstance(persistence, dict) else "NOT_PROVEN"
+    # HOTFIX164.19: distinguish internally consistent canonical counters from
+    # overall Platform readiness. The closure gate may not turn PASS merely
+    # because 3/3/3 counters match while the latest Request lacks execution,
+    # synthesis, result, cascade or metrics evidence.
+    closure_blockers = list(failures)
+    if not canonical_ready:
+        closure_blockers.append("CANONICAL_IDENTITY_COUNTS_NOT_PROVEN")
+    if not counter_consistent:
+        closure_blockers.append("CANONICAL_COUNTER_SEMANTICS_NOT_PROVEN")
+    if security_status != "PASS":
+        closure_blockers.append("SECURITY_AUDIT_NOT_PASS")
+    if platform_status != "PASS":
+        closure_blockers.append("PLATFORM_AUDIT_NOT_PASS")
+    if persistence_status != "PASS":
+        closure_blockers.append("CONVERSATION_PERSISTENCE_NOT_PASS")
 
     return {
         "schema": "v23-final-closure-audit/v1",
-        "status": "PASS" if canonical_ready and counter_consistent and security_status == "PASS" and not failures else "FAIL",
+        "status": "PASS" if canonical_ready and counter_consistent and security_status == "PASS" and platform_status == "PASS" and persistence_status == "PASS" and not failures else "FAIL",
+        "closure_blockers": sorted(set(closure_blockers)),
+        "platform_report_status": platform_status,
+        "conversation_persistence_status": persistence_status,
         "security": {
             "status": security_status,
             "failure_reasons": failures,
@@ -197,7 +217,6 @@ def build_v23_final_closure_audit(
             "separate_from_canonical_message_count": True,
             "isolation_proven": ui_isolation,
         },
-        "platform_report_status": str((platform_report or {}).get("status") or "NOT_RUN").upper() if isinstance(platform_report, dict) else "NOT_RUN",
         "preservation_contract": {
             "Message_to_Request": "UNCHANGED",
             "Request_to_Round": "UNCHANGED",

@@ -17,7 +17,7 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
-from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit
+from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit
 from v23_final_closure_audit import build_v23_final_closure_audit
 from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
@@ -3424,7 +3424,59 @@ def _render_main_room_shell() -> None:
     st.subheader("💬 غرفة المحادثة")
 
 
+def _active_chat_without_initialization() -> dict:
+    """Locate an existing active chat without creating/migrating any state."""
+    chats = st.session_state.get("chats")
+    if not isinstance(chats, list):
+        return {}
+    active_id = str(st.session_state.get("active_chat_id") or "")
+    return next((item for item in chats if isinstance(item, dict) and str(item.get("id") or "") == active_id), {})
+
+
+def _render_hotfix16419_read_only_page() -> None:
+    """Render only the existing-records diagnostic; never enter normal app lifecycle."""
+    report = st.session_state.get("last_hotfix16419_read_only_audit")
+    if not isinstance(report, dict):
+        report = read_only_existing_records_audit(_active_chat_without_initialization())
+        st.session_state["last_hotfix16419_read_only_audit"] = report
+    st.title("HOTFIX164.19 — Read-Only Existing-Records Forensics")
+    st.warning("هذا الفحص لا ينشئ طلبًا أو جولة أو Bridge ولا ينفّذ مزودًا. النتيجة NOT_PROVEN/FAIL تبقى كما هي حتى يظهر الدليل الفعلي.")
+    st.json(report)
+    payload = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+    st.download_button(
+        "💾 Download Read-Only Audit JSON",
+        data=payload,
+        file_name="HOTFIX164.19_READ_ONLY_EXISTING_RECORDS_AUDIT.json",
+        mime="application/json",
+        key="hotfix16419_read_only_audit_download",
+        use_container_width=True,
+    )
+    if st.button("↩️ العودة إلى غرفة المجلس", key="hotfix16419_exit_read_only_audit", use_container_width=True):
+        st.session_state["_hotfix16419_read_only_mode"] = False
+        st.session_state["_hotfix16419_read_only_requested"] = False
+        st.rerun()
+    st.stop()
+
+
 def run_app() -> None:
+    # HOTFIX164.19: intercept the forensic page before normal state hydration,
+    # health checks, provider configuration, context rebuilding, or audit tests.
+    if st.session_state.get("_hotfix16419_read_only_mode"):
+        _render_hotfix16419_read_only_page()
+        return
+    if st.sidebar.button("🧭 HOTFIX164.19 — Read-Only Existing-Records Audit", key="hotfix16419_read_only_entry", use_container_width=True):
+        st.session_state["_hotfix16419_read_only_requested"] = True
+        st.session_state["_hotfix16419_read_only_mode"] = True
+        st.session_state["last_hotfix16419_read_only_audit"] = read_only_existing_records_audit(_active_chat_without_initialization())
+        _render_hotfix16419_read_only_page()
+        return
+    # A click from the regular sidebar is detected before all normal lifecycle work.
+    if st.session_state.get("_hotfix16419_read_only_requested"):
+        st.session_state["last_hotfix16419_read_only_audit"] = read_only_existing_records_audit(_active_chat_without_initialization())
+        st.session_state["_hotfix16419_read_only_requested"] = False
+        st.session_state["_hotfix16419_read_only_mode"] = True
+        _render_hotfix16419_read_only_page()
+        return
     _init_state()
     # HOTFIX123: the Bridge/Security claim is only shown as deployable after the
     # frozen multi-layer release identity matches the runtime modules. A mismatch

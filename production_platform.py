@@ -277,11 +277,354 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         "persisted_message_count": canonical_counts["canonical_message_count"],
         "persisted_request_count": canonical_counts["canonical_request_count"],
         "persisted_round_count": canonical_counts["canonical_round_count"],
-        "counter_semantics_consistent": bool(ok and persisted_counts_match),
+        # HOTFIX164.19: canonical counter semantics are a separate fact from
+        # whether this particular Request has every execution/result artifact.
+        # A missing third-Request result must not turn consistent 3/3/3 identity
+        # counters into a false counter-semantics failure; overall persistence
+        # remains FAIL until the missing artifacts are proven.
+        "counter_semantics_consistent": bool(
+            persisted_counts_match
+            and preflight.get("status") == "PASS"
+            and preflight.get("counter_semantics_consistent") is True
+        ),
+        "failure_reasons": sorted(
+            [f"MISSING_REQUIRED_ARTIFACT:{key}" for key, value in required.items()
+             if value is not True and value != "NOT_REQUESTED"]
+            + (["FORBIDDEN_DATA_PRESENT"] if any(forbidden_hits.values()) else [])
+            + (["CANONICAL_COUNTER_MISMATCH"] if not persisted_counts_match else [])
+            + (["CANONICAL_PREFLIGHT_NOT_PASS"] if preflight.get("status") != "PASS" else [])
+        ),
+        "audited_request_id": rid or None,
+        "request_record_present": bool(record),
+        "canonical_request_present": bool(canonical_request),
         "ui_projection_message_count": len(ui_messages),
         "ui_projection_message_count_authoritative": False,
         "messages": len(ui_messages),
         "request_records": len(records),
+    }
+
+
+def _read_only_state_fingerprint(value: Any) -> str:
+    """Return an internal-only stable fingerprint; never return source data."""
+    try:
+        payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=lambda obj: f"<{type(obj).__name__}:{repr(obj)}> ")
+    except Exception:
+        return ""
+    return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
+
+
+def read_only_existing_records_audit(chat: dict[str, Any] | None) -> dict[str, Any]:
+    """Re-audit persisted canonical lifecycle and per-Request evidence without writes.
+
+    This function intentionally does NOT call ensure_store, canonical_audit_preflight,
+    hydration, index rebuilding, commit/upsert helpers, provider calls, cascade
+    execution, context compaction, or Bridge transaction functions. All analysis is
+    performed on a deep copy of records already present in the passed chat. Missing
+    execution or result evidence is reported as NOT_PROVEN; it is never manufactured.
+    """
+    live = chat if isinstance(chat, dict) else {}
+    before = _read_only_state_fingerprint(live)
+    snapshot = copy.deepcopy(live)
+    canonical = snapshot.get("conversation_record") if isinstance(snapshot.get("conversation_record"), dict) else None
+    if canonical is None and isinstance(snapshot.get("canonical_record"), dict):
+        canonical = snapshot.get("canonical_record")
+
+    empty_counts = {
+        "canonical_message_count": "NOT_PROVEN",
+        "canonical_request_count": "NOT_PROVEN",
+        "canonical_round_count": "NOT_PROVEN",
+    }
+    if not isinstance(canonical, dict) or not all(isinstance(canonical.get(k), list) for k in ("messages", "requests", "rounds")):
+        after = _read_only_state_fingerprint(live)
+        return {
+            "schema": "hotfix164.19-read-only-existing-records-audit/v1",
+            "status": "NOT_PROVEN",
+            "mode": "READ_ONLY",
+            "read_only": True,
+            "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE",
+            "canonical_store_present": False,
+            "canonical_counts": empty_counts,
+            "requests": [],
+            "blockers": ["CANONICAL_CONVERSATION_RECORD_MISSING"],
+            "read_side_effects": "NONE_OBSERVED" if before and before == after else "NOT_PROVEN",
+            "live_state_unchanged": bool(before and before == after),
+            "provider_execution": 0,
+            "cascade_execution": 0,
+            "new_requests": 0,
+            "new_rounds": 0,
+            "new_bridges": 0,
+        }
+
+    # These three helpers only inspect the supplied dictionary. The copies ensure
+    # that accidental future normalisation cannot mutate the live application state.
+    from conversation_store import canonical_history_hash, canonical_identity_counts, validate_canonical_chain
+    canonical = copy.deepcopy(canonical)
+    counts = canonical_identity_counts(canonical)
+    integrity = validate_canonical_chain(canonical)
+    canonical_hash_before = canonical_history_hash(canonical)
+    canonical_messages = [m for m in canonical.get("messages", []) if isinstance(m, dict)]
+    canonical_requests = [r for r in canonical.get("requests", []) if isinstance(r, dict)]
+    canonical_rounds = [r for r in canonical.get("rounds", []) if isinstance(r, dict)]
+
+    direct_records = [r for r in snapshot.get("request_records", []) if isinstance(r, dict)]
+    direct_by_id = {str(r.get("request_id") or "").strip(): r for r in direct_records if str(r.get("request_id") or "").strip()}
+    canonical_ids = [str(r.get("request_id") or "").strip() for r in canonical_requests if str(r.get("request_id") or "").strip()]
+    canonical_id_set = set(canonical_ids)
+    projection_only_ids = sorted(set(direct_by_id) - canonical_id_set)
+    duplicate_canonical_request_ids = sorted({rid for rid in canonical_ids if canonical_ids.count(rid) > 1})
+
+    security_report = security_audit([snapshot])
+    strict_proof = security_report.get("strict_live_bridge_proof", {}) if isinstance(security_report, dict) else {}
+    strict_proof_rows = {
+        str(row.get("request_id") or ""): row
+        for row in (strict_proof.get("records", []) if isinstance(strict_proof, dict) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "")
+    }
+
+    request_diagnostics: list[dict[str, Any]] = []
+    blockers: list[str] = []
+    explicit_fail = False
+    total_execution_started = 0
+    total_execution_events = 0
+    user_messages = [m for m in canonical_messages if str(m.get("role") or "").lower() == "user"]
+    session_id_present = bool(snapshot.get("id") or snapshot.get("session_id") or canonical.get("session_id"))
+
+    def status_for_artifact(present: bool) -> str:
+        return "PASS" if present else "NOT_PROVEN"
+
+    for canonical_row in canonical_requests:
+        rid = str(canonical_row.get("request_id") or "").strip()
+        if not rid:
+            explicit_fail = True
+            blockers.append("CANONICAL_REQUEST_ID_MISSING")
+            continue
+        row = copy.deepcopy(canonical_row)
+        direct = direct_by_id.get(rid)
+        if isinstance(direct, dict):
+            for key, value in direct.items():
+                if value not in (None, "", [], {}):
+                    row[key] = copy.deepcopy(value)
+
+        message_id = str(row.get("message_id") or "").strip()
+        matching_messages = [m for m in user_messages if str(m.get("message_id") or "").strip() == message_id and str(m.get("request_id") or "").strip() == rid]
+        conflicting_messages = [m for m in user_messages if str(m.get("message_id") or "").strip() == message_id and str(m.get("request_id") or "").strip() not in ("", rid)] if message_id else []
+        message_status = "PASS" if len(matching_messages) == 1 else "FAIL" if conflicting_messages or len(matching_messages) > 1 else "NOT_PROVEN"
+        if message_status == "FAIL":
+            explicit_fail = True
+
+        bound_rounds = [r for r in canonical_rounds if str(r.get("request_id") or "").strip() == rid]
+        round_status = "NOT_PROVEN"
+        if len(bound_rounds) > 1:
+            round_status = "FAIL"
+            explicit_fail = True
+        elif len(bound_rounds) == 1:
+            bound = bound_rounds[0]
+            bound_message = str(bound.get("message_id") or "").strip()
+            bound_id = str(bound.get("round_id") or "").strip()
+            if message_id and bound_message and bound_message != message_id:
+                round_status = "FAIL"
+                explicit_fail = True
+            elif not bound_id or not bound_message or not message_id:
+                round_status = "NOT_PROVEN"
+            elif bound_message == message_id:
+                round_status = "PASS"
+
+        results = row.get("results") if isinstance(row.get("results"), list) else []
+        result_rows = [x for x in results if isinstance(x, dict)]
+        result_identity_status = "PASS"
+        execution_events: list[dict[str, Any]] = []
+        missing_event_identity = False
+        mismatched_event_identity = False
+        explicit_not_executed = False
+        actual_models: list[str] = []
+        cascade_summaries_present = False
+        for result in result_rows:
+            result_rid = str(result.get("request_id") or "").strip()
+            if result_rid and result_rid != rid:
+                result_identity_status = "FAIL"
+                explicit_fail = True
+            elif not result_rid:
+                result_identity_status = "NOT_PROVEN" if result_identity_status != "FAIL" else "FAIL"
+            cascade_summaries_present = cascade_summaries_present or bool(result.get("attempt_summaries") or result.get("attempt_telemetry"))
+            if result.get("executed_model") or result.get("model"):
+                actual_models.append(str(result.get("executed_model") or result.get("model")))
+            raw_events = result.get("runtime_execution_events")
+            for event in raw_events if isinstance(raw_events, list) else []:
+                if not isinstance(event, dict):
+                    continue
+                total_execution_events += 1
+                state = str(event.get("status") or event.get("classification") or "").upper()
+                if state == "NOT_EXECUTED":
+                    explicit_not_executed = True
+                if event.get("execution_started") is True:
+                    total_execution_started += 1
+                    execution_events.append(event)
+                    event_rid = str(event.get("request_id") or "").strip()
+                    if event_rid and event_rid != rid:
+                        mismatched_event_identity = True
+                    elif not event_rid:
+                        missing_event_identity = True
+                    if event.get("model") or event.get("executed_model"):
+                        actual_models.append(str(event.get("model") or event.get("executed_model")))
+        if mismatched_event_identity:
+            execution_identity_status = "FAIL"
+            explicit_fail = True
+        elif missing_event_identity:
+            execution_identity_status = "NOT_PROVEN"
+        elif execution_events:
+            execution_identity_status = "PASS"
+        else:
+            execution_identity_status = "NOT_PROVEN"
+
+        metrics = row.get("request_metrics") if isinstance(row.get("request_metrics"), dict) else {}
+        synthesis = row.get("synthesis") if isinstance(row.get("synthesis"), dict) else {}
+        bridge_requested = bool(row.get("bridge_test_requested"))
+        strict_requested = str(row.get("bridge_runtime_contract") or "") == "STRICT_LIVE"
+        if not bridge_requested:
+            bridge_status = "NOT_REQUESTED"
+        elif strict_requested:
+            proof_row = strict_proof_rows.get(rid, {})
+            bridge_status = str(proof_row.get("status") or "NOT_PROVEN").upper()
+            if bridge_status not in {"PASS", "NOT_PROVEN", "FAIL"}:
+                bridge_status = "NOT_PROVEN"
+        else:
+            legacy_audits = [x.get("bridge_transaction_audit") for x in result_rows if isinstance(x.get("bridge_transaction_audit"), dict)]
+            bridge_status = "PASS" if legacy_audits and all(
+                all(audit.get(k) == "PASS" for k in ("WRITE", "VALIDATE", "COMMIT", "BARRIER", "READ", "SCHEMA_VALIDATION", "MATCH"))
+                and audit.get("BRIDGE_STATE_CONTAINS_VALUE") == "YES"
+                and audit.get("USER_PROMPT_CONTAINS_VALUE") == "NO"
+                and audit.get("GEMINI_INPUT_PROMPT_CONTAINS_VALUE") == "NO"
+                for audit in legacy_audits
+            ) else "NOT_PROVEN"
+
+        required_artifacts = {
+            "SESSION_ID": status_for_artifact(session_id_present),
+            "USER_MESSAGE": message_status,
+            "REQUEST_ID": "PASS",
+            "ROUND_ID": round_status,
+            "SEAT_RESULTS": status_for_artifact(bool(result_rows)),
+            "EXECUTED_MODELS": status_for_artifact(bool(execution_events) and bool(actual_models)),
+            "CASCADE_SUMMARIES": status_for_artifact(cascade_summaries_present),
+            "BRIDGE_AUDIT": bridge_status,
+            "FINAL_RESULT": status_for_artifact(bool(synthesis)),
+            "AUTHORITATIVE_METRICS": status_for_artifact(bool(metrics)),
+        }
+        missing = [key for key, value in required_artifacts.items() if value not in {"PASS", "NOT_REQUESTED"}]
+        request_execution_status = "PASS" if execution_events and execution_identity_status == "PASS" else "NOT_EXECUTED" if explicit_not_executed else "NOT_PROVEN"
+        status = "FAIL" if "FAIL" in required_artifacts.values() or result_identity_status == "FAIL" or execution_identity_status == "FAIL" else "PASS" if not missing and request_execution_status == "PASS" else "NOT_PROVEN"
+        if status == "FAIL":
+            explicit_fail = True
+        if missing:
+            blockers.append(f"REQUEST_ARTIFACTS_NOT_PROVEN:{rid}:{','.join(sorted(missing))}")
+        if request_execution_status == "NOT_PROVEN":
+            blockers.append(f"REQUEST_EXECUTION_NOT_PROVEN:{rid}")
+        if request_execution_status == "NOT_EXECUTED":
+            blockers.append(f"REQUEST_EXPLICITLY_NOT_EXECUTED:{rid}")
+        if result_identity_status != "PASS":
+            blockers.append(f"RESULT_REQUEST_IDENTITY_{result_identity_status}:{rid}")
+        request_diagnostics.append({
+            "request_id": rid,
+            "canonical_request_present": True,
+            "direct_request_projection_present": isinstance(direct, dict),
+            "message_identity_status": message_status,
+            "canonical_round_binding_status": round_status,
+            "canonical_round_records_for_request": len(bound_rounds),
+            "canonical_round_ordinals": sorted({int(r.get("ordinal")) for r in bound_rounds if isinstance(r.get("ordinal"), int)}),
+            "result_request_identity_status": result_identity_status,
+            "request_execution_status": request_execution_status,
+            "execution_identity_status": execution_identity_status,
+            "execution_started_count": len(execution_events),
+            "result_record_count": len(result_rows),
+            "actual_model_attestation_present": bool(execution_events) and bool(actual_models),
+            "cascade_summary_present": cascade_summaries_present,
+            "synthesis_record_present": bool(synthesis),
+            "authoritative_metrics_present": bool(metrics),
+            "bridge_requested": bridge_requested,
+            "bridge_contract": "STRICT_LIVE" if strict_requested else "LEGACY_COMPATIBILITY" if bridge_requested else "NOT_REQUESTED",
+            "strict_live_bridge_status": bridge_status if strict_requested else "NOT_REQUESTED",
+            "required_artifacts": required_artifacts,
+            "missing_required_artifacts": sorted(missing),
+            "status": status,
+        })
+
+    identity_counts_valid = all(isinstance(counts.get(k), int) for k in ("canonical_message_count", "canonical_request_count", "canonical_round_count"))
+    expected_count_match = bool(
+        identity_counts_valid
+        and counts["canonical_message_count"] == len([m for m in canonical_messages if str(m.get("message_id") or "").strip() and str(m.get("role") or "").lower() == "user"])
+        and counts["canonical_request_count"] == len([r for r in canonical_requests if str(r.get("request_id") or "").strip()])
+        and counts["canonical_round_count"] == len([r for r in canonical_rounds if str(r.get("round_id") or "").strip()])
+    )
+    chain_valid = bool(integrity.get("message_request_integrity") and integrity.get("request_round_integrity") and integrity.get("round_ids_unique"))
+    canonical_consistent = bool(expected_count_match and chain_valid and not duplicate_canonical_request_ids)
+    if not expected_count_match:
+        blockers.append("CANONICAL_COUNTER_MISMATCH")
+    if not chain_valid:
+        blockers.append("CANONICAL_MESSAGE_REQUEST_ROUND_CHAIN_INVALID")
+        explicit_fail = True
+    if duplicate_canonical_request_ids:
+        blockers.append("DUPLICATE_CANONICAL_REQUEST_IDS")
+        explicit_fail = True
+    if projection_only_ids:
+        blockers.append("DIRECT_REQUEST_PROJECTIONS_WITHOUT_CANONICAL_IDENTITY")
+        # The projection mismatch is a contract conflict, but keep the raw IDs as
+        # diagnostics only; never promote those rows into canonical history.
+        explicit_fail = True
+    security_status = str((security_report or {}).get("status") or "NOT_PROVEN").upper()
+    if security_status == "FAIL":
+        blockers.append("SECURITY_AUDIT_FAIL")
+        explicit_fail = True
+    elif security_status != "PASS":
+        blockers.append("SECURITY_AUDIT_NOT_PROVEN")
+    if isinstance(strict_proof, dict) and strict_proof.get("status") == "FAIL":
+        blockers.append("STRICT_LIVE_BRIDGE_SECURITY_AUDIT_FAIL")
+        explicit_fail = True
+    if isinstance(strict_proof, dict) and strict_proof.get("status") == "NOT_PROVEN":
+        blockers.append("STRICT_LIVE_BRIDGE_SECURITY_AUDIT_NOT_PROVEN")
+
+    canonical_hash_after = canonical_history_hash(canonical)
+    after = _read_only_state_fingerprint(live)
+    state_unchanged = bool(before and before == after)
+    read_side_effects = "NONE_OBSERVED" if state_unchanged and canonical_hash_before == canonical_hash_after else "DETECTED_OR_NOT_PROVEN"
+    if not state_unchanged or canonical_hash_before != canonical_hash_after:
+        blockers.append("READ_ONLY_STATE_CHANGED_OR_COULD_NOT_BE_VERIFIED")
+        explicit_fail = True
+
+    if explicit_fail:
+        overall_status = "FAIL"
+    elif not canonical_consistent or not request_diagnostics or any(r.get("status") != "PASS" for r in request_diagnostics) or (isinstance(strict_proof, dict) and strict_proof.get("status") == "NOT_PROVEN"):
+        overall_status = "NOT_PROVEN"
+    else:
+        overall_status = "PASS"
+    # The final Platform closure requires every applicable request artifact. This
+    # report is explanatory and cannot change the stored Request or add evidence.
+    return {
+        "schema": "hotfix164.19-read-only-existing-records-audit/v1",
+        "status": overall_status,
+        "mode": "READ_ONLY",
+        "read_only": True,
+        "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE",
+        "canonical_counts": counts,
+        "canonical_counter_consistent": canonical_consistent,
+        "canonical_identity_chain_valid": chain_valid,
+        "canonical_history_hash_stable_during_audit": canonical_hash_before == canonical_hash_after,
+        "request_created_count": counts.get("canonical_request_count", "NOT_PROVEN"),
+        "request_diagnostic_count": len(request_diagnostics),
+        "execution_started_count": total_execution_started,
+        "runtime_execution_event_count": total_execution_events,
+        "execution_started_source": "PERSISTED_APPLICATION_OWNED_RUNTIME_EXECUTION_EVENTS_ONLY",
+        "requests": request_diagnostics,
+        "projection_only_request_ids": projection_only_ids,
+        "duplicate_canonical_request_ids": duplicate_canonical_request_ids,
+        "strict_live_bridge_proof": strict_proof if isinstance(strict_proof, dict) else {"status": "NOT_PROVEN", "records": []},
+        "security_audit_status": security_status,
+        "blockers": sorted(set(blockers)),
+        "read_side_effects": read_side_effects,
+        "live_state_unchanged": state_unchanged,
+        "provider_execution": 0,
+        "cascade_execution": 0,
+        "new_requests": 0,
+        "new_rounds": 0,
+        "new_bridges": 0,
     }
 
 
