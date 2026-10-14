@@ -44,7 +44,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 from release_identity import deployed_release_identity, assert_deployed_release_identity
 
 APP_VERSION = PROVIDER_VERSION
-DISPLAY_VERSION = "HOTFIX164.22 — EXPLICIT-TARGET READ-ONLY FORENSICS AND FAIL-CLOSED CLOSURE"
+DISPLAY_VERSION = "HOTFIX164.23 — EXPLICIT TARGET BINDING AND FAIL-CLOSED CLOSURE"
 HOTFIX_VERSION = "HOTFIX144"
 PLATFORM_RELEASE_VERSION = "V25.0-CONVERSATION-LEDGER-MESSAGE-RUNTIME"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -3496,11 +3496,10 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     requests = [x for x in canonical.get("requests", []) if isinstance(x, dict)] if isinstance(canonical.get("requests"), list) else []
     rounds = [x for x in canonical.get("rounds", []) if isinstance(x, dict)] if isinstance(canonical.get("rounds"), list) else []
     raw_targets = target_request_ids if isinstance(target_request_ids, (list, tuple)) else HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS
-    targets = [str(x or "").strip() for x in raw_targets]
-    if len(targets) != 2:
-        targets = targets[:2]
-    while len(targets) < 2:
-        targets.append("")
+    # Blank form slots are omitted, not treated as target identities. One explicit
+    # Request ID is sufficient; an empty form never triggers automatic selection.
+    # Preserve duplicate non-empty IDs so the validation below can fail closed.
+    targets = [str(value or "").strip() for value in raw_targets if str(value or "").strip()]
 
     canonical_request_ids = [str(r.get("request_id") or "").strip() for r in requests if str(r.get("request_id") or "").strip()]
     canonical_id_set = set(canonical_request_ids)
@@ -3565,7 +3564,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         status = "FAIL" if base_status == "FAIL" or base_counter_status == "FAIL" or direct_counter_status == "FAIL" or not live_state_unchanged else "NOT_PROVEN"
         report = copy.deepcopy(base)
         report.update({
-            "schema": "hotfix164.22-explicit-target-read-only-forensics/v1",
+            "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
             "parent_schema": str(base.get("schema") or "NOT_PROVEN"),
             "status": status,
             "mode": "READ_ONLY_EXPLICIT_TARGETS",
@@ -3597,9 +3596,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     target_rows = []
     seen_targets = set()
     all_bridge_hashes = []
-    target_set_invalid = False
-    if not all(targets) or len(set(targets)) != 2:
-        target_set_invalid = True
+    target_set_invalid = len(set(targets)) != len(targets) or len(targets) > 2
 
     for slot, rid in enumerate(targets, start=1):
         missing = []
@@ -3796,13 +3793,22 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         })
 
     bridge_uniqueness = "NOT_PROVEN"
-    if len(all_bridge_hashes) == 2:
-        if all_bridge_hashes[0][1] == all_bridge_hashes[1][1]:
+    if len(target_rows) == 1:
+        # Independence is a cross-target property. For one explicitly selected
+        # request, assess that request's Bridge proof but do not require a second ID.
+        bridge_uniqueness = (
+            "NOT_APPLICABLE_SINGLE_TARGET"
+            if target_rows[0].get("bridge_proof_status") == "PASS"
+            else "NOT_PROVEN"
+        )
+    elif len(target_rows) >= 2:
+        selected_hashes = [digest for _, digest in all_bridge_hashes]
+        if len(selected_hashes) != len(target_rows):
+            bridge_uniqueness = "NOT_PROVEN"
+        elif len(set(selected_hashes)) != len(selected_hashes):
             bridge_uniqueness = "FAIL"
         elif all(row.get("bridge_proof_status") == "PASS" for row in target_rows):
             bridge_uniqueness = "PASS"
-    elif len({rid for rid, _ in all_bridge_hashes}) != len(all_bridge_hashes):
-        bridge_uniqueness = "FAIL"
     if bridge_uniqueness == "FAIL":
         counter_blockers.append("BRIDGE_ID_REUSED_OR_TARGET_BRIDGE_IDENTITY_NOT_UNIQUE")
 
@@ -3811,7 +3817,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     blockers = list(base.get("blockers", [])) if isinstance(base.get("blockers"), list) else []
     blockers.extend(counter_blockers)
     if target_set_invalid:
-        blockers.append("EXACTLY_TWO_DISTINCT_EXPLICIT_TARGET_REQUEST_IDS_REQUIRED")
+        blockers.append("AT_MOST_TWO_DISTINCT_EXPLICIT_TARGET_REQUEST_IDS_REQUIRED")
     for row in target_rows:
         rid = str(row.get("request_id") or "")
         if row.get("status") != "PASS":
@@ -3827,20 +3833,22 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         or bridge_uniqueness == "FAIL" or target_set_invalid or not live_state_unchanged
         or any(row.get("status") == "FAIL" for row in target_rows)
     )
+    bridge_independence_unproven = len(target_rows) >= 2 and bridge_uniqueness != "PASS"
     any_unproven = (
         base_status != "PASS" or base_counter_status != "PASS" or direct_counter_status != "PASS"
-        or bridge_uniqueness != "PASS" or any(row.get("status") != "PASS" for row in target_rows)
+        or bridge_independence_unproven or any(row.get("status") != "PASS" for row in target_rows)
     )
     overall = "FAIL" if any_fail else "NOT_PROVEN" if any_unproven else "PASS"
     report = copy.deepcopy(base)
     report.update({
-        "schema": "hotfix164.22-explicit-target-read-only-forensics/v1",
+        "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
         "parent_schema": str(base.get("schema") or "NOT_PROVEN"),
         "status": overall,
         "mode": "READ_ONLY_EXPLICIT_TARGETS",
         "read_only": True,
         "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE_AND_APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE",
-        "target_request_count": 2,
+        "target_selection_status": "EXPLICIT_TARGETS_SELECTED" if targets else "NO_TARGETS",
+        "target_request_count": len(targets),
         "target_request_ids": targets,
         "target_requests": target_rows,
         "historical_records_preserved": True,
@@ -3873,7 +3881,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -3891,10 +3899,11 @@ def _render_hotfix16419_read_only_page() -> None:
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.22 — Explicit-Target Read-Only Forensics")
+        st.title("HOTFIX164.23 — Explicit-Target Read-Only Forensics")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
-            "إذا تُركت هويتا الطلب فارغتين فستظهر NO_TARGETS / NOT_PROVEN، وليس PASS. "
+            "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
+            "إذا تُرك الحقلان فارغين فستظهر NO_TARGETS / NOT_PROVEN، دون اختيار تلقائي. "
             "لا يحذف السجلات التاريخية ولا يعيد كتابتها."
         )
         display_targets = list(report.get("target_request_ids") or [])
@@ -3911,7 +3920,7 @@ def _render_hotfix16419_read_only_page() -> None:
                 value=str(display_targets[1]),
                 key="hotfix16422_target_request_2",
             )
-            recalculate = st.form_submit_button("🔎 إعادة التدقيق بهويتي الطلبين المحددتين", use_container_width=True)
+            recalculate = st.form_submit_button("🔎 تدقيق معرّف/معرّفي الطلب الصريحين", use_container_width=True)
         if recalculate:
             st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(
                 _active_chat_without_initialization(), [target_1, target_2]
@@ -3928,10 +3937,10 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.22 — Explicit-Target Read-Only Forensics",
+            "HOTFIX164.23 — Explicit-Target Read-Only Forensics",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.22_EXPLICIT_TARGET_READ_ONLY_FORENSICS.json",
+            download_name="HOTFIX164.23_EXPLICIT_TARGET_READ_ONLY_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -3952,7 +3961,7 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.22 — Explicit-Target Read-Only Forensics", key="hotfix16422_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.23 — Explicit-Target Read-Only Forensics", key="hotfix16422_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16422_read_only_requested"] = True
         st.session_state["_hotfix16422_read_only_mode"] = True
         st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
