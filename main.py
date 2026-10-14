@@ -44,7 +44,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 from release_identity import deployed_release_identity, assert_deployed_release_identity
 
 APP_VERSION = PROVIDER_VERSION
-DISPLAY_VERSION = "HOTFIX164.20 — EXPLICIT-TARGET READ-ONLY FORENSICS AND FAIL-CLOSED CLOSURE"
+DISPLAY_VERSION = "HOTFIX164.22 — EXPLICIT-TARGET READ-ONLY FORENSICS AND FAIL-CLOSED CLOSURE"
 HOTFIX_VERSION = "HOTFIX144"
 PLATFORM_RELEASE_VERSION = "V25.0-CONVERSATION-LEDGER-MESSAGE-RUNTIME"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -3433,13 +3433,10 @@ def _active_chat_without_initialization() -> dict:
     return next((item for item in chats if isinstance(item, dict) and str(item.get("id") or "") == active_id), {})
 
 
-# HOTFIX164.20: these are the two concrete historical Request IDs under review.
-# They are deliberately explicit and are never inferred from the latest N rows.
-# The sidebar allows an operator to enter a different pair when auditing another run.
-HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS = (
-    "2443a952134646bdb1a83481187694fd",
-    "7f3c2aac3477470f8f787ae169631d34",
-)
+# HOTFIX164.22: forensic target IDs must never be invented or pre-populated.
+# The operator must explicitly enter real Request IDs from an authoritative record.
+# Blank defaults intentionally keep an untouched audit at NOT_PROVEN.
+HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS = ("", "")
 
 
 def _hotfix16420_fingerprint(value: object) -> str:
@@ -3793,7 +3790,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     overall = "FAIL" if any_fail else "NOT_PROVEN" if any_unproven else "PASS"
     report = copy.deepcopy(base)
     report.update({
-        "schema": "hotfix164.20-explicit-target-read-only-forensics/v1",
+        "schema": "hotfix164.22-explicit-target-read-only-forensics/v1",
         "parent_schema": str(base.get("schema") or "NOT_PROVEN"),
         "status": overall,
         "mode": "READ_ONLY_EXPLICIT_TARGETS",
@@ -3832,7 +3829,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -3840,35 +3837,35 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
 
 def _render_hotfix16419_read_only_page() -> None:
     """Render the explicit-target forensics report in the sidebar only."""
-    report = st.session_state.get("last_hotfix16419_read_only_audit")
+    report = st.session_state.get("last_hotfix16422_read_only_audit")
     if not isinstance(report, dict):
         current_targets = [
-            str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
-            str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+            str(st.session_state.get("hotfix16422_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+            str(st.session_state.get("hotfix16422_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
         ]
         report = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), current_targets)
-        st.session_state["last_hotfix16419_read_only_audit"] = report
+        st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.20 — Explicit-Target Read-Only Forensics")
+        st.title("HOTFIX164.22 — Explicit-Target Read-Only Forensics")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "لا يحذف الطلب الثالث ولا يعيد كتابة السجلات التاريخية."
         )
-        with st.form("hotfix16420_explicit_target_form", clear_on_submit=False):
+        with st.form("hotfix16422_explicit_target_form", clear_on_submit=False):
             target_1 = st.text_input(
                 "Request ID المستهدف الأول",
                 value=str(report.get("target_request_ids", HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS)[0]),
-                key="hotfix16420_target_request_1",
+                key="hotfix16422_target_request_1",
             )
             target_2 = st.text_input(
                 "Request ID المستهدف الثاني",
                 value=str(report.get("target_request_ids", HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS)[1]),
-                key="hotfix16420_target_request_2",
+                key="hotfix16422_target_request_2",
             )
             recalculate = st.form_submit_button("🔎 إعادة التدقيق بهويتي الطلبين المحددتين", use_container_width=True)
         if recalculate:
-            st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(
+            st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(
                 _active_chat_without_initialization(), [target_1, target_2]
             )
             st.rerun()
@@ -3883,18 +3880,18 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.20 — Explicit-Target Read-Only Forensics",
+            "HOTFIX164.22 — Explicit-Target Read-Only Forensics",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.20_EXPLICIT_TARGET_READ_ONLY_FORENSICS.json",
+            download_name="HOTFIX164.22_EXPLICIT_TARGET_READ_ONLY_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
-            key="hotfix16419_exit_read_only_audit",
+            key="hotfix16422_exit_read_only_audit",
             use_container_width=True,
         ):
-            st.session_state["_hotfix16419_read_only_mode"] = False
-            st.session_state["_hotfix16419_read_only_requested"] = False
+            st.session_state["_hotfix16422_read_only_mode"] = False
+            st.session_state["_hotfix16422_read_only_requested"] = False
             st.rerun()
 
     # Audit rendering is isolated from the normal conversation/request lifecycle.
@@ -3904,26 +3901,26 @@ def _render_hotfix16419_read_only_page() -> None:
 def run_app() -> None:
     # HOTFIX164.19: intercept the forensic page before normal state hydration,
     # health checks, provider configuration, context rebuilding, or audit tests.
-    if st.session_state.get("_hotfix16419_read_only_mode"):
+    if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.20 — Explicit-Target Read-Only Forensics", key="hotfix16419_read_only_entry", use_container_width=True):
-        st.session_state["_hotfix16419_read_only_requested"] = True
-        st.session_state["_hotfix16419_read_only_mode"] = True
-        st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
-            str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
-            str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+    if st.sidebar.button("🧭 HOTFIX164.22 — Explicit-Target Read-Only Forensics", key="hotfix16422_read_only_entry", use_container_width=True):
+        st.session_state["_hotfix16422_read_only_requested"] = True
+        st.session_state["_hotfix16422_read_only_mode"] = True
+        st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
+            str(st.session_state.get("hotfix16422_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+            str(st.session_state.get("hotfix16422_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
         ])
         _render_hotfix16419_read_only_page()
         return
     # A click from the regular sidebar is detected before all normal lifecycle work.
-    if st.session_state.get("_hotfix16419_read_only_requested"):
-        st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
-            str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
-            str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+    if st.session_state.get("_hotfix16422_read_only_requested"):
+        st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
+            str(st.session_state.get("hotfix16422_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+            str(st.session_state.get("hotfix16422_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
         ])
-        st.session_state["_hotfix16419_read_only_requested"] = False
-        st.session_state["_hotfix16419_read_only_mode"] = True
+        st.session_state["_hotfix16422_read_only_requested"] = False
+        st.session_state["_hotfix16422_read_only_mode"] = True
         _render_hotfix16419_read_only_page()
         return
     _init_state()
@@ -3996,13 +3993,13 @@ def run_app() -> None:
         # not a Council message. Intercept it before Request/round identity allocation,
         # normal request fingerprinting, or _run_council/provider dispatch.
         if _is_hotfix16420_read_only_audit_command(prompt):
-            st.session_state["_hotfix16419_read_only_requested"] = True
-            st.session_state["_hotfix16419_read_only_mode"] = True
+            st.session_state["_hotfix16422_read_only_requested"] = True
+            st.session_state["_hotfix16422_read_only_mode"] = True
             target_ids = [
-                str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
-                str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+                str(st.session_state.get("hotfix16422_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+                str(st.session_state.get("hotfix16422_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
             ]
-            st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(
+            st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(
                 _active_chat_without_initialization(), target_ids
             )
             _render_hotfix16419_read_only_page()
