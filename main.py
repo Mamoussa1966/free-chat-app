@@ -44,7 +44,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 from release_identity import deployed_release_identity, assert_deployed_release_identity
 
 APP_VERSION = PROVIDER_VERSION
-DISPLAY_VERSION = CURRENT_HOTFIX_RELEASE_VERSION
+DISPLAY_VERSION = "HOTFIX164.20 — EXPLICIT-TARGET READ-ONLY FORENSICS AND FAIL-CLOSED CLOSURE"
 HOTFIX_VERSION = "HOTFIX144"
 PLATFORM_RELEASE_VERSION = "V25.0-CONVERSATION-LEDGER-MESSAGE-RUNTIME"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
