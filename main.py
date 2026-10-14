@@ -3434,27 +3434,49 @@ def _active_chat_without_initialization() -> dict:
 
 
 def _render_hotfix16419_read_only_page() -> None:
-    """Render only the existing-records diagnostic; never enter normal app lifecycle."""
+    """Render the existing-records audit in the sidebar only.
+
+    Copy, print, and download are presentation-only controls. This page does not
+    dispatch providers, create requests/rounds/bridges, hydrate the store, or
+    promote NOT_PROVEN/FAIL to PASS.
+    """
     report = st.session_state.get("last_hotfix16419_read_only_audit")
     if not isinstance(report, dict):
         report = read_only_existing_records_audit(_active_chat_without_initialization())
         st.session_state["last_hotfix16419_read_only_audit"] = report
-    st.title("HOTFIX164.19 — Read-Only Existing-Records Forensics")
-    st.warning("هذا الفحص لا ينشئ طلبًا أو جولة أو Bridge ولا ينفّذ مزودًا. النتيجة NOT_PROVEN/FAIL تبقى كما هي حتى يظهر الدليل الفعلي.")
-    st.json(report)
-    payload = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str)
-    st.download_button(
-        "💾 Download Read-Only Audit JSON",
-        data=payload,
-        file_name="HOTFIX164.19_READ_ONLY_EXISTING_RECORDS_AUDIT.json",
-        mime="application/json",
-        key="hotfix16419_read_only_audit_download",
-        use_container_width=True,
+
+    payload = json.dumps(
+        report,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        default=str,
     )
-    if st.button("↩️ العودة إلى غرفة المجلس", key="hotfix16419_exit_read_only_audit", use_container_width=True):
-        st.session_state["_hotfix16419_read_only_mode"] = False
-        st.session_state["_hotfix16419_read_only_requested"] = False
-        st.rerun()
+
+    with st.sidebar:
+        st.title("HOTFIX164.19 — Read-Only Existing-Records Audit")
+        st.warning(
+            "هذا الفحص للقراءة فقط: لا ينشئ طلبًا أو جولة أو Bridge، "
+            "ولا ينفّذ أي مزود. تبقى NOT_PROVEN/FAIL كما هي عند غياب الدليل الفعلي."
+        )
+        st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
+        st.json(report)
+        _render_section_actions(
+            "HOTFIX164.19 — Read-Only Existing-Records Audit",
+            payload,
+            "hotfix16419_read_only_existing_records_audit",
+            download_name="HOTFIX164.19_READ_ONLY_EXISTING_RECORDS_AUDIT.json",
+        )
+        if st.button(
+            "↩️ العودة إلى غرفة المجلس",
+            key="hotfix16419_exit_read_only_audit",
+            use_container_width=True,
+        ):
+            st.session_state["_hotfix16419_read_only_mode"] = False
+            st.session_state["_hotfix16419_read_only_requested"] = False
+            st.rerun()
+
+    # The audit is rendered only inside the sidebar; stop normal room rendering.
     st.stop()
 
 
