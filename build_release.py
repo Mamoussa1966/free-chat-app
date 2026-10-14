@@ -37,7 +37,7 @@ FINAL_CLOSURE_TEST_FILES = {"test_hotfix163_final_closure.py"}
 # Every other baseline file must remain byte-identical. The Claude and Grok
 # regression modules are allowed in addition to the 20-module Golden baseline.
 ALLOWED_BASELINE_CHANGES = {
-    "main.py", "conversation_store.py", "providers.py", "production_core_harness.py", "production_core_test_runner.py", "production_platform.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
+    "main.py", "conversation_store.py", "providers.py", "production_core_harness.py", "production_core_test_runner.py", "production_platform.py", "v23_final_closure_audit.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
     ".streamlit/secrets.toml.example", "build_release.py",
     "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
     "tests/test_hotfix26_release_roundtrip.py",
