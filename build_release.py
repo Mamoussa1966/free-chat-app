@@ -38,7 +38,7 @@ FINAL_CLOSURE_TEST_FILES = {"test_hotfix163_final_closure.py"}
 # regression modules are allowed in addition to the 20-module Golden baseline.
 ALLOWED_BASELINE_CHANGES = {
     "main.py", "conversation_store.py", "providers.py", "production_core_harness.py", "production_core_test_runner.py", "production_platform.py", "v23_final_closure_audit.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
-    ".streamlit/secrets.toml.example", "build_release.py",
+    ".streamlit/secrets.toml.example", "build_release.py", ".github/workflows/hotfix164-18-proof-diagnostics.yml",
     "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
     "tests/test_hotfix26_release_roundtrip.py",
     "tests/test_grok_integration.py", "tests/test_deepseek_integration.py", "tests/test_multiagent_architecture.py",

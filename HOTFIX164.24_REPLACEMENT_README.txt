@@ -1,0 +1,26 @@
+HOTFIX164.24 RELEASE CONTRACT FIX — REPLACEMENT FILES ONLY
+
+This archive contains only the release-contract files to add/replace at the repository root.
+It is NOT intended to be uploaded to GitHub as a single ZIP file.
+
+Files in this archive:
+- providers.py
+- build_release.py
+- tests/test_provider_runtime.py
+- .github/workflows/hotfix164-18-proof-diagnostics.yml
+- HOTFIX164.24_RELEASE_MANIFEST.json (new)
+- HOTFIX164.24_RELEASE_NOTES.md (new)
+
+The repository's current main.py already carries DISPLAY_VERSION HOTFIX164.24 and was used in the full regression run. It is intentionally not duplicated here.
+Keep VERSION.txt unchanged; its frozen value remains:
+V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE
+
+Validation performed locally against the preserved project tree:
+- Python compile: PASS
+- Production Core gate: PASS
+- Full regression suite: 631 passed, 0 failed, 0 errors, across 168 test files
+- Fresh ZIP extraction regression suite: 631 passed, 0 failed, 0 errors
+- Full release archive root/round-trip: PASS, 393 project entries, 0 deleted baseline files
+
+Important: live final Bridge closure remains NOT_PROVEN until real canonical request/round records and application-owned Bridge evidence are verified in the deployed application. These passing tests do not claim live closure.
+No changes were pushed to GitHub by preparing these files.

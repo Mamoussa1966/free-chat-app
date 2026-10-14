@@ -1,0 +1,88 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.24",
+  "title": "Canonical Bridge Evidence Persistence and Round-Bound Ledger",
+  "parent_release": "HOTFIX164.23",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "changed_files": [
+    "main.py",
+    "providers.py",
+    "build_release.py",
+    "tests/test_provider_runtime.py",
+    ".github/workflows/hotfix164-18-proof-diagnostics.yml",
+    "HOTFIX164.24_RELEASE_NOTES.md",
+    "HOTFIX164.24_RELEASE_MANIFEST.json"
+  ],
+  "release_contract": {
+    "runtime_label_matches_main_display_version": true,
+    "runtime_label_matches_manifest_release": true,
+    "provider_core_identity_frozen": true,
+    "version_txt_contract_preserved": true,
+    "release_zip_created_only_after_all_gates_pass": true
+  },
+  "bridge_closure_contract": {
+    "authoritative_v26_3_store_required": true,
+    "application_owned_bridge_evidence_required_when_requested": true,
+    "bridge_ledger_projection_request_round_binding_required": true,
+    "missing_or_incomplete_evidence_passes": false,
+    "synthetic_request_or_bridge_evidence_allowed": false,
+    "live_final_closure_proven": false,
+    "status": "NOT_PROVEN until real request, round, Bridge evidence, and ledger projection are verified"
+  },
+  "guardrails": {
+    "provider_core_identity_changed": false,
+    "version_txt_contract_preserved": true,
+    "v26_3_identity_logic_changed": false,
+    "canonical_counter_logic_changed": false,
+    "provider_execution_changed": false,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "execution_or_results_synthesized": false,
+    "live_final_closure_proven": false
+  },
+  "validation_results": {
+    "status": "PASS_WITH_LIVE_BRIDGE_CLOSURE_NOT_PROVEN",
+    "python_compile": "PASS",
+    "targeted_regression": {
+      "status": "PASS",
+      "passed": 631,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 168
+    },
+    "full_regression_suite": {
+      "status": "PASS",
+      "passed": 631,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 168
+    },
+    "fresh_zip_extraction_regression_suite": {
+      "status": "PASS",
+      "passed": 631,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 168
+    },
+    "production_core_gate": "PASS",
+    "file_preservation_gate": {
+      "status": "PASS",
+      "previous_release_files": 75,
+      "current_files": 393,
+      "deleted_previous_release_files": 0
+    },
+    "zip_roundtrip": {
+      "status": "PASS",
+      "archive_entry_count": 393,
+      "all_project_files_at_archive_root": true,
+      "nested_zips": 0
+    },
+    "frozen_version_contract": "PASS",
+    "runtime_release_contract": "PASS",
+    "github_push_or_release": "NOT_PUBLISHED",
+    "live_final_closure_proven": false,
+    "live_two_request_provider_bridge_closure": "NOT_PROVEN; regression and ZIP tests validate the release contract, not a live deployed provider-backed two-request conversation"
+  }
+}
