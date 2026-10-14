@@ -44,7 +44,7 @@ from production_core_test_runner import run_production_core_tests, render_report
 from release_identity import deployed_release_identity, assert_deployed_release_identity
 
 APP_VERSION = PROVIDER_VERSION
-DISPLAY_VERSION = "HOTFIX164.23 — EXPLICIT TARGET BINDING AND FAIL-CLOSED CLOSURE"
+DISPLAY_VERSION = "HOTFIX164.24 — CANONICAL BRIDGE EVIDENCE PERSISTENCE AND ROUND-BOUND LEDGER"
 HOTFIX_VERSION = "HOTFIX144"
 PLATFORM_RELEASE_VERSION = "V25.0-CONVERSATION-LEDGER-MESSAGE-RUNTIME"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
@@ -704,6 +704,7 @@ class SharedContextBridge:
             "request_id": self.request_id,
             "round_id": self.round_no,
             "canonical_round_id": str(e.get("canonical_round_id") or ""),
+            "canonical_round_ordinal": str(e.get("canonical_round_ordinal") or ""),
             "bridge_id_hash": hashlib.sha256(str(self.bridge_id).encode("utf-8")).hexdigest(),
             "bridge_id": "[REDACTED]",
             "source_provider": str(by_phase.get("SOURCE_EXECUTION", {}).get("provider") or "NOT_PROVEN"),
@@ -1899,7 +1900,8 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                             if isinstance(row, dict)
                             and str(row.get("request_id") or "") == str(request_id)
                             and int(row.get("round_number") or row.get("ordinal") or row.get("round") or 0) == int(round_no)), None)
-    bridge._runtime_bridge_evidence["canonical_round_id"] = str((canonical_round or {}).get("round_id") or "")
+    bridge._runtime_bridge_evidence["canonical_round_id"] = str((canonical_round or {}).get("round_id") or (canonical_round or {}).get("canonical_round_record_id") or "")
+    bridge._runtime_bridge_evidence["canonical_round_ordinal"] = next((str((canonical_round or {}).get(field)).strip() for field in ("ordinal", "round", "round_number", "round_no") if (canonical_round or {}).get(field) not in (None, "")), "")
     # Legacy Bridge-only diagnostics keep their application-owned canary. The
     # final runtime-closure scenario uses a live provider result instead.
     if bridge_test_active and not strict_live_bridge:
@@ -2617,8 +2619,13 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # runtime store. It is intentionally not copied into any provider result.
             runtime_store = chat.get("bridge_runtime_evidence_store", {})
             runtime_evidence = runtime_store.get(str(request_id)) if isinstance(runtime_store, dict) else None
-            if isinstance(runtime_evidence, dict):
+            if isinstance(runtime_evidence, dict) and str(runtime_evidence.get("request_id") or "") == str(request_id):
+                # HOTFIX164.24: persist the same application-owned, sanitized Bridge
+                # evidence inside the canonical RequestRecord before canonical_upsert_request.
+                # The sidecar remains the primary runtime store; this canonical copy
+                # prevents evidence from disappearing when runtime indexes are rebuilt.
                 chat.setdefault("bridge_runtime_evidence_store", {})[str(request_id)] = copy.deepcopy(runtime_evidence)
+                record["bridge_runtime_evidence"] = copy.deepcopy(runtime_evidence)
             # HOTFIX123: persist authoritative counters on the request record itself.
             # These counters are derived from lifecycle/audit data and persisted result
             # telemetry, never from provider-generated prose.
@@ -3546,7 +3553,19 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         rid = str(row.get("request_id") or "").strip()
         if rid:
             proof_by_id.setdefault(rid, []).append(row)
-    bridge_store = snapshot.get("bridge_runtime_evidence_store") if isinstance(snapshot.get("bridge_runtime_evidence_store"), dict) else {}
+    bridge_store = copy.deepcopy(snapshot.get("bridge_runtime_evidence_store")) if isinstance(snapshot.get("bridge_runtime_evidence_store"), dict) else {}
+    # HOTFIX164.24: if the per-chat sidecar was dropped during hydration/rebuild,
+    # recover only the exact application-owned evidence copy persisted on the
+    # canonical RequestRecord. This is read-only and never manufactures evidence.
+    for canonical_request in requests:
+        if not isinstance(canonical_request, dict):
+            continue
+        rid = str(canonical_request.get("request_id") or "").strip()
+        embedded = canonical_request.get("bridge_runtime_evidence")
+        if (rid and rid not in bridge_store and isinstance(embedded, dict)
+                and str(embedded.get("request_id") or "").strip() == rid
+                and str(embedded.get("schema") or "").startswith("bridge-runtime-evidence/")):
+            bridge_store[rid] = copy.deepcopy(embedded)
     bridge_projection = snapshot.get("bridge_ledger_v24") if isinstance(snapshot.get("bridge_ledger_v24"), list) else None
 
     # HOTFIX164.22 closure: an untouched form is not two malformed targets.
@@ -3703,7 +3722,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
             store_key, evidence = evidence_matches[0]
             evidence_rid = str(evidence.get("request_id") or "").strip()
             evidence_round_id = str(evidence.get("canonical_round_id") or "").strip()
-            evidence_round_no = str(evidence.get("round_id") or "").strip()
+            evidence_round_no = str(evidence.get("canonical_round_ordinal") or evidence.get("round_id") or "").strip()
             if store_key != rid or evidence_rid != rid:
                 bridge_status = "FAIL"
                 failures.append("BRIDGE_REQUEST_ID_BINDING_MISMATCH")
@@ -3749,8 +3768,12 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         else:
             projection_row = projection_matches[0]
             projected_round = str(projection_row.get("round_id") or "").strip()
-            projected_bridge_id = str(projection_row.get("bridge_id") or "").strip()
-            projected_bridge_hash = hashlib.sha256(projected_bridge_id.encode("utf-8")).hexdigest() if projected_bridge_id else ""
+            # HOTFIX164.24: new projections store only the Bridge identity hash;
+            # accept older raw-ID projections by hashing the legacy field in memory.
+            projected_bridge_hash = str(projection_row.get("bridge_id_hash") or "").strip().lower()
+            if not projected_bridge_hash:
+                projected_bridge_id = str(projection_row.get("bridge_id") or "").strip()
+                projected_bridge_hash = hashlib.sha256(projected_bridge_id.encode("utf-8")).hexdigest() if projected_bridge_id else ""
             if not projected_round or not canonical_round_id:
                 missing.append("BRIDGE_PROJECTION_CANONICAL_ROUND_BINDING")
             elif projected_round != canonical_round_id:
@@ -3881,7 +3904,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -3899,7 +3922,7 @@ def _render_hotfix16419_read_only_page() -> None:
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.23 — Explicit-Target Read-Only Forensics")
+        st.title("HOTFIX164.24 — Canonical Bridge Evidence Persistence and Round-Bound Ledger")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
@@ -3937,10 +3960,10 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.23 — Explicit-Target Read-Only Forensics",
+            "HOTFIX164.24 — Canonical Bridge Evidence Persistence and Round-Bound Ledger",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.23_EXPLICIT_TARGET_READ_ONLY_FORENSICS.json",
+            download_name="HOTFIX164.24_CANONICAL_BRIDGE_EVIDENCE_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -3961,7 +3984,7 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.23 — Explicit-Target Read-Only Forensics", key="hotfix16422_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.24 — Canonical Bridge Evidence Persistence and Round-Bound Ledger", key="hotfix16422_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16422_read_only_requested"] = True
         st.session_state["_hotfix16422_read_only_mode"] = True
         st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
@@ -4216,14 +4239,35 @@ def run_app() -> None:
             if not isinstance(rr, dict): continue
             rid=str(rr.get("request_id") or request_id)
             round_no=int(rr.get("round") or 1)
-            round_id=f"{chat.get('conversation_id')}:{rid}:r{round_no}"
+            canonical_record_for_bridge = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+            canonical_round_rows = canonical_record_for_bridge.get("rounds", []) if isinstance(canonical_record_for_bridge.get("rounds"), list) else []
+            canonical_round_row = next((row for row in canonical_round_rows if isinstance(row, dict)
+                and str(row.get("request_id") or "") == rid
+                and int(row.get("round_number") or row.get("ordinal") or row.get("round") or 0) == round_no), None)
+            round_id = str((canonical_round_row or {}).get("round_id") or (canonical_round_row or {}).get("canonical_round_record_id") or "").strip()
             record_v24_provenance(chat, rr, user_message_id, round_id)
             chat["result_ledger_v24"].append({"result_id": f"res_{uuid.uuid4().hex}", "request_id": rid, "message_id": user_message_id, "provider": str(rr.get("name") or ""), "seat": str(rr.get("seat") or ""), "model": str(rr.get("executed_model") or rr.get("model") or ""), "status": str(rr.get("status") or ""), "provenance_count": len([p for p in chat.get("provenance_ledger_v24",[]) if p.get("request_id")==rid])})
+            # Legacy compatibility projection: use only the exact canonical Round ID.
             b=rr.get("bridge_transaction_audit") or {}
             bid=str(b.get("bridge_id") or "")
-            if bid:
-                chat["bridge_ledger_v24"].append({"bridge_id":bid,"request_id":rid,"round_id":round_id,"status":str(b.get("status") or "PASS")})
+            if bid and round_id and not any(isinstance(row, dict) and str(row.get("request_id") or "") == rid for row in chat.get("bridge_ledger_v24", [])):
+                chat["bridge_ledger_v24"].append({"bridge_id":bid,"request_id":rid,"round_id":round_id,"status":str(b.get("status") or "NOT_PROVEN")})
             timeline_event(chat, rid, user_message_id, "PROVIDER_RESULT", provider=str(rr.get("name") or ""), seat=str(rr.get("seat") or ""), model=str(rr.get("executed_model") or rr.get("model") or ""), status=str(rr.get("status") or ""))
+        # Strict-live Bridge records are deliberately absent from provider-result
+        # dictionaries. Project their app-owned hash using the exact canonical Round ID.
+        for rid in dict.fromkeys(str(rr.get("request_id") or request_id) for rr in list(results or []) if isinstance(rr, dict)):
+            if any(isinstance(row, dict) and str(row.get("request_id") or "") == rid for row in chat.get("bridge_ledger_v24", [])):
+                continue
+            runtime_store = chat.get("bridge_runtime_evidence_store", {})
+            evidence = runtime_store.get(rid) if isinstance(runtime_store, dict) else None
+            if not isinstance(evidence, dict) or str(evidence.get("request_id") or "") != rid:
+                continue
+            canonical_round_id = str(evidence.get("canonical_round_id") or "").strip()
+            bridge_hash = str(evidence.get("bridge_id_hash") or "").strip().lower()
+            if (canonical_round_id and re.fullmatch(r"[0-9a-f]{64}", bridge_hash)
+                    and any(isinstance(row, dict) and str(row.get("round_id") or row.get("canonical_round_record_id") or "") == canonical_round_id
+                            and str(row.get("request_id") or "") == rid for row in canonical_round_rows)):
+                chat["bridge_ledger_v24"].append({"bridge_id_hash":bridge_hash,"request_id":rid,"round_id":canonical_round_id,"status":str(evidence.get("runtime_sequence_valid") or "NOT_PROVEN")})
         chat["result_ledger_v24"]=chat["result_ledger_v24"][-2000:]
         chat["bridge_ledger_v24"]=chat["bridge_ledger_v24"][-1000:]
         # V25: reconcile the complete authoritative per-message ledger only after
