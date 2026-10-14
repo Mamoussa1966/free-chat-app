@@ -55,7 +55,7 @@ def test_hotfix16414_runtime_release_label_matches_release_manifest():
     import json
     from pathlib import Path
 
-    manifest = json.loads(Path("HOTFIX164.17_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
-    assert manifest["release"] == "HOTFIX164.17"
+    manifest = json.loads(Path("HOTFIX164.18_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["release"] == "HOTFIX164.18"
     assert providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith(manifest["release"] + " ")
     assert providers.VERSION == Path("VERSION.txt").read_text(encoding="utf-8").strip()
