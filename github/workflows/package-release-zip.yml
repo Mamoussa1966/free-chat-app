@@ -1,0 +1,132 @@
+name: Package and publish verified project ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch, tag, or commit to package"
+        required: true
+        default: "gitops-v0.4-final"
+        type: string
+      release_tag:
+        description: "New release tag, e.g. HOTFIX164.20 (must not already exist)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: package-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  test-package-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout requested source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Run complete test suite
+        run: python -m pytest -q
+
+      - name: Build root-level ZIP and SHA-256
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import subprocess
+          import zipfile
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          if not tag or any(c in tag for c in "/\\\\") or tag.startswith("."):
+              raise SystemExit("Invalid release tag")
+          archive = Path(f"{tag}_PROJECT.zip")
+          digest_file = Path(f"{archive}.sha256")
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          excluded_names = {
+              ".env", "secrets.toml", "credentials.json", "service-account.json",
+          }
+          excluded_parts = {".git", ".venv", "venv", "__pycache__", ".pytest_cache"}
+          included = []
+          for raw in tracked:
+              if not raw:
+                  continue
+              rel = raw.decode("utf-8", "strict")
+              p = Path(rel)
+              if any(part in excluded_parts for part in p.parts):
+                  continue
+              if p.name in excluded_names or p.name.startswith(".env."):
+                  continue
+              if p.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}:
+                  continue
+              if not p.is_file():
+                  continue
+              included.append((rel, p))
+          if not included:
+              raise SystemExit("Refusing to publish an empty archive")
+          required = {"main.py", "conversation_store.py", "requirements.txt"}
+          present = {rel for rel, _ in included}
+          missing = required - present
+          if missing:
+              raise SystemExit(f"Required root files missing: {sorted(missing)}")
+          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=8) as zf:
+              for rel, path in sorted(included):
+                  zf.write(path, arcname=rel)
+          with zipfile.ZipFile(archive) as zf:
+              bad = zf.testzip()
+              if bad:
+                  raise SystemExit(f"ZIP integrity check failed at {bad}")
+              names = zf.namelist()
+              if len(names) != len(set(names)):
+                  raise SystemExit("Duplicate archive paths detected")
+              if any(name.startswith("/") or ".." in Path(name).parts for name in names):
+                  raise SystemExit("Unsafe archive path detected")
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          digest_file.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+          print(f"ARCHIVE={archive}")
+          print(f"FILES={len(included)}")
+          print(f"SHA256={digest}")
+          PY
+
+      - name: Publish ZIP and checksum to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_file="${RELEASE_TAG}_PROJECT.zip"
+          checksum_file="${zip_file}.sha256"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release/tag $RELEASE_TAG already exists; choose a new tag to avoid silently replacing a release." >&2
+            exit 1
+          fi
+          source_sha="$(git rev-parse HEAD)"
+          gh release create "$RELEASE_TAG" "$zip_file" "$checksum_file" \
+            --target "$source_sha" \
+            --title "$RELEASE_TAG verified project ZIP" \
+            --notes "Automated package from ref: $SOURCE_REF (commit $source_sha). Python compilation and full pytest suite passed before publication. ZIP integrity and SHA-256 were checked."
+          gh release view "$RELEASE_TAG" --json url,tagName,assets
