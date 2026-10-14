@@ -882,7 +882,113 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
     return ordinal > 0
 
 
+def _strict_live_bridge_request_diagnostic(chat: dict[str, Any], request_record: dict[str, Any]) -> dict[str, Any]:
+    """Return a sanitized, per-Request diagnosis for strict live Bridge proof.
+
+    This is diagnostic-only: it never upgrades missing evidence to PASS and
+    never exposes a Bridge ID/hash, Bridge value, prompt, or raw provider body.
+    """
+    rid = str(request_record.get("request_id") or "").strip()
+    result: dict[str, Any] = {
+        "request_id": rid or None,
+        "status": "NOT_PROVEN",
+        "evidence_record_present": False,
+        "request_identity_status": "NOT_PROVEN",
+        "canonical_round_binding_status": "NOT_PROVEN",
+        "missing_evidence": [],
+        "failure_reasons": [],
+    }
+    if not rid:
+        result["missing_evidence"] = ["REQUEST_ID"]
+        return result
+
+    store = chat.get("bridge_runtime_evidence_store")
+    evidence = store.get(rid) if isinstance(store, dict) else None
+    if not isinstance(evidence, dict):
+        result["missing_evidence"] = ["APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"]
+        return result
+    result["evidence_record_present"] = True
+
+    observed_rid = str(evidence.get("request_id") or "").strip()
+    if observed_rid != rid:
+        result["request_identity_status"] = "FAIL"
+        result["failure_reasons"] = ["REQUEST_ID_MISMATCH"]
+        result["status"] = "FAIL"
+        return result
+    result["request_identity_status"] = "PASS"
+
+    canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    rounds = canonical.get("rounds") if isinstance(canonical.get("rounds"), list) else []
+    canonical_round_id = str(evidence.get("canonical_round_id") or "").strip()
+    round_id = evidence.get("round_id")
+    if not canonical_round_id or round_id in (None, "", 0, "0") or not rounds:
+        result["canonical_round_binding_status"] = "NOT_PROVEN"
+        result["missing_evidence"].append("CANONICAL_ROUND_BINDING")
+    elif _canonical_round_binding(rounds, rid, evidence):
+        result["canonical_round_binding_status"] = "PASS"
+    else:
+        result["canonical_round_binding_status"] = "FAIL"
+        result["failure_reasons"].append("CANONICAL_ROUND_BINDING_MISMATCH")
+
+    required_fields = (
+        "source_execution_proven", "bridge_state_contains_value", "write_status", "validate_status",
+        "commit_status", "barrier_status", "target_dispatch_status", "target_response_status",
+        "read_status", "schema_validation_status", "match_status", "user_prompt_contains_value",
+        "gemini_input_prompt_contains_value", "runtime_http_payload_attested",
+        "runtime_http_payload_contains_value", "runtime_http_payload_contains_bridge_key",
+        "gemini_received_sanitized_representation_only", "user_prompt_contains_bridge_id",
+        "provider_prompt_contains_bridge_id", "gemini_input_prompt_contains_bridge_id",
+        "bridge_id_in_gemini_input_prompt", "bridge_id_in_provider_prompt", "bridge_id_in_user_prompt",
+        "gemini_input_prompt_contains_bridge_key", "gemini_input_prompt_contains_request_id",
+        "gemini_input_prompt_contains_canonical_round_id", "runtime_http_payload_contains_bridge_id",
+        "runtime_http_payload_contains_request_id", "runtime_http_payload_contains_canonical_round_id",
+        "control_plane_identity_leak", "runtime_sequence_valid", "runtime_sequence_target_identity_status",
+        "runtime_http_payload_hash_integrity", "runtime_payload_transport_boundary",
+        "runtime_payload_prepared_request_verified", "application_owned", "bridge_gate_status",
+        "terminal_state", "bridge_state_terminal", "bridge_id_hash", "runtime_payload_sha256",
+        "source_seat", "source_provider", "target_seat", "target_provider", "bridge_trace_count",
+        "runtime_sequence", "round_id", "canonical_round_id",
+    )
+    unknown = (None, "", [], {}, "NOT_PROVEN")
+    for field in required_fields:
+        value = evidence.get(field)
+        if value in unknown and field not in result["missing_evidence"]:
+            result["missing_evidence"].append(field.upper())
+
+    leak_fields = (
+        "user_prompt_contains_value", "gemini_input_prompt_contains_value",
+        "runtime_http_payload_contains_value", "runtime_http_payload_contains_bridge_key",
+        "user_prompt_contains_bridge_id", "provider_prompt_contains_bridge_id",
+        "gemini_input_prompt_contains_bridge_id", "bridge_id_in_gemini_input_prompt",
+        "bridge_id_in_provider_prompt", "bridge_id_in_user_prompt",
+        "gemini_input_prompt_contains_bridge_key", "gemini_input_prompt_contains_request_id",
+        "gemini_input_prompt_contains_canonical_round_id", "runtime_http_payload_contains_bridge_id",
+        "runtime_http_payload_contains_request_id", "runtime_http_payload_contains_canonical_round_id",
+        "control_plane_identity_leak",
+    )
+    detected_leaks = [field.upper() for field in leak_fields if str(evidence.get(field) or "").upper() == "YES"]
+    if detected_leaks:
+        result["failure_reasons"].extend(detected_leaks)
+        result["status"] = "FAIL"
+    elif result["failure_reasons"]:
+        result["status"] = "FAIL"
+    elif _strict_live_bridge_evidence_complete(chat, request_record):
+        result["status"] = "PASS"
+        result["missing_evidence"] = []
+    elif result["missing_evidence"]:
+        result["status"] = "NOT_PROVEN"
+    else:
+        result["status"] = "FAIL"
+        result["failure_reasons"] = ["STRICT_LIVE_EVIDENCE_CONTRACT_FAILED"]
+
+    result["missing_evidence"] = sorted(set(result["missing_evidence"]))
+    result["failure_reasons"] = sorted(set(result["failure_reasons"]))
+    return result
+
+
 def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
+    strict_bridge_diagnostics: list[dict[str, Any]] = []
+    strict_bridge_hash_by_request: dict[str, str] = {}
     checks = {
         "NO_CREDENTIALS_IN_CHAT_STATE": True,
         "NO_RAW_PROVIDER_PAYLOADS_IN_HISTORY": True,
@@ -952,6 +1058,8 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
             requested = bool(record.get("bridge_test_requested"))
             strict_live = str(record.get("bridge_runtime_contract") or "") == "STRICT_LIVE"
             if requested and strict_live:
+                diagnostic = _strict_live_bridge_request_diagnostic(chat, record)
+                strict_bridge_diagnostics.append(diagnostic)
                 # HOTFIX164.9 stores proof in an Application-Owned ledger, not
                 # in provider result rows. Validate that ledger directly and fail
                 # closed if it is missing, stale, unbound, or incomplete.
@@ -978,6 +1086,7 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                     bridge_hash = str((evidence or {}).get("bridge_id_hash") or "").strip()
                     if bridge_hash:
                         strict_bridge_hashes.append(bridge_hash)
+                        strict_bridge_hash_by_request[str(record.get("request_id") or "").strip()] = bridge_hash
                 continue
             audits = [
                 result.get("bridge_transaction_audit")
@@ -999,6 +1108,19 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
             checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
             checks["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] = False
             checks["STRICT_LIVE_CONTROL_PLANE_IDENTITY_ISOLATED"] = False
+            counts: dict[str, int] = {}
+            for bridge_hash in strict_bridge_hashes:
+                counts[bridge_hash] = counts.get(bridge_hash, 0) + 1
+            duplicated_requests = {
+                rid for rid, bridge_hash in strict_bridge_hash_by_request.items()
+                if counts.get(bridge_hash, 0) > 1
+            }
+            for diagnostic in strict_bridge_diagnostics:
+                if diagnostic.get("request_id") in duplicated_requests:
+                    diagnostic["status"] = "FAIL"
+                    diagnostic["failure_reasons"] = sorted(set(
+                        list(diagnostic.get("failure_reasons") or []) + ["BRIDGE_ID_HASH_REUSED_ACROSS_REQUESTS"]
+                    ))
 
         # HOTFIX144: verify authoritative identity from persisted application-owned
         # request records and runtime execution events only. Never inspect agent prose
@@ -1021,4 +1143,27 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                         continue
                     if str(event.get("request_id") or "").strip() != rid:
                         checks["PROSE_ISOLATION_AUTHORITATIVE_GATE"] = False
-    return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks, "version": PLATFORM_VERSION}
+    if not strict_bridge_diagnostics:
+        proof_status = "NOT_REQUESTED"
+    elif any(row.get("status") == "FAIL" for row in strict_bridge_diagnostics):
+        proof_status = "FAIL"
+    elif any(row.get("status") == "NOT_PROVEN" for row in strict_bridge_diagnostics):
+        proof_status = "NOT_PROVEN"
+    else:
+        proof_status = "PASS"
+    return {
+        "status": "PASS" if all(checks.values()) else "FAIL",
+        "checks": checks,
+        "version": PLATFORM_VERSION,
+        "strict_live_bridge_proof": {
+            "schema": "strict-live-bridge-proof-diagnostics/v1",
+            "status": proof_status,
+            "request_count": len(strict_bridge_diagnostics),
+            "records": strict_bridge_diagnostics,
+            "authoritative_source": "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE",
+            "fail_closed_rule": "MISSING_OR_INCOMPLETE_EVIDENCE_NEVER_PASSES",
+            "raw_bridge_id_exported": False,
+            "raw_bridge_value_exported": False,
+            "raw_prompt_or_http_body_exported": False,
+        },
+    }
