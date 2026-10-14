@@ -3550,6 +3550,50 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     bridge_store = snapshot.get("bridge_runtime_evidence_store") if isinstance(snapshot.get("bridge_runtime_evidence_store"), dict) else {}
     bridge_projection = snapshot.get("bridge_ledger_v24") if isinstance(snapshot.get("bridge_ledger_v24"), list) else None
 
+    # HOTFIX164.22 closure: an untouched form is not two malformed targets.
+    # Represent the absence explicitly and stop before building placeholder rows.
+    # This is NOT_PROVEN (never PASS); no records are synthesized or mutated.
+    if not any(targets):
+        after = _hotfix16420_fingerprint(live)
+        live_state_unchanged = bool(before and before == after)
+        blockers = list(base.get("blockers", [])) if isinstance(base.get("blockers"), list) else []
+        blockers.extend(counter_blockers)
+        blockers.append("NO_EXPLICIT_TARGETS_PROVIDED")
+        if not live_state_unchanged:
+            blockers.append("READ_ONLY_LIVE_STATE_CHANGED_OR_COULD_NOT_BE_VERIFIED")
+        base_status = str(base.get("status") or "NOT_PROVEN").upper()
+        status = "FAIL" if base_status == "FAIL" or base_counter_status == "FAIL" or direct_counter_status == "FAIL" or not live_state_unchanged else "NOT_PROVEN"
+        report = copy.deepcopy(base)
+        report.update({
+            "schema": "hotfix164.22-explicit-target-read-only-forensics/v1",
+            "parent_schema": str(base.get("schema") or "NOT_PROVEN"),
+            "status": status,
+            "mode": "READ_ONLY_EXPLICIT_TARGETS",
+            "target_selection_status": "NO_TARGETS",
+            "target_request_count": 0,
+            "target_request_ids": [],
+            "target_requests": [],
+            "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE_AND_APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE",
+            "read_only": True,
+            "historical_records_preserved": True,
+            "historical_canonical_counts_unchanged": counts,
+            "persisted_request_record_count": direct_request_count,
+            "canonical_request_ids_count": len(canonical_request_ids),
+            "canonical_vs_persisted_request_counter_status": direct_counter_status,
+            "canonical_counter_status": base_counter_status,
+            "target_bridge_independence_status": "NOT_PROVEN",
+            "read_only_live_state_unchanged": live_state_unchanged,
+            "read_only_side_effects": "NONE_OBSERVED" if live_state_unchanged else "FAIL_OR_NOT_PROVEN",
+            "provider_execution": 0,
+            "cascade_execution": 0,
+            "new_requests": 0,
+            "new_rounds": 0,
+            "new_bridges": 0,
+            "blockers": sorted(set(str(x) for x in blockers if x)),
+            "fail_closed_rule": "FAIL_OR_NOT_PROVEN_IF_ANY_COUNTER_CONFLICTS_OR_REQUIRED_TARGET_OR_BRIDGE_EVIDENCE_IS_MISSING",
+        })
+        return report
+
     target_rows = []
     seen_targets = set()
     all_bridge_hashes = []
@@ -3850,17 +3894,21 @@ def _render_hotfix16419_read_only_page() -> None:
         st.title("HOTFIX164.22 — Explicit-Target Read-Only Forensics")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
-            "لا يحذف الطلب الثالث ولا يعيد كتابة السجلات التاريخية."
+            "إذا تُركت هويتا الطلب فارغتين فستظهر NO_TARGETS / NOT_PROVEN، وليس PASS. "
+            "لا يحذف السجلات التاريخية ولا يعيد كتابتها."
         )
+        display_targets = list(report.get("target_request_ids") or [])
+        while len(display_targets) < 2:
+            display_targets.append("")
         with st.form("hotfix16422_explicit_target_form", clear_on_submit=False):
             target_1 = st.text_input(
                 "Request ID المستهدف الأول",
-                value=str(report.get("target_request_ids", HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS)[0]),
+                value=str(display_targets[0]),
                 key="hotfix16422_target_request_1",
             )
             target_2 = st.text_input(
                 "Request ID المستهدف الثاني",
-                value=str(report.get("target_request_ids", HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS)[1]),
+                value=str(display_targets[1]),
                 key="hotfix16422_target_request_2",
             )
             recalculate = st.form_submit_button("🔎 إعادة التدقيق بهويتي الطلبين المحددتين", use_container_width=True)
