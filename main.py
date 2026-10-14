@@ -3437,8 +3437,8 @@ def _active_chat_without_initialization() -> dict:
 # They are deliberately explicit and are never inferred from the latest N rows.
 # The sidebar allows an operator to enter a different pair when auditing another run.
 HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS = (
-    "e8949e30e8a34902ab24ad2854b0e6a3",
-    "2ea7b0767e734b9e956d047032146bcb",
+    "2443a952134646bdb1a83481187694fd",
+    "7f3c2aac3477470f8f787ae169631d34",
 )
 
 
@@ -3823,14 +3823,19 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
 
 
 def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
-    """Route only a clearly labeled HOTFIX164.19 read-only audit command off-chat."""
-    first = next((line.strip() for line in str(prompt or "").splitlines() if line.strip()), "")
-    first = re.sub(r"^[\s#>*`-]+", "", first).upper().replace("—", "-").replace("–", "-")
-    return (
-        ("HOTFIX164.19" in first or "HOTFIX164.20" in first)
-        and ("READ-ONLY" in first or "READ_ONLY" in first)
-        and ("AUDIT" in first or "FORENSICS" in first)
-    )
+    """Route an explicit HOTFIX164.18/.19/.20 read-only audit off-chat.
+
+    Inspect the full submitted text rather than only its first line: copied test
+    transcripts can place the audit command after other headings. Requiring the
+    exact HOTFIX version marker plus both read-only and audit/forensics terms keeps
+    ordinary discussion from entering the forensic page. This predicate is pure.
+    """
+    text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
+    text = text.replace("—", "-").replace("–", "-")
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20"))
+    has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
+    has_audit = "AUDIT" in text or "FORENSICS" in text
+    return has_version and has_read_only and has_audit
 
 
 def _render_hotfix16419_read_only_page() -> None:
