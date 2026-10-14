@@ -17,7 +17,7 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
-from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit
+from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit as _base_read_only_existing_records_audit
 from v23_final_closure_audit import build_v23_final_closure_audit
 from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
@@ -3433,39 +3433,455 @@ def _active_chat_without_initialization() -> dict:
     return next((item for item in chats if isinstance(item, dict) and str(item.get("id") or "") == active_id), {})
 
 
-def _render_hotfix16419_read_only_page() -> None:
-    """Render the existing-records audit in the sidebar only.
+# HOTFIX164.20: these are the two concrete historical Request IDs under review.
+# They are deliberately explicit and are never inferred from the latest N rows.
+# The sidebar allows an operator to enter a different pair when auditing another run.
+HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS = (
+    "e8949e30e8a34902ab24ad2854b0e6a3",
+    "2ea7b0767e734b9e956d047032146bcb",
+)
 
-    Copy, print, and download are presentation-only controls. This page does not
-    dispatch providers, create requests/rounds/bridges, hydrate the store, or
-    promote NOT_PROVEN/FAIL to PASS.
+
+def _hotfix16420_fingerprint(value: object) -> str:
+    """Stable, read-only fingerprint for verifying that an audit changed no state."""
+    try:
+        encoded = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            default=lambda obj: f"<{type(obj).__name__}:{repr(obj)}>",
+        )
+    except Exception:
+        return ""
+    return hashlib.sha256(encoded.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _hotfix16420_round_id(row: dict) -> str:
+    return str(row.get("round_id") or row.get("canonical_round_record_id") or "").strip()
+
+
+def _hotfix16420_round_ordinal(row: dict) -> str:
+    for field in ("ordinal", "round", "round_number", "round_no"):
+        value = row.get(field)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=None) -> dict:
+    """Audit two explicit Request identities without mutating or executing anything.
+
+    This wrapper combines the existing V26.3 read-only audit with exact target
+    bindings. It intentionally retains every historical record, including Request 3;
+    target_count=2 means two selected identities, not a claim that history has only
+    two Requests. No latest-N selection or fallback identity generation is allowed.
     """
-    report = st.session_state.get("last_hotfix16419_read_only_audit")
-    if not isinstance(report, dict):
-        report = read_only_existing_records_audit(_active_chat_without_initialization())
-        st.session_state["last_hotfix16419_read_only_audit"] = report
+    live = chat if isinstance(chat, dict) else {}
+    before = _hotfix16420_fingerprint(live)
+    snapshot = copy.deepcopy(live)
+    try:
+        base = _base_read_only_existing_records_audit(copy.deepcopy(snapshot))
+        if not isinstance(base, dict):
+            base = {"status": "NOT_PROVEN", "blockers": ["BASE_READ_ONLY_AUDIT_RETURNED_NO_REPORT"]}
+    except Exception as exc:
+        base = {
+            "status": "NOT_PROVEN",
+            "blockers": [f"BASE_READ_ONLY_AUDIT_EXCEPTION:{type(exc).__name__}"],
+            "canonical_counts": {},
+            "requests": [],
+            "provider_execution": 0, "cascade_execution": 0,
+            "new_requests": 0, "new_rounds": 0, "new_bridges": 0,
+        }
 
-    payload = json.dumps(
-        report,
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-        default=str,
+    canonical = snapshot.get("conversation_record") if isinstance(snapshot.get("conversation_record"), dict) else None
+    if canonical is None and isinstance(snapshot.get("canonical_record"), dict):
+        canonical = snapshot.get("canonical_record")
+    canonical = canonical if isinstance(canonical, dict) else {}
+    messages = [x for x in canonical.get("messages", []) if isinstance(x, dict)] if isinstance(canonical.get("messages"), list) else []
+    requests = [x for x in canonical.get("requests", []) if isinstance(x, dict)] if isinstance(canonical.get("requests"), list) else []
+    rounds = [x for x in canonical.get("rounds", []) if isinstance(x, dict)] if isinstance(canonical.get("rounds"), list) else []
+    raw_targets = target_request_ids if isinstance(target_request_ids, (list, tuple)) else HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS
+    targets = [str(x or "").strip() for x in raw_targets]
+    if len(targets) != 2:
+        targets = targets[:2]
+    while len(targets) < 2:
+        targets.append("")
+
+    canonical_request_ids = [str(r.get("request_id") or "").strip() for r in requests if str(r.get("request_id") or "").strip()]
+    canonical_id_set = set(canonical_request_ids)
+    duplicate_canonical_ids = sorted({rid for rid in canonical_request_ids if canonical_request_ids.count(rid) > 1})
+    direct_rows = [r for r in snapshot.get("request_records", []) if isinstance(r, dict)] if isinstance(snapshot.get("request_records"), list) else None
+    direct_ids_all = [str(r.get("request_id") or "").strip() for r in (direct_rows or [])]
+    direct_ids = [rid for rid in direct_ids_all if rid]
+    direct_duplicate_ids = sorted({rid for rid in direct_ids if direct_ids.count(rid) > 1})
+    counts = copy.deepcopy(base.get("canonical_counts") or {})
+    canonical_request_count = counts.get("canonical_request_count", len(canonical_request_ids))
+    if not isinstance(canonical_request_count, int):
+        canonical_request_count = len(canonical_request_ids)
+
+    counter_blockers = []
+    base_counter_status = "PASS" if base.get("canonical_counter_consistent") is True else "FAIL" if base.get("canonical_counter_consistent") is False else "NOT_PROVEN"
+    if base_counter_status != "PASS":
+        counter_blockers.append("CANONICAL_COUNTERS_NOT_CONSISTENT_OR_NOT_PROVEN")
+    if duplicate_canonical_ids:
+        base_counter_status = "FAIL"
+        counter_blockers.append("DUPLICATE_CANONICAL_REQUEST_IDS")
+    direct_counter_status = "NOT_PROVEN"
+    direct_request_count = len(set(direct_ids)) if direct_rows is not None else "NOT_PROVEN"
+    if direct_rows is not None:
+        if direct_duplicate_ids or any(not rid for rid in direct_ids_all):
+            direct_counter_status = "FAIL"
+            counter_blockers.append("DIRECT_REQUEST_ID_MISSING_OR_DUPLICATED")
+        elif len(set(direct_ids)) != canonical_request_count or set(direct_ids) != canonical_id_set:
+            direct_counter_status = "FAIL"
+            counter_blockers.append("CANONICAL_VS_PERSISTED_REQUEST_COUNT_OR_ID_MISMATCH")
+        else:
+            direct_counter_status = "PASS"
+    else:
+        counter_blockers.append("PERSISTED_REQUEST_RECORDS_NOT_AVAILABLE_FOR_COUNTER_COMPARISON")
+
+    base_requests = {
+        str(row.get("request_id") or "").strip(): row
+        for row in (base.get("requests", []) if isinstance(base.get("requests"), list) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip()
+    }
+    proof = base.get("strict_live_bridge_proof") if isinstance(base.get("strict_live_bridge_proof"), dict) else {}
+    proof_rows = [x for x in (proof.get("records", []) if isinstance(proof.get("records"), list) else []) if isinstance(x, dict)]
+    proof_by_id: dict[str, list[dict]] = {}
+    for row in proof_rows:
+        rid = str(row.get("request_id") or "").strip()
+        if rid:
+            proof_by_id.setdefault(rid, []).append(row)
+    bridge_store = snapshot.get("bridge_runtime_evidence_store") if isinstance(snapshot.get("bridge_runtime_evidence_store"), dict) else {}
+    bridge_projection = snapshot.get("bridge_ledger_v24") if isinstance(snapshot.get("bridge_ledger_v24"), list) else None
+
+    target_rows = []
+    seen_targets = set()
+    all_bridge_hashes = []
+    target_set_invalid = False
+    if not all(targets) or len(set(targets)) != 2:
+        target_set_invalid = True
+
+    for slot, rid in enumerate(targets, start=1):
+        missing = []
+        failures = []
+        req_matches = [r for r in requests if str(r.get("request_id") or "").strip() == rid] if rid else []
+        req_status = "NOT_PROVEN"
+        msg_status = "NOT_PROVEN"
+        round_status = "NOT_PROVEN"
+        artifact_status = "NOT_PROVEN"
+        bridge_status = "NOT_PROVEN"
+        bridge_projection_status = "NOT_PROVEN"
+        bridge_projection_count = "NOT_PROVEN"
+        canonical_round_id = ""
+        round_ordinal = ""
+        bridge_hash = ""
+
+        if not rid:
+            missing.append("EXPLICIT_TARGET_REQUEST_ID")
+        elif rid in seen_targets:
+            failures.append("TARGET_REQUEST_ID_DUPLICATED")
+            req_status = "FAIL"
+        else:
+            seen_targets.add(rid)
+            if not req_matches:
+                missing.append("CANONICAL_REQUEST_RECORD")
+            elif len(req_matches) > 1:
+                failures.append("DUPLICATE_CANONICAL_REQUEST_RECORDS")
+                req_status = "FAIL"
+            else:
+                req_status = "PASS"
+                req = req_matches[0]
+                message_id = str(req.get("message_id") or "").strip()
+                if not message_id:
+                    missing.append("REQUEST_MESSAGE_ID")
+                else:
+                    user_messages = [
+                        m for m in messages
+                        if str(m.get("role") or "").lower() == "user"
+                        and str(m.get("message_id") or "").strip() == message_id
+                        and str(m.get("request_id") or "").strip() == rid
+                    ]
+                    conflicting_messages = [
+                        m for m in messages
+                        if str(m.get("role") or "").lower() == "user"
+                        and str(m.get("message_id") or "").strip() == message_id
+                        and str(m.get("request_id") or "").strip() not in ("", rid)
+                    ]
+                    if conflicting_messages or len(user_messages) > 1:
+                        msg_status = "FAIL"
+                        failures.append("MESSAGE_REQUEST_IDENTITY_CONFLICT")
+                    elif len(user_messages) == 1:
+                        msg_status = "PASS"
+                    else:
+                        missing.append("CANONICAL_USER_MESSAGE_BINDING")
+
+                bound_rounds = [r for r in rounds if str(r.get("request_id") or "").strip() == rid]
+                if len(bound_rounds) > 1:
+                    round_status = "FAIL"
+                    failures.append("MULTIPLE_CANONICAL_ROUNDS_FOR_TARGET_REQUEST")
+                elif not bound_rounds:
+                    missing.append("CANONICAL_ROUND_RECORD")
+                else:
+                    bound = bound_rounds[0]
+                    canonical_round_id = _hotfix16420_round_id(bound)
+                    round_ordinal = _hotfix16420_round_ordinal(bound)
+                    bound_message_id = str(bound.get("message_id") or "").strip()
+                    if message_id and bound_message_id and bound_message_id != message_id:
+                        round_status = "FAIL"
+                        failures.append("ROUND_MESSAGE_BINDING_MISMATCH")
+                    elif not canonical_round_id or not round_ordinal or not message_id or not bound_message_id:
+                        missing.append("EXACT_CANONICAL_ROUND_IDENTITY")
+                    elif bound_message_id == message_id:
+                        round_status = "PASS"
+
+                base_row = base_requests.get(rid)
+                if not isinstance(base_row, dict):
+                    missing.append("PER_REQUEST_RUNTIME_DIAGNOSTIC")
+                elif str(base_row.get("status") or "NOT_PROVEN").upper() == "FAIL":
+                    artifact_status = "FAIL"
+                    failures.append("REQUIRED_REQUEST_ARTIFACTS_FAIL")
+                elif str(base_row.get("status") or "NOT_PROVEN").upper() == "PASS":
+                    artifact_status = "PASS"
+                else:
+                    missing.append("REQUIRED_REQUEST_ARTIFACTS")
+
+        # Require exactly one application-owned Bridge record tied to this Request
+        # and to its exact canonical round. Never match a Bridge by position/order.
+        evidence_matches = [
+            (str(key), val) for key, val in bridge_store.items()
+            if isinstance(val, dict) and (str(key) == rid or str(val.get("request_id") or "").strip() == rid)
+        ] if rid else []
+        projection_matches = [
+            row for row in (bridge_projection or [])
+            if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+        ] if rid else []
+        bridge_projection_count = len(projection_matches) if bridge_projection is not None else "NOT_PROVEN"
+        proof_matches = proof_by_id.get(rid, []) if rid else []
+        if len(evidence_matches) > 1:
+            bridge_status = "FAIL"
+            failures.append("MORE_THAN_ONE_BRIDGE_EVIDENCE_RECORD_FOR_REQUEST")
+        elif not evidence_matches:
+            missing.append("APPLICATION_OWNED_BRIDGE_EVIDENCE_FOR_TARGET_REQUEST")
+        else:
+            store_key, evidence = evidence_matches[0]
+            evidence_rid = str(evidence.get("request_id") or "").strip()
+            evidence_round_id = str(evidence.get("canonical_round_id") or "").strip()
+            evidence_round_no = str(evidence.get("round_id") or "").strip()
+            if store_key != rid or evidence_rid != rid:
+                bridge_status = "FAIL"
+                failures.append("BRIDGE_REQUEST_ID_BINDING_MISMATCH")
+            elif not canonical_round_id or not evidence_round_id or not evidence_round_no or not round_ordinal:
+                missing.append("BRIDGE_EXACT_CANONICAL_ROUND_BINDING")
+            elif evidence_round_id != canonical_round_id or evidence_round_no != round_ordinal:
+                bridge_status = "FAIL"
+                failures.append("BRIDGE_REQUEST_ROUND_BINDING_MISMATCH")
+            bridge_hash = str(evidence.get("bridge_id_hash") or "").strip().lower()
+            if bridge_hash and re.fullmatch(r"[0-9a-f]{64}", bridge_hash):
+                all_bridge_hashes.append((rid, bridge_hash))
+            elif bridge_hash:
+                bridge_status = "FAIL"
+                failures.append("BRIDGE_ID_HASH_INVALID")
+            else:
+                missing.append("BRIDGE_ID_HASH")
+
+            if len(proof_matches) > 1:
+                bridge_status = "FAIL"
+                failures.append("DUPLICATE_BRIDGE_PROOF_DIAGNOSTICS")
+            elif not proof_matches:
+                missing.append("STRICT_LIVE_BRIDGE_PROOF_FOR_TARGET_REQUEST")
+            else:
+                proof_status = str(proof_matches[0].get("status") or "NOT_PROVEN").upper()
+                if proof_status == "FAIL":
+                    bridge_status = "FAIL"
+                    failures.append("STRICT_LIVE_BRIDGE_PROOF_FAIL")
+                elif proof_status != "PASS":
+                    missing.append("STRICT_LIVE_BRIDGE_PROOF_NOT_PASS")
+                elif bridge_status != "FAIL" and bridge_hash and re.fullmatch(r"[0-9a-f]{64}", bridge_hash) and round_status == "PASS":
+                    bridge_status = "PASS"
+
+        # The V24 Bridge ledger is a projection, not a substitute for runtime proof.
+        # A missing or conflicting projection is nevertheless exposed as a counter
+        # disagreement; it can never be hidden by the separate runtime evidence store.
+        if bridge_projection is None:
+            missing.append("BRIDGE_LEDGER_PROJECTION_NOT_AVAILABLE_FOR_COUNTER_CHECK")
+        elif len(projection_matches) > 1:
+            bridge_projection_status = "FAIL"
+            failures.append("DUPLICATE_BRIDGE_PROJECTION_RECORDS_FOR_REQUEST")
+        elif not projection_matches:
+            missing.append("BRIDGE_LEDGER_PROJECTION_RECORD_FOR_REQUEST")
+        else:
+            projection_row = projection_matches[0]
+            projected_round = str(projection_row.get("round_id") or "").strip()
+            projected_bridge_id = str(projection_row.get("bridge_id") or "").strip()
+            projected_bridge_hash = hashlib.sha256(projected_bridge_id.encode("utf-8")).hexdigest() if projected_bridge_id else ""
+            if not projected_round or not canonical_round_id:
+                missing.append("BRIDGE_PROJECTION_CANONICAL_ROUND_BINDING")
+            elif projected_round != canonical_round_id:
+                bridge_projection_status = "FAIL"
+                failures.append("BRIDGE_PROJECTION_ROUND_BINDING_MISMATCH")
+            elif not projected_bridge_hash or not bridge_hash:
+                missing.append("BRIDGE_PROJECTION_BRIDGE_IDENTITY_HASH")
+            elif projected_bridge_hash != bridge_hash:
+                bridge_projection_status = "FAIL"
+                failures.append("BRIDGE_PROJECTION_RUNTIME_IDENTITY_MISMATCH")
+            else:
+                bridge_projection_status = "PASS"
+        if evidence_matches and bridge_projection is not None and len(projection_matches) != len(evidence_matches):
+            missing.append("BRIDGE_RUNTIME_EVIDENCE_VS_PROJECTION_COUNT_MISMATCH")
+
+        if failures:
+            target_status = "FAIL"
+        elif missing or any(x != "PASS" for x in (req_status, msg_status, round_status, artifact_status, bridge_status, bridge_projection_status)):
+            target_status = "NOT_PROVEN"
+        else:
+            target_status = "PASS"
+        target_rows.append({
+            "target_slot": slot,
+            "request_id": rid or "NOT_PROVEN",
+            "canonical_request_status": req_status,
+            "message_request_binding_status": msg_status,
+            "canonical_round_binding_status": round_status,
+            "canonical_round_id": canonical_round_id or "NOT_PROVEN",
+            "canonical_round_ordinal": round_ordinal or "NOT_PROVEN",
+            "required_request_artifacts_status": artifact_status,
+            "bridge_runtime_evidence_record_count_for_request": len(evidence_matches),
+            "bridge_projection_record_count_for_request": bridge_projection_count,
+            "bridge_projection_binding_status": bridge_projection_status,
+            "bridge_request_round_binding_status": "FAIL" if "BRIDGE_REQUEST_ROUND_BINDING_MISMATCH" in failures or "BRIDGE_REQUEST_ID_BINDING_MISMATCH" in failures else "PASS" if bridge_status == "PASS" else "NOT_PROVEN",
+            "bridge_proof_status": bridge_status,
+            "bridge_id_hash": bridge_hash or "NOT_PROVEN",
+            "missing_evidence": sorted(set(missing)),
+            "failure_reasons": sorted(set(failures)),
+            "status": target_status,
+        })
+
+    bridge_uniqueness = "NOT_PROVEN"
+    if len(all_bridge_hashes) == 2:
+        if all_bridge_hashes[0][1] == all_bridge_hashes[1][1]:
+            bridge_uniqueness = "FAIL"
+        elif all(row.get("bridge_proof_status") == "PASS" for row in target_rows):
+            bridge_uniqueness = "PASS"
+    elif len({rid for rid, _ in all_bridge_hashes}) != len(all_bridge_hashes):
+        bridge_uniqueness = "FAIL"
+    if bridge_uniqueness == "FAIL":
+        counter_blockers.append("BRIDGE_ID_REUSED_OR_TARGET_BRIDGE_IDENTITY_NOT_UNIQUE")
+
+    after = _hotfix16420_fingerprint(live)
+    live_state_unchanged = bool(before and before == after)
+    blockers = list(base.get("blockers", [])) if isinstance(base.get("blockers"), list) else []
+    blockers.extend(counter_blockers)
+    if target_set_invalid:
+        blockers.append("EXACTLY_TWO_DISTINCT_EXPLICIT_TARGET_REQUEST_IDS_REQUIRED")
+    for row in target_rows:
+        rid = str(row.get("request_id") or "")
+        if row.get("status") != "PASS":
+            blockers.append(f"TARGET_REQUEST_NOT_CLOSED:{rid}:{row.get('status')}")
+        blockers.extend(f"{rid}:{x}" for x in row.get("failure_reasons", []))
+        blockers.extend(f"{rid}:MISSING:{x}" for x in row.get("missing_evidence", []))
+    if not live_state_unchanged:
+        blockers.append("READ_ONLY_LIVE_STATE_CHANGED_OR_COULD_NOT_BE_VERIFIED")
+
+    base_status = str(base.get("status") or "NOT_PROVEN").upper()
+    any_fail = (
+        base_status == "FAIL" or base_counter_status == "FAIL" or direct_counter_status == "FAIL"
+        or bridge_uniqueness == "FAIL" or target_set_invalid or not live_state_unchanged
+        or any(row.get("status") == "FAIL" for row in target_rows)
+    )
+    any_unproven = (
+        base_status != "PASS" or base_counter_status != "PASS" or direct_counter_status != "PASS"
+        or bridge_uniqueness != "PASS" or any(row.get("status") != "PASS" for row in target_rows)
+    )
+    overall = "FAIL" if any_fail else "NOT_PROVEN" if any_unproven else "PASS"
+    report = copy.deepcopy(base)
+    report.update({
+        "schema": "hotfix164.20-explicit-target-read-only-forensics/v1",
+        "parent_schema": str(base.get("schema") or "NOT_PROVEN"),
+        "status": overall,
+        "mode": "READ_ONLY_EXPLICIT_TARGETS",
+        "read_only": True,
+        "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE_AND_APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE",
+        "target_request_count": 2,
+        "target_request_ids": targets,
+        "target_requests": target_rows,
+        "historical_records_preserved": True,
+        "historical_canonical_counts_unchanged": counts,
+        "persisted_request_record_count": direct_request_count,
+        "canonical_request_ids_count": len(canonical_request_ids),
+        "canonical_vs_persisted_request_counter_status": direct_counter_status,
+        "canonical_counter_status": base_counter_status,
+        "target_bridge_independence_status": bridge_uniqueness,
+        "read_only_live_state_unchanged": live_state_unchanged,
+        "read_only_side_effects": "NONE_OBSERVED" if live_state_unchanged else "FAIL_OR_NOT_PROVEN",
+        "provider_execution": 0,
+        "cascade_execution": 0,
+        "new_requests": 0,
+        "new_rounds": 0,
+        "new_bridges": 0,
+        "blockers": sorted(set(str(x) for x in blockers if x)),
+        "fail_closed_rule": "FAIL_OR_NOT_PROVEN_IF_ANY_COUNTER_CONFLICTS_OR_REQUIRED_TARGET_OR_BRIDGE_EVIDENCE_IS_MISSING",
+    })
+    return report
+
+
+def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
+    """Route only a clearly labeled HOTFIX164.19 read-only audit command off-chat."""
+    first = next((line.strip() for line in str(prompt or "").splitlines() if line.strip()), "")
+    first = re.sub(r"^[\s#>*`-]+", "", first).upper().replace("—", "-").replace("–", "-")
+    return (
+        ("HOTFIX164.19" in first or "HOTFIX164.20" in first)
+        and ("READ-ONLY" in first or "READ_ONLY" in first)
+        and ("AUDIT" in first or "FORENSICS" in first)
     )
 
+
+def _render_hotfix16419_read_only_page() -> None:
+    """Render the explicit-target forensics report in the sidebar only."""
+    report = st.session_state.get("last_hotfix16419_read_only_audit")
+    if not isinstance(report, dict):
+        current_targets = [
+            str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+            str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+        ]
+        report = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), current_targets)
+        st.session_state["last_hotfix16419_read_only_audit"] = report
+
     with st.sidebar:
-        st.title("HOTFIX164.19 — Read-Only Existing-Records Audit")
+        st.title("HOTFIX164.20 — Explicit-Target Read-Only Forensics")
         st.warning(
-            "هذا الفحص للقراءة فقط: لا ينشئ طلبًا أو جولة أو Bridge، "
-            "ولا ينفّذ أي مزود. تبقى NOT_PROVEN/FAIL كما هي عند غياب الدليل الفعلي."
+            "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
+            "لا يحذف الطلب الثالث ولا يعيد كتابة السجلات التاريخية."
+        )
+        with st.form("hotfix16420_explicit_target_form", clear_on_submit=False):
+            target_1 = st.text_input(
+                "Request ID المستهدف الأول",
+                value=str(report.get("target_request_ids", HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS)[0]),
+                key="hotfix16420_target_request_1",
+            )
+            target_2 = st.text_input(
+                "Request ID المستهدف الثاني",
+                value=str(report.get("target_request_ids", HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS)[1]),
+                key="hotfix16420_target_request_2",
+            )
+            recalculate = st.form_submit_button("🔎 إعادة التدقيق بهويتي الطلبين المحددتين", use_container_width=True)
+        if recalculate:
+            st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(
+                _active_chat_without_initialization(), [target_1, target_2]
+            )
+            st.rerun()
+
+        payload = json.dumps(
+            report,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            default=str,
         )
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.19 — Read-Only Existing-Records Audit",
+            "HOTFIX164.20 — Explicit-Target Read-Only Forensics",
             payload,
-            "hotfix16419_read_only_existing_records_audit",
-            download_name="HOTFIX164.19_READ_ONLY_EXISTING_RECORDS_AUDIT.json",
+            "hotfix16420_explicit_target_read_only_forensics",
+            download_name="HOTFIX164.20_EXPLICIT_TARGET_READ_ONLY_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -3476,7 +3892,7 @@ def _render_hotfix16419_read_only_page() -> None:
             st.session_state["_hotfix16419_read_only_requested"] = False
             st.rerun()
 
-    # The audit is rendered only inside the sidebar; stop normal room rendering.
+    # Audit rendering is isolated from the normal conversation/request lifecycle.
     st.stop()
 
 
@@ -3486,15 +3902,21 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16419_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.19 — Read-Only Existing-Records Audit", key="hotfix16419_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.20 — Explicit-Target Read-Only Forensics", key="hotfix16419_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16419_read_only_requested"] = True
         st.session_state["_hotfix16419_read_only_mode"] = True
-        st.session_state["last_hotfix16419_read_only_audit"] = read_only_existing_records_audit(_active_chat_without_initialization())
+        st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
+            str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+            str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+        ])
         _render_hotfix16419_read_only_page()
         return
     # A click from the regular sidebar is detected before all normal lifecycle work.
     if st.session_state.get("_hotfix16419_read_only_requested"):
-        st.session_state["last_hotfix16419_read_only_audit"] = read_only_existing_records_audit(_active_chat_without_initialization())
+        st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
+            str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+            str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+        ])
         st.session_state["_hotfix16419_read_only_requested"] = False
         st.session_state["_hotfix16419_read_only_mode"] = True
         _render_hotfix16419_read_only_page()
@@ -3565,6 +3987,21 @@ def run_app() -> None:
     if prompt or attachments:
         if not prompt:
             prompt = "حلّل المرفقات المرفقة واذكر أهم ما تحتويه."
+        # HOTFIX164.20: a clearly labeled read-only forensics command is a UI action,
+        # not a Council message. Intercept it before Request/round identity allocation,
+        # normal request fingerprinting, or _run_council/provider dispatch.
+        if _is_hotfix16420_read_only_audit_command(prompt):
+            st.session_state["_hotfix16419_read_only_requested"] = True
+            st.session_state["_hotfix16419_read_only_mode"] = True
+            target_ids = [
+                str(st.session_state.get("hotfix16420_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
+                str(st.session_state.get("hotfix16420_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
+            ]
+            st.session_state["last_hotfix16419_read_only_audit"] = _hotfix16420_read_only_target_audit(
+                _active_chat_without_initialization(), target_ids
+            )
+            _render_hotfix16419_read_only_page()
+            return
         if len(prompt) > MAX_PROMPT_CHARS:
             st.error("الرسالة تتجاوز الحد المسموح 20,000 حرف.")
             return
