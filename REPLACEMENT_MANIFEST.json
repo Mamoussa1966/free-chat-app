@@ -1,0 +1,25 @@
+{
+  "package": "HOTFIX164.25_REPLACEMENT_FILES",
+  "target_repository": "Mamoussa1966/free-chat-app",
+  "target_branch": "gitops-v0.4-final",
+  "based_on_commit": "46424d59c58f73dd9af373e8dd48295d48920c67",
+  "replacement_paths": [
+    "main.py",
+    "providers.py",
+    "tests/test_provider_runtime.py",
+    "tests/test_hotfix16425_release_contract.py",
+    ".github/workflows/hotfix164-18-proof-diagnostics.yml",
+    ".github/workflows/hotfix164-19-read-only-forensics.yml",
+    "HOTFIX164.25_RELEASE_MANIFEST.json",
+    "HOTFIX164.25_RELEASE_NOTES.md"
+  ],
+  "version_txt_unchanged": true,
+  "frozen_provider_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "no_github_write_or_commit_performed": true,
+  "validation": {
+    "pytest": "638 passed, 0 failed",
+    "production_core_gate": "PASS",
+    "fresh_zip_extraction_suite": "638 passed, 0 failed",
+    "live_final_bridge_closure": "NOT_PROVEN in this package; prior two-target result remains scoped"
+  }
+}
