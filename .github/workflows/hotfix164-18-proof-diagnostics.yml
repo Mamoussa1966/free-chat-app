@@ -1,4 +1,4 @@
-name: HOTFIX164.18 Request-Scoped Bridge Proof Diagnostics
+name: HOTFIX164.24 Canonical Bridge Evidence Persistence and Round-Bound Ledger
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: hotfix164-18-proof-diagnostics-${{ github.ref }}
+  group: hotfix164-24-release-contract-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -35,7 +35,7 @@ jobs:
 
       - name: Validate sources, run full regression, build ZIP, and retest extracted ZIP
         run: |
-          python build_release.py --output HOTFIX164.18_REQUEST_SCOPED_BRIDGE_PROOF_DIAGNOSTICS.zip
+          python build_release.py --output HOTFIX164.24_CANONICAL_BRIDGE_EVIDENCE_PERSISTENCE_AND_ROUND_BOUND_LEDGER.zip
 
       - name: Verify frozen provider identity and release scope
         run: |
@@ -46,28 +46,28 @@ jobs:
           expected = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
           if Path("VERSION.txt").read_text(encoding="utf-8").strip() != expected:
               raise SystemExit("VERSION_CONTRACT_FAILED")
-          manifest = json.loads(Path("HOTFIX164.18_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
-          if manifest.get("release") != "HOTFIX164.18" or manifest.get("provider_core_identity") != expected:
-              raise SystemExit("HOTFIX164.18_MANIFEST_IDENTITY_FAILED")
-          if not providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith("HOTFIX164.18 "):
-              raise SystemExit("HOTFIX164.18_RUNTIME_LABEL_FAILED")
+          manifest = json.loads(Path("HOTFIX164.24_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+          if manifest.get("release") != "HOTFIX164.24" or manifest.get("provider_core_identity") != expected:
+              raise SystemExit("HOTFIX164.24_MANIFEST_IDENTITY_FAILED")
+          if not providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith("HOTFIX164.24 "):
+              raise SystemExit("HOTFIX164.24_RUNTIME_LABEL_FAILED")
           guards = manifest.get("guardrails", {})
           if guards.get("v26_3_identity_logic_changed") is not False or guards.get("canonical_counter_logic_changed") is not False:
               raise SystemExit("CANONICAL_SCOPE_GUARD_FAILED")
           print("VERSION_CONTRACT=PASS")
-          print("HOTFIX164.18_SCOPE_GUARDS=PASS")
+          print("HOTFIX164.24_SCOPE_GUARDS=PASS")
           PY
 
       - name: Upload generated ZIP and SHA-256
-        if: ${{ success() && hashFiles('HOTFIX164.18_REQUEST_SCOPED_BRIDGE_PROOF_DIAGNOSTICS.zip') != '' }}
+        if: ${{ success() && hashFiles('HOTFIX164.24_CANONICAL_BRIDGE_EVIDENCE_PERSISTENCE_AND_ROUND_BOUND_LEDGER.zip') != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: HOTFIX164.18-request-scoped-bridge-proof-diagnostics
+          name: HOTFIX164.24-canonical-bridge-evidence-persistence
           path: |
-            HOTFIX164.18_REQUEST_SCOPED_BRIDGE_PROOF_DIAGNOSTICS.zip
-            HOTFIX164.18_REQUEST_SCOPED_BRIDGE_PROOF_DIAGNOSTICS.zip.sha256
+            HOTFIX164.24_CANONICAL_BRIDGE_EVIDENCE_PERSISTENCE_AND_ROUND_BOUND_LEDGER.zip
+            HOTFIX164.24_CANONICAL_BRIDGE_EVIDENCE_PERSISTENCE_AND_ROUND_BOUND_LEDGER.zip.sha256
             RELEASE_MANIFEST.json
-            HOTFIX164.18_RELEASE_MANIFEST.json
-            HOTFIX164.18_RELEASE_NOTES.md
+            HOTFIX164.24_RELEASE_MANIFEST.json
+            HOTFIX164.24_RELEASE_NOTES.md
           if-no-files-found: error
           retention-days: 14
