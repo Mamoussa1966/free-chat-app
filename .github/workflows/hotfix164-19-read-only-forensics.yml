@@ -1,9 +1,8 @@
-name: HOTFIX164.19 Read-Only Request-3 Forensics and Fail-Closed Closure
+name: HISTORICAL HOTFIX164.19 Manifest and Fail-Closed Compatibility Audit (Manual Only)
 
 on:
-  push:
-    branches:
-      - gitops-v0.4-final
+  # Select the historical HOTFIX164.19 ref when running this legacy contract.
+  # This workflow must not gate current HOTFIX164.25 pushes.
   workflow_dispatch:
 
 permissions:
@@ -35,9 +34,9 @@ jobs:
 
       - name: Validate sources, run full regression, build ZIP, and retest extracted ZIP
         run: |
-          python build_release.py --output HOTFIX164.19_READ_ONLY_REQUEST3_FORENSICS.zip
+          python build_release.py --output HOTFIX164.25_HISTORICAL_HOTFIX16419_COMPATIBILITY_AUDIT.zip
 
-      - name: Verify frozen provider identity, manifest, and fail-closed runtime label
+      - name: Verify frozen identity, retained historical contract, and current runtime separation
         run: |
           python - <<'PY'
           import json
@@ -49,26 +48,27 @@ jobs:
           manifest = json.loads(Path('HOTFIX164.19_RELEASE_MANIFEST.json').read_text(encoding='utf-8'))
           if manifest.get('release') != 'HOTFIX164.19' or manifest.get('provider_core_identity') != expected:
               raise SystemExit('HOTFIX164.19_MANIFEST_IDENTITY_FAILED')
-          if not providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith('HOTFIX164.19 '):
-              raise SystemExit('HOTFIX164.19_RUNTIME_LABEL_FAILED')
+          if providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith('HOTFIX164.19 '):
+              raise SystemExit('HISTORICAL_RELEASE_MUST_NOT_BE_ACTIVE')
           guards = manifest.get('guardrails', {})
           if guards.get('version_txt_contract_preserved') is not True:
               raise SystemExit('FROZEN_VERSION_GUARD_FAILED')
           if guards.get('failed_platform_audit_can_be_overridden_by_consistent_counts') is not False:
               raise SystemExit('FAIL_CLOSED_CLOSURE_GUARD_FAILED')
           print('VERSION_CONTRACT=PASS')
-          print('HOTFIX164.19_RUNTIME_LABEL=PASS')
+          print('HISTORICAL_HOTFIX16419_MANIFEST=PASS')
+          print('CURRENT_RUNTIME_NOT_MISLABELED_AS_HOTFIX16419=PASS')
           print('FAIL_CLOSED_CLOSURE_GUARD=PASS')
           PY
 
       - name: Upload candidate ZIP and validation metadata (never publish automatically)
-        if: ${{ success() && hashFiles('HOTFIX164.19_READ_ONLY_REQUEST3_FORENSICS.zip') != '' }}
+        if: ${{ success() && hashFiles('HOTFIX164.25_HISTORICAL_HOTFIX16419_COMPATIBILITY_AUDIT.zip') != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: HOTFIX164.19-read-only-request3-forensics
+          name: HOTFIX164.25-historical-HOTFIX16419-compatibility-audit
           path: |
-            HOTFIX164.19_READ_ONLY_REQUEST3_FORENSICS.zip
-            HOTFIX164.19_READ_ONLY_REQUEST3_FORENSICS.zip.sha256
+            HOTFIX164.25_HISTORICAL_HOTFIX16419_COMPATIBILITY_AUDIT.zip
+            HOTFIX164.25_HISTORICAL_HOTFIX16419_COMPATIBILITY_AUDIT.zip.sha256
             RELEASE_MANIFEST.json
             HOTFIX164.19_RELEASE_MANIFEST.json
             HOTFIX164.19_RELEASE_NOTES.md
