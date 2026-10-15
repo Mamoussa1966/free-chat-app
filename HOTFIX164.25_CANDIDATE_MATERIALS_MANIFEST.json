@@ -1,0 +1,14 @@
+{
+  "schema": "hotfix164.25-candidate-materials/v1",
+  "status": "NOT_A_RELEASE",
+  "implementation_applied": false,
+  "tests_executed": false,
+  "live_bridge_closure_proven": false,
+  "repository": "Mamoussa1966/free-chat-app",
+  "base_branch": "gitops-v0.4-final",
+  "files": [
+    "HOTFIX164.25_PATCH_PLAN.md",
+    "HOTFIX164.25_REGRESSION_TEST_SPEC.md"
+  ],
+  "reason": "These materials specify the required source changes and tests; they do not contain a validated modified source tree or a tested release ZIP."
+}
