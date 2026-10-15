@@ -15,7 +15,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit as _base_read_only_existing_records_audit
 from v23_final_closure_audit import build_v23_final_closure_audit
@@ -44,9 +44,8 @@ from production_core_test_runner import run_production_core_tests, render_report
 from release_identity import deployed_release_identity, assert_deployed_release_identity
 
 APP_VERSION = PROVIDER_VERSION
-DISPLAY_VERSION = "HOTFIX164.24 — CANONICAL BRIDGE EVIDENCE PERSISTENCE AND ROUND-BOUND LEDGER"
+DISPLAY_VERSION = CURRENT_HOTFIX_RELEASE_VERSION
 HOTFIX_VERSION = "HOTFIX144"
-PLATFORM_RELEASE_VERSION = "V25.0-CONVERSATION-LEDGER-MESSAGE-RUNTIME"
 MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
@@ -3904,7 +3903,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -3922,7 +3921,7 @@ def _render_hotfix16419_read_only_page() -> None:
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.24 — Canonical Bridge Evidence Persistence and Round-Bound Ledger")
+        st.title("HOTFIX164.25 — Release Contract Normalization and Regression Guard")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
@@ -3960,10 +3959,10 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.24 — Canonical Bridge Evidence Persistence and Round-Bound Ledger",
+            "HOTFIX164.25 — Release Contract Normalization and Regression Guard",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.24_CANONICAL_BRIDGE_EVIDENCE_FORENSICS.json",
+            download_name="HOTFIX164.25_RELEASE_CONTRACT_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -3984,7 +3983,7 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.24 — Canonical Bridge Evidence Persistence and Round-Bound Ledger", key="hotfix16422_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.25 — Release Contract Normalization and Regression Guard", key="hotfix16422_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16422_read_only_requested"] = True
         st.session_state["_hotfix16422_read_only_mode"] = True
         st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
