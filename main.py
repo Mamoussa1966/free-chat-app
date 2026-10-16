@@ -3519,6 +3519,25 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     if not isinstance(canonical_request_count, int):
         canonical_request_count = len(canonical_request_ids)
 
+    # HOTFIX164.25 correction: zero target IDs must not hide the difference
+    # between a missing canonical conversation and a real-but-empty history.
+    # These are diagnostic blockers only: this path never initializes, repairs,
+    # or populates the canonical store and never dispatches a provider request.
+    canonical_record_present = isinstance(snapshot.get("conversation_record"), dict) or isinstance(snapshot.get("canonical_record"), dict)
+    canonical_shape_valid = isinstance(canonical, dict) and all(
+        isinstance(canonical.get(key), list) for key in ("messages", "requests", "rounds")
+    )
+    canonical_history_empty = canonical_shape_valid and not any(
+        canonical.get(key) for key in ("messages", "requests", "rounds")
+    )
+    canonical_state_blockers = []
+    if not canonical_record_present:
+        canonical_state_blockers.append("NO_EXISTING_CANONICAL_CONVERSATION")
+    elif not canonical_shape_valid:
+        canonical_state_blockers.append("CANONICAL_CONVERSATION_RECORD_INVALID")
+    elif canonical_history_empty:
+        canonical_state_blockers.append("CANONICAL_HISTORY_EMPTY_NOT_PROVEN")
+
     counter_blockers = []
     base_counter_status = "PASS" if base.get("canonical_counter_consistent") is True else "FAIL" if base.get("canonical_counter_consistent") is False else "NOT_PROVEN"
     if base_counter_status != "PASS":
@@ -3575,6 +3594,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         live_state_unchanged = bool(before and before == after)
         blockers = list(base.get("blockers", [])) if isinstance(base.get("blockers"), list) else []
         blockers.extend(counter_blockers)
+        blockers.extend(canonical_state_blockers)
         blockers.append("NO_EXPLICIT_TARGETS_PROVIDED")
         if not live_state_unchanged:
             blockers.append("READ_ONLY_LIVE_STATE_CHANGED_OR_COULD_NOT_BE_VERIFIED")
@@ -3838,6 +3858,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     live_state_unchanged = bool(before and before == after)
     blockers = list(base.get("blockers", [])) if isinstance(base.get("blockers"), list) else []
     blockers.extend(counter_blockers)
+    blockers.extend(canonical_state_blockers)
     if target_set_invalid:
         blockers.append("AT_MOST_TWO_DISTINCT_EXPLICIT_TARGET_REQUEST_IDS_REQUIRED")
     for row in target_rows:

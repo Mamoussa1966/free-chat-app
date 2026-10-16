@@ -18,8 +18,15 @@ The HOTFIX164.19 workflow remains available through manual dispatch as a histori
 
 Missing or incomplete live evidence must remain `NOT_PROVEN` (or `FAIL` where a verified contradiction exists). Neither regression success nor a ZIP round-trip is live Bridge evidence. No synthetic requests, rounds, Bridge evidence, or provider execution results are permitted. No paid fallback, local engine, or dynamic model discovery is enabled.
 
+
+## Corrected read-only canonical selection guard
+
+This corrected candidate adds explicit fail-closed blockers to the read-only explicit-target audit. When the canonical conversation record is missing, the report now includes `NO_EXISTING_CANONICAL_CONVERSATION`; when a canonical record exists but its Message, Request, and Round ledgers are all empty, it includes `CANONICAL_HISTORY_EMPTY_NOT_PROVEN`. These conditions remain `NOT_PROVEN`, do not initialize or repair state, and do not execute a provider or create lifecycle/Bridge records. Two regression tests cover the missing-record and empty-ledger cases.
+
+The package manifest now lists only the source files changed by this correction and aligns the ZIP entry count with the generated archive. Live Bridge closure remains `NOT_PROVEN`; this package does not claim new live evidence.
+
 ## Validation results for this candidate
 
-The candidate passed source validation and Python compilation, the Production Core gate, the complete regression suite (`638 passed`, `0 failed`, `0 errors` across `169` test modules), and ZIP validation followed by fresh extraction and another complete suite (`638 passed`, `0 failed`, `0 errors`). The preservation gate reported `75` previous-release files, `398` current project files, and `0` deleted previous-release files. The verified source ZIP contains `398` entries, has no nested ZIPs, and passed the builder’s path and integrity checks. These results describe this locally built candidate; no GitHub push or release was performed.
+The candidate passed source validation and Python compilation, the Production Core gate, the complete regression suite (`640 passed`, `0 failed`, `0 errors` across `169` test modules), and ZIP validation followed by fresh extraction and another complete suite (`640 passed`, `0 failed`, `0 errors`). The preservation gate reported `75` previous-release files, `403` current project files, and `0` deleted previous-release files. The verified source ZIP contains `403` entries, has no nested ZIPs, and passed the builder’s path and integrity checks. These results describe this locally built candidate; no GitHub push or release was performed.
 
 A prior explicit two-target read-only Bridge audit was previously reported as `PASS` for those exact targets only. This packaging run does not revalidate or extend that live evidence. Overall live closure remains `NOT_PROVEN` here, and any missing or incomplete new live evidence must remain `NOT_PROVEN` (or `FAIL` where a contradiction is established).

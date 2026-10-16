@@ -6,11 +6,7 @@
   "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
   "changed_files": [
     "main.py",
-    "providers.py",
-    "tests/test_provider_runtime.py",
     "tests/test_hotfix16425_release_contract.py",
-    ".github/workflows/hotfix164-18-proof-diagnostics.yml",
-    ".github/workflows/hotfix164-19-read-only-forensics.yml",
     "HOTFIX164.25_RELEASE_NOTES.md",
     "HOTFIX164.25_RELEASE_MANIFEST.json"
   ],
@@ -52,7 +48,10 @@
     "agent_prose_used_as_runtime_authority": false,
     "execution_or_results_synthesized": false,
     "live_final_closure_proven": false,
-    "historical_hotfix16419_push_gate_disabled": true
+    "historical_hotfix16419_push_gate_disabled": true,
+    "missing_canonical_conversation_stays_not_proven": true,
+    "empty_canonical_history_stays_not_proven": true,
+    "read_only_forensics_mutates_state": false
   },
   "validation_results": {
     "status": "PASS_WITH_LIVE_BRIDGE_CLOSURE_NOT_PROVEN",
@@ -63,28 +62,30 @@
     },
     "full_regression_suite": {
       "status": "PASS",
-      "passed": 638,
+      "passed": 640,
       "failed": 0,
       "errors": 0,
-      "test_files": 169
+      "test_files": 169,
+      "scope": "Full suite after HOTFIX164.25 read-only canonical selection guards"
     },
     "fresh_zip_extraction_regression_suite": {
       "status": "PASS",
-      "passed": 638,
+      "passed": 640,
       "failed": 0,
       "errors": 0,
-      "test_files": 169
+      "test_files": 169,
+      "scope": "PASS: build_release.py re-extracted the exact release ZIP and ran the full suite on that extracted tree"
     },
     "production_core_gate": "PASS",
     "file_preservation_gate": {
       "status": "PASS",
       "previous_release_files": 75,
-      "current_files": 398,
+      "current_files": 403,
       "deleted_previous_release_files": 0
     },
     "zip_roundtrip": {
       "status": "PASS",
-      "archive_entry_count": 398,
+      "archive_entry_count": 403,
       "all_project_files_at_archive_root": true,
       "nested_zips": 0
     },
