@@ -1,0 +1,22 @@
+{
+  "schema": "hotfix164.25-replacement-files-manifest/v1",
+  "source_release_zip": "HOTFIX164.25_RELEASE_CONTRACT_NORMALIZATION_AND_REGRESSION_GUARD.zip",
+  "source_commit": "e10b2ecb3d10e92906c91eed3f2a92edef717fe0",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "source_release_validation_status": "PASS_WITH_LIVE_BRIDGE_CLOSURE_NOT_PROVEN",
+  "changed_files": [
+    "main.py",
+    "providers.py",
+    "tests/test_provider_runtime.py",
+    "tests/test_hotfix16425_release_contract.py",
+    ".github/workflows/hotfix164-18-proof-diagnostics.yml",
+    ".github/workflows/hotfix164-19-read-only-forensics.yml",
+    "HOTFIX164.25_RELEASE_NOTES.md",
+    "HOTFIX164.25_RELEASE_MANIFEST.json"
+  ],
+  "contents_are_exact_copies_from_validated_github_actions_artifact": true,
+  "tests_run_locally_in_this_session": false,
+  "live_final_closure_proven": false,
+  "status": "REPLACEMENT_FILES_FROM_CI_ARTIFACT_NOT_NEWLY_TESTED_HERE",
+  "note": "Replace only these listed paths. Do not infer final live Bridge closure from CI test results."
+}
