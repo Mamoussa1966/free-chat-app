@@ -64,6 +64,39 @@ def test_hotfix16425_report_schema_contract_remains_independent_and_fail_closed(
     assert manifest["bridge_closure_contract"]["new_or_incomplete_live_evidence_status"] == "NOT_PROVEN"
 
 
+def test_hotfix16425_missing_canonical_conversation_is_explicitly_not_proven_without_side_effects():
+    chat = {}
+    before = json.dumps(chat, sort_keys=True)
+
+    report = main._hotfix16420_read_only_target_audit(chat, target_request_ids=[])
+
+    assert report["status"] == "NOT_PROVEN"
+    assert "NO_EXISTING_CANONICAL_CONVERSATION" in report["blockers"]
+    assert "NO_EXPLICIT_TARGETS_PROVIDED" in report["blockers"]
+    assert report["provider_execution"] == report["cascade_execution"] == 0
+    assert report["new_requests"] == report["new_rounds"] == report["new_bridges"] == 0
+    assert json.dumps(chat, sort_keys=True) == before
+
+
+def test_hotfix16425_empty_canonical_history_never_qualifies_as_closure():
+    chat = {
+        "id": "existing-empty-chat",
+        "request_records": [],
+        "conversation_record": {"messages": [], "requests": [], "rounds": []},
+    }
+    before = json.dumps(chat, sort_keys=True)
+
+    report = main._hotfix16420_read_only_target_audit(chat, target_request_ids=[])
+
+    assert report["status"] == "NOT_PROVEN"
+    assert "CANONICAL_HISTORY_EMPTY_NOT_PROVEN" in report["blockers"]
+    assert "NO_EXPLICIT_TARGETS_PROVIDED" in report["blockers"]
+    assert report["read_only_live_state_unchanged"] is True
+    assert report["provider_execution"] == report["cascade_execution"] == 0
+    assert report["new_requests"] == report["new_rounds"] == report["new_bridges"] == 0
+    assert json.dumps(chat, sort_keys=True) == before
+
+
 def test_hotfix16425_current_release_workflow_checks_current_contract():
     workflow = (ROOT / ".github/workflows/hotfix164-18-proof-diagnostics.yml").read_text(encoding="utf-8")
     assert "HOTFIX164.25_RELEASE_MANIFEST.json" in workflow
