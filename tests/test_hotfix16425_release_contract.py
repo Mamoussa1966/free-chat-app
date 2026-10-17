@@ -14,7 +14,7 @@ REPORT_SCHEMA = "hotfix164.23-explicit-target-read-only-forensics/v1"
 
 def test_hotfix16425_display_release_uses_provider_owned_identity():
     assert providers.CURRENT_HOTFIX_RELEASE_VERSION == (
-        "HOTFIX164.25 — RELEASE CONTRACT NORMALIZATION AND REGRESSION GUARD"
+        "HOTFIX164.26 — CANONICAL BRIDGE EVIDENCE REHYDRATION"
     )
     assert main.DISPLAY_VERSION == providers.CURRENT_HOTFIX_RELEASE_VERSION
 
@@ -34,8 +34,8 @@ def test_hotfix16425_frozen_provider_and_version_file_are_unchanged():
 
 
 def test_hotfix16425_current_manifest_matches_live_source_contract():
-    manifest = json.loads((ROOT / "HOTFIX164.25_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
-    assert manifest["release"] == "HOTFIX164.25"
+    manifest = json.loads((ROOT / "HOTFIX164.26_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["release"] == "HOTFIX164.26"
     assert manifest["provider_core_identity"] == providers.VERSION
     assert manifest["release_contract"]["runtime_label_matches_main_display_version"] is True
     assert manifest["release_contract"]["platform_release_identity_single_source"] is True
@@ -45,7 +45,7 @@ def test_hotfix16425_current_manifest_matches_live_source_contract():
 
 
 def test_hotfix16425_report_schema_contract_remains_independent_and_fail_closed():
-    manifest = json.loads((ROOT / "HOTFIX164.25_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    manifest = json.loads((ROOT / "HOTFIX164.26_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
     chat = {}
     before = dict(chat)
     report = main._hotfix16420_read_only_target_audit(chat, target_request_ids=[])
@@ -62,6 +62,8 @@ def test_hotfix16425_report_schema_contract_remains_independent_and_fail_closed(
     assert "NOT_PROVEN" in manifest["bridge_closure_contract"]["status"]
     assert manifest["bridge_closure_contract"]["prior_explicit_two_request_audit_status"].startswith("PASS previously reported")
     assert manifest["bridge_closure_contract"]["new_or_incomplete_live_evidence_status"] == "NOT_PROVEN"
+    assert manifest["bridge_closure_contract"]["canonical_request_record_is_evidence_authority"] is True
+    assert manifest["bridge_closure_contract"]["sidecar_only_evidence_satisfies_strict_live"] is False
 
 
 def test_hotfix16425_missing_canonical_conversation_is_explicitly_not_proven_without_side_effects():
@@ -99,9 +101,9 @@ def test_hotfix16425_empty_canonical_history_never_qualifies_as_closure():
 
 def test_hotfix16425_current_release_workflow_checks_current_contract():
     workflow = (ROOT / ".github/workflows/hotfix164-18-proof-diagnostics.yml").read_text(encoding="utf-8")
-    assert "HOTFIX164.25_RELEASE_MANIFEST.json" in workflow
-    assert "HOTFIX164.25_RELEASE_CONTRACT_NORMALIZATION_AND_REGRESSION_GUARD.zip" in workflow
-    assert "HOTFIX164.25_RUNTIME_LABEL_FAILED" in workflow
+    assert "HOTFIX164.26_RELEASE_MANIFEST.json" in workflow
+    assert "HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip" in workflow
+    assert "HOTFIX164.26_RUNTIME_LABEL_FAILED" in workflow
     assert "PLATFORM_RELEASE_IDENTITY_FAILED" in workflow
     assert "REPORT_SCHEMA_COMPATIBILITY_FAILED" in workflow
 

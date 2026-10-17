@@ -238,8 +238,8 @@ def test_hotfix16417_exports_two_independent_redacted_bridge_records_from_runtim
         "conversation_record": {
             "messages": [],
             "requests": [
-                {"request_id": "r1", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE"},
-                {"request_id": "r2", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE"},
+                {"request_id": "r1", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE", "bridge_runtime_evidence": r1},
+                {"request_id": "r2", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE", "bridge_runtime_evidence": r2},
             ],
             "rounds": [
                 {"round_id": "c:r1:r1", "request_id": "r1", "round_number": 1, "ordinal": 1},
@@ -285,7 +285,7 @@ def test_hotfix16417_export_fails_when_commit_did_not_bind_target_seat_two():
         "conversation_id": "c", "session_id": "s",
         "conversation_record": {
             "messages": [], "requests": [
-                {"request_id": "r1", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE"},
+                {"request_id": "r1", "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE", "bridge_runtime_evidence": evidence},
             ],
             "rounds": [{"round_id": "c:r1:r1", "request_id": "r1", "round_number": 1, "ordinal": 1}],
         },

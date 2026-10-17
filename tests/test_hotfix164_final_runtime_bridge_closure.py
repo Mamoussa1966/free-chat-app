@@ -11,7 +11,7 @@ import json
 
 import main
 from conversation_persistence_v26 import ensure_persistence_store, persist_identity
-from conversation_store import ensure_store
+from conversation_store import canonical_history_hash, commit_canonical_record, ensure_store
 from conversation_v25_runtime import authoritative_audit
 from production_platform import build_v23_platform_audit, multi_request_regression_audit, security_audit
 from providers import Seat
@@ -125,6 +125,11 @@ def _two_turn_chat(monkeypatch=None):
                 rid, round_results, chat.get("audit_events", []),
                 chat.get("bridge_runtime_evidence_store", {}), True,
             )
+            # Mirror the production orchestrator contract: the canonical
+            # RequestRecord persists app-owned Bridge evidence before commit.
+            runtime_evidence = chat.get("bridge_runtime_evidence_store", {}).get(rid)
+            if isinstance(runtime_evidence, dict) and str(runtime_evidence.get("request_id") or "") == rid:
+                request["bridge_runtime_evidence"] = copy.deepcopy(runtime_evidence)
             request["synthesis"] = main.synthesize_council_results(round_results)
             request["synthesis"]["conversation_id"] = chat["conversation_id"]
             request["synthesis"]["session_id"] = chat["session_id"]
@@ -189,8 +194,20 @@ def test_hotfix164_two_message_real_orchestrator_bridge_closes_fail_closed(monke
     assert audit["bridge_ids_distinct_message_1_vs_message_2"] is True
     assert audit["bridge_history_proven"] is True
 
-    # Removing either request's app-owned runtime proof must fail closed.
+    # Losing the volatile sidecar must not discard canonical evidence.
     del chat["bridge_runtime_evidence_store"]["closure-request-1-a71f9c0e"]
+    after_sidecar_loss = authoritative_audit(chat, ss)
+    assert after_sidecar_loss["bridge_runtime_proof_status_message_1"] == "PASS"
+    assert after_sidecar_loss["bridge_history_proven"] is True
+
+    # Removing the authoritative RequestRecord evidence must fail closed.
+    rid = "closure-request-1-a71f9c0e"
+    bucket = ss["v26_3_canonical_conversation_store"][chat["conversation_id"]]
+    canonical_requests = bucket["record"]["requests"]
+    canonical_request = next(row for row in canonical_requests if row.get("request_id") == rid)
+    canonical_request.pop("bridge_runtime_evidence", None)
+    bucket["requests"] = copy.deepcopy(canonical_requests)
+    bucket["history_hash"] = canonical_history_hash(bucket["record"])
     failed = authoritative_audit(chat, ss)
     assert failed["bridge_runtime_proof_required_message_1"] is True
     assert failed["bridge_runtime_proof_status_message_1"] == "NOT_PROVEN"
