@@ -560,26 +560,72 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
     }
     runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat, Mapping) else {}
     runtime_store = runtime_store if isinstance(runtime_store, Mapping) else {}
-    runtime_r1 = runtime_store.get(str(r1), {}) if r1 else {}
-    runtime_r2 = runtime_store.get(str(r2), {}) if r2 else {}
+    sidecar_runtime_r1 = runtime_store.get(str(r1), {}) if r1 else {}
+    sidecar_runtime_r2 = runtime_store.get(str(r2), {}) if r2 else {}
     request_row_1 = canonical_request_by_id.get(r1, {}) if r1 else {}
     request_row_2 = canonical_request_by_id.get(r2, {}) if r2 else {}
+    strict_bridge_message_1 = request_row_1.get("bridge_runtime_contract") == "STRICT_LIVE"
+    strict_bridge_message_2 = request_row_2.get("bridge_runtime_contract") == "STRICT_LIVE"
+
+    # HOTFIX164.26: strict-live evidence must be recovered from the V26.3
+    # canonical RequestRecord, not a volatile Streamlit sidecar. At completion,
+    # main.py commits the redacted application-owned evidence on that RequestRecord.
+    # After a rerun, bridge_runtime_evidence_store may be empty; that is a cache
+    # miss, not permission to downgrade the authoritative source. Conversely, a
+    # sidecar-only strict-live record is not canonical proof and is rejected.
+    def _canonical_runtime_evidence(request_row, request_id, strict_live, sidecar):
+        if not strict_live:
+            return sidecar if isinstance(sidecar, Mapping) else {}
+        evidence = request_row.get("bridge_runtime_evidence") if isinstance(request_row, Mapping) else None
+        if not isinstance(evidence, Mapping):
+            return {}
+        evidence = deepcopy(dict(evidence))
+        expected_rounds = [
+            row for row in rounds
+            if isinstance(row, Mapping) and _s(row.get("request_id")) == str(request_id)
+        ]
+        expected_round_id = (
+            _s(expected_rounds[0].get("round_id") or expected_rounds[0].get("canonical_round_record_id"))
+            if len(expected_rounds) == 1 else ""
+        )
+        if (
+            _s(evidence.get("request_id")) != str(request_id)
+            or not expected_round_id
+            or _s(evidence.get("canonical_round_id")) != expected_round_id
+        ):
+            # Keep contradictory canonical evidence visible as a failure; never
+            # repair its identity using the sidecar or synthesize a round ID.
+            evidence["application_owned"] = "FAIL"
+            evidence["bridge_gate_status"] = "FAIL"
+            return evidence
+        if isinstance(sidecar, Mapping) and sidecar:
+            identity_fields = (
+                "request_id", "canonical_round_id", "bridge_id_hash",
+                "runtime_payload_sha256", "runtime_sequence_valid",
+            )
+            if any(
+                sidecar.get(key) not in (None, "")
+                and evidence.get(key) not in (None, "")
+                and str(sidecar.get(key)) != str(evidence.get(key))
+                for key in identity_fields
+            ):
+                evidence["application_owned"] = "FAIL"
+                evidence["bridge_gate_status"] = "FAIL"
+        return evidence
+
+    runtime_r1 = _canonical_runtime_evidence(request_row_1, r1, strict_bridge_message_1, sidecar_runtime_r1) if r1 else {}
+    runtime_r2 = _canonical_runtime_evidence(request_row_2, r2, strict_bridge_message_2, sidecar_runtime_r2) if r2 else {}
     # HOTFIX164.11: expose the Bridge proof obligation explicitly for each
-    # historical Message. A missing runtime record must not erase the fact that
-    # the Request declared a strict Bridge transaction. Presence of an
-    # application-owned runtime record also requires its completeness check.
+    # historical Message. A missing canonical runtime record must not erase the
+    # Request's proof obligation; presence requires the complete evidence check.
     bridge_runtime_proof_required_message_1 = bool(
-        r1 and (request_row_1.get("bridge_test_requested") or
-                request_row_1.get("bridge_runtime_contract") == "STRICT_LIVE" or
+        r1 and (request_row_1.get("bridge_test_requested") or strict_bridge_message_1 or
                 isinstance(runtime_r1, Mapping) and runtime_r1)
     )
     bridge_runtime_proof_required_message_2 = bool(
-        r2 and (request_row_2.get("bridge_test_requested") or
-                request_row_2.get("bridge_runtime_contract") == "STRICT_LIVE" or
+        r2 and (request_row_2.get("bridge_test_requested") or strict_bridge_message_2 or
                 isinstance(runtime_r2, Mapping) and runtime_r2)
     )
-    strict_bridge_message_1 = request_row_1.get("bridge_runtime_contract") == "STRICT_LIVE"
-    strict_bridge_message_2 = request_row_2.get("bridge_runtime_contract") == "STRICT_LIVE"
     # HOTFIX164.5: FINAL_CLOSURE_AUDIT has one authoritative Bridge evidence
     # source: the dedicated Application-Owned runtime evidence store.  The
     # provider-result compatibility projection is intentionally NOT a fallback.

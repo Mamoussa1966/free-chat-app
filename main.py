@@ -3924,7 +3924,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25", "HOTFIX164.26"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -3942,7 +3942,7 @@ def _render_hotfix16419_read_only_page() -> None:
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.25 — Release Contract Normalization and Regression Guard")
+        st.title("HOTFIX164.26 — Canonical Bridge Evidence Rehydration")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
@@ -3980,10 +3980,10 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.25 — Release Contract Normalization and Regression Guard",
+            "HOTFIX164.26 — Canonical Bridge Evidence Rehydration",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.25_RELEASE_CONTRACT_FORENSICS.json",
+            download_name="HOTFIX164.26_BRIDGE_EVIDENCE_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -4004,7 +4004,7 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.25 — Release Contract Normalization and Regression Guard", key="hotfix16422_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.26 — Canonical Bridge Evidence Rehydration", key="hotfix16422_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16422_read_only_requested"] = True
         st.session_state["_hotfix16422_read_only_mode"] = True
         st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [

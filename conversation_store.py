@@ -1105,7 +1105,43 @@ def authoritative_snapshot(chat: dict) -> dict:
         "runtime_payload_transport_boundary", "runtime_payload_prepared_request_verified",
         "runtime_sequence_target_identity_status", "commit_target_seat", "barrier_target_seat", "read_target_seat",
     }
-    runtime_store = chat.get("bridge_runtime_evidence_store", {})
+    raw_runtime_store = chat.get("bridge_runtime_evidence_store", {})
+    raw_runtime_store = raw_runtime_store if isinstance(raw_runtime_store, dict) else {}
+    canonical_requests = rec.get("requests", []) if isinstance(rec.get("requests"), list) else []
+    strict_request_rows = {
+        str(row.get("request_id") or "").strip(): row
+        for row in canonical_requests
+        if isinstance(row, dict)
+        and str(row.get("request_id") or "").strip()
+        and str(row.get("bridge_runtime_contract") or "") == "STRICT_LIVE"
+    }
+    # HOTFIX164.26: canonical RequestRecord evidence survives Streamlit reruns.
+    # For STRICT_LIVE requests the canonical embedded record is authoritative;
+    # the in-memory runtime store is only a cache. A sidecar-only record is never
+    # promoted to canonical proof. Conflicting cache/canonical identities are
+    # exported as FAIL so a stale cache cannot mask a changed canonical record.
+    runtime_store = copy.deepcopy(raw_runtime_store)
+    for rid, request_row in strict_request_rows.items():
+        canonical_evidence = request_row.get("bridge_runtime_evidence")
+        if not isinstance(canonical_evidence, dict) or str(canonical_evidence.get("request_id") or "") != rid:
+            runtime_store.pop(rid, None)
+            continue
+        canonical_evidence = copy.deepcopy(canonical_evidence)
+        sidecar = raw_runtime_store.get(rid)
+        if isinstance(sidecar, dict) and sidecar:
+            compare_fields = (
+                "request_id", "canonical_round_id", "bridge_id_hash",
+                "runtime_payload_sha256", "runtime_sequence_valid",
+            )
+            if any(
+                sidecar.get(key) not in (None, "")
+                and canonical_evidence.get(key) not in (None, "")
+                and str(sidecar.get(key)) != str(canonical_evidence.get(key))
+                for key in compare_fields
+            ):
+                canonical_evidence["application_owned"] = "FAIL"
+                canonical_evidence["bridge_gate_status"] = "FAIL"
+        runtime_store[rid] = canonical_evidence
     safe_runtime_store = {}
     if isinstance(runtime_store, dict):
         for rid, evidence in runtime_store.items():
@@ -1127,7 +1163,7 @@ def authoritative_snapshot(chat: dict) -> dict:
         projection_rounds = copy.deepcopy(canonical_rounds)
     bridge_evidence_export = _safe_bridge_evidence_export(
         runtime_store if isinstance(runtime_store, dict) else {},
-        rec.get("requests", []) if isinstance(rec.get("requests"), list) else [],
+        canonical_requests,
         canonical_rounds if isinstance(canonical_rounds, list) else [],
         safe_runtime_store,
     )
