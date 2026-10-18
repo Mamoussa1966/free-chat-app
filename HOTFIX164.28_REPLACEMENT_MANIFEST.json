@@ -1,0 +1,42 @@
+{
+  "schema": "hotfix164.28-replacement-files-manifest/v1",
+  "package": "HOTFIX164.28_REQUEST_BOUND_BRIDGE_REPLACEMENT_FILES",
+  "target_repository": "Mamoussa1966/free-chat-app",
+  "target_branch": "gitops-v0.4-final",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "version_txt_unchanged": true,
+  "replacement_paths": [
+    ".github/workflows/hotfix164-28-closure.yml",
+    "HOTFIX164.28_FINAL_CLOSURE_STATUS.md",
+    "HOTFIX164.28_RELEASE_MANIFEST.json",
+    "HOTFIX164.28_RELEASE_NOTES.md",
+    "HOTFIX164.28_REPLACEMENT_MANIFEST.json",
+    "conversation_store.py",
+    "conversation_v25_runtime.py",
+    "main.py",
+    "production_platform.py",
+    "providers.py",
+    "tests/test_deepseek_integration.py",
+    "tests/test_hotfix16410_strict_bridge_security_audit.py",
+    "tests/test_hotfix16425_release_contract.py",
+    "tests/test_hotfix16428_request_bound_closure.py",
+    "tests/test_hotfix1642_bridge_orchestration.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "tests/test_hotfix60_fixes.py",
+    "tests/test_provider_runtime.py"
+  ],
+  "fix_summary": "Send one attested PreparedRequest HTTP body; bind the successful transport attestation to the target Request ID, canonical Round, Gemini seat/model and attached response; require these bindings for strict-live evidence; and invalidate read-only audit PASS reports that are stale relative to the active canonical chat.",
+  "validation": {
+    "provider_core_identity_changed": false,
+    "version_txt_unchanged": true,
+    "live_provider_calls_made_by_package_builder": false,
+    "live_final_closure_proven": false,
+    "closure_status": "NOT_PROVEN pending fresh deployed Run A and Run B",
+    "targeted_regression": "PASS",
+    "full_regression_suite": "PASS (656 passed, 0 failed across 172 test files)",
+    "production_core_gate": "PASS",
+    "zip_roundtrip": "PASS for full release candidate: 421 root-level members, no nested ZIP, preserved VERSION.txt"
+  },
+  "instructions": "Apply these replacements at the repository root and preserve all paths. Run python -m py_compile on the changed runtime modules, pytest -q, and the full release ZIP round-trip. Then deploy and conduct fresh real Run A/Run B before declaring live closure."
+}

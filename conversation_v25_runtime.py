@@ -1072,6 +1072,9 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 "gemini_received_sanitized_representation_only", "terminal_state",
                 "runtime_http_payload_hash_integrity", "runtime_payload_transport_boundary",
                 "runtime_payload_prepared_request_verified", "runtime_sequence_target_identity_status",
+                "runtime_payload_request_binding_status", "runtime_payload_round_binding_status",
+                "runtime_payload_target_binding_status", "runtime_payload_response_binding_status",
+                "runtime_payload_canonical_round_binding_status",
             )
             base_complete = (
                 all(row.get(k) == "PASS" for k in required[:10])
@@ -1139,6 +1142,11 @@ def authoritative_audit(chat: dict, session_state=None) -> dict:
                 and row.get("runtime_http_payload_hash_integrity") == "PASS"
                 and row.get("runtime_payload_transport_boundary") == "requests.PreparedRequest.body"
                 and row.get("runtime_payload_prepared_request_verified") == "YES"
+                and row.get("runtime_payload_request_binding_status") == "PASS"
+                and row.get("runtime_payload_round_binding_status") == "PASS"
+                and row.get("runtime_payload_target_binding_status") == "PASS"
+                and row.get("runtime_payload_response_binding_status") == "PASS"
+                and row.get("runtime_payload_canonical_round_binding_status") == "PASS"
                 and sequence_valid
                 and int(row.get("bridge_trace_count") or 0) == 2
                 and row.get("bridge_state_terminal") == "COMMITTED"

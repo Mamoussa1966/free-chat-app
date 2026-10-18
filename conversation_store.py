@@ -1001,6 +1001,13 @@ def _bridge_export_record_status(request_id: str, evidence: dict, canonical_roun
         (missing if evidence.get("runtime_payload_transport_boundary") in (None, "") else failures).append("runtime_payload_transport_boundary")
     if evidence.get("runtime_payload_prepared_request_verified") != "YES":
         (missing if evidence.get("runtime_payload_prepared_request_verified") in (None, "") else failures).append("runtime_payload_prepared_request_verified")
+    for field in (
+        "runtime_payload_request_binding_status", "runtime_payload_round_binding_status",
+        "runtime_payload_target_binding_status", "runtime_payload_response_binding_status",
+        "runtime_payload_canonical_round_binding_status",
+    ):
+        if evidence.get(field) != "PASS":
+            (missing if evidence.get(field) in (None, "") else failures).append(field)
     if not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("bridge_id_hash") or "").lower()):
         (missing if not evidence.get("bridge_id_hash") else failures).append("bridge_id_hash")
     if not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("runtime_payload_sha256") or "").lower()):
@@ -1103,7 +1110,9 @@ def authoritative_snapshot(chat: dict) -> dict:
         "source_provider", "source_seat", "target_provider", "target_seat",
         "runtime_http_payload_hash_integrity", "runtime_payload_sha256",
         "runtime_payload_transport_boundary", "runtime_payload_prepared_request_verified",
-        "runtime_sequence_target_identity_status", "commit_target_seat", "barrier_target_seat", "read_target_seat",
+        "runtime_payload_request_binding_status", "runtime_payload_round_binding_status",
+        "runtime_payload_target_binding_status", "runtime_payload_response_binding_status",
+        "runtime_payload_canonical_round_binding_status", "runtime_sequence_target_identity_status", "commit_target_seat", "barrier_target_seat", "read_target_seat",
     }
     raw_runtime_store = chat.get("bridge_runtime_evidence_store", {})
     raw_runtime_store = raw_runtime_store if isinstance(raw_runtime_store, dict) else {}

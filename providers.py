@@ -16,7 +16,7 @@ from production_core import FreeCascadeController, ProviderExecutionContract, Ti
 
 VERSION = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 HOTFIX_RELEASE_VERSION = "V23.0-HOTFIX144-PROSE-RUNTIME-TRUTH-SEPARATION-AUTHORITATIVE-GATE"
-CURRENT_HOTFIX_RELEASE_VERSION = "HOTFIX164.26 — CANONICAL BRIDGE EVIDENCE REHYDRATION"
+CURRENT_HOTFIX_RELEASE_VERSION = "HOTFIX164.28 — REQUEST-BOUND BRIDGE CLOSURE AND STALE-AUDIT INVALIDATION"
 PLATFORM_RELEASE_VERSION = "V24.0-HOTFIX145-CONVERSATION-RUNTIME-PROFESSIONAL-CHAT-FOUNDATION"
 MAX_MODELS_PER_SEAT = 10
 MAX_AGENTS = 19  # API seats; room seat 6 is reserved for the human, so total room seats max at 20.
@@ -763,13 +763,12 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
         prepared_body = prepared_request.body or b""
         _RUNTIME_ATTESTATION_LOCAL.value = _runtime_payload_attestation(url, payload, prepared_body)
         try:
-            # requests uses the non-empty data argument as the transmitted body;
-            # json= is retained for compatibility with existing adapter contracts.
-            # The integrity gate hashes the exact bytes supplied as data, and the
-            # regression test checks that these are the same bytes passed to transport.
+            # HOTFIX164.28: a single authoritative body crosses the transport
+            # boundary. The attestation above hashes PreparedRequest.body, so do
+            # not also pass json=payload and introduce a second serialization path.
             response = requests.post(
                 url, headers=dict(prepared_request.headers), data=prepared_body,
-                json=payload, timeout=request_timeout,
+                timeout=request_timeout,
             )
         except requests.Timeout as exc:
             last = ProviderError("network timeout", error_class="timeout")
@@ -1411,6 +1410,20 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
                 raw_response = call_official(seat, provider_prompt, executed_model, credential, effective_timeout, attachments, seat_deadline)
             attempt_latency = round(time.perf_counter() - attempt_started, 3)
             runtime_attestation = raw_response.get("__runtime_attestation") if isinstance(raw_response, dict) else None
+            if isinstance(runtime_attestation, dict) and runtime_attestation:
+                # HOTFIX164.28: bind the transport attestation to the exact
+                # application Request/Round/seat execution that consumed this
+                # successful provider response. This is transient runtime data;
+                # persisted evidence exports only hashes and validation statuses.
+                runtime_attestation = dict(runtime_attestation)
+                runtime_attestation.update({
+                    "request_id": str(request_id or ""),
+                    "round_no": int(round_no),
+                    "seat_key": str(seat.key or "").lower(),
+                    "seat_slot": int(getattr(seat, "room_slot", 0) or 0),
+                    "executed_model": str(model or "").strip(),
+                    "transport_response_attached": True,
+                })
             provider_reported_model = ""
             if isinstance(raw_response, dict) and "text" in raw_response:
                 content = str(raw_response.get("text") or "").strip()

@@ -1,0 +1,107 @@
+{
+  "schema": "hotfix-release-manifest/v1",
+  "release": "HOTFIX164.28",
+  "title": "Request-Bound Bridge Closure and Stale-Audit Invalidation",
+  "parent_release": "HOTFIX164.26",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "changed_files": [
+    ".github/workflows/hotfix164-28-closure.yml",
+    "HOTFIX164.28_FINAL_CLOSURE_STATUS.md",
+    "HOTFIX164.28_RELEASE_MANIFEST.json",
+    "HOTFIX164.28_RELEASE_NOTES.md",
+    "HOTFIX164.28_REPLACEMENT_MANIFEST.json",
+    "conversation_store.py",
+    "conversation_v25_runtime.py",
+    "main.py",
+    "production_platform.py",
+    "providers.py",
+    "tests/test_deepseek_integration.py",
+    "tests/test_hotfix16410_strict_bridge_security_audit.py",
+    "tests/test_hotfix16425_release_contract.py",
+    "tests/test_hotfix16428_request_bound_closure.py",
+    "tests/test_hotfix1642_bridge_orchestration.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "tests/test_hotfix60_fixes.py",
+    "tests/test_provider_runtime.py"
+  ],
+  "release_contract": {
+    "runtime_label_matches_main_display_version": true,
+    "runtime_label_matches_manifest_release": true,
+    "provider_core_identity_frozen": true,
+    "version_txt_contract_preserved": true,
+    "platform_release_identity_single_source": true,
+    "release_zip_created_only_after_all_gates_pass": true
+  },
+  "report_schema_contract": {
+    "read_only_audit_schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
+    "schema_versioned_independently_from_application_release": true,
+    "wire_contract_changed": false,
+    "new_schema_required": false,
+    "compatibility_policy": "Keep the v1 envelope and add only an optional active-chat binding fingerprint; the field is used to invalidate stale reports, not as live Bridge evidence."
+  },
+  "bridge_closure_contract": {
+    "authoritative_v26_3_store_required": true,
+    "application_owned_bridge_evidence_required_when_requested": true,
+    "bridge_ledger_projection_request_round_binding_required": true,
+    "canonical_request_record_is_evidence_authority": true,
+    "sidecar_only_evidence_satisfies_strict_live": false,
+    "missing_or_incomplete_evidence_passes": false,
+    "synthetic_request_or_bridge_evidence_allowed": false,
+    "http_attestation_bound_to_request_round_target_and_successful_response": true,
+    "single_prepared_http_body_sent_and_attested": true,
+    "active_chat_binding_required_to_display_a_stored_audit_pass": true,
+    "live_final_closure_proven": false,
+    "status": "NOT_PROVEN until deployed Run A and Run B each show successful DeepSeek source response; request/round-bound app-owned WRITE, VALIDATE, COMMIT, barrier open, Gemini target response, post-response READ, exact source/read equality, and actual Gemini HTTP-body attestation.",
+    "new_or_incomplete_live_evidence_status": "NOT_PROVEN",
+    "prior_report_reuse": "A report from another active conversation, canonical history, request set, round set, or bridge evidence identity is rejected as stale.",
+    "provider_prose_is_runtime_authority": false
+  },
+  "guardrails": {
+    "provider_core_identity_changed": false,
+    "version_txt_contract_preserved": true,
+    "v26_3_identity_logic_changed": false,
+    "canonical_counter_logic_changed": false,
+    "local_engine_enabled": false,
+    "paid_fallback_enabled": false,
+    "dynamic_model_discovery_enabled": false,
+    "agent_prose_used_as_runtime_authority": false,
+    "execution_or_results_synthesized": false,
+    "live_final_closure_proven": false,
+    "missing_canonical_conversation_stays_not_proven": true,
+    "empty_canonical_history_stays_not_proven": true,
+    "read_only_forensics_mutates_state": false
+  },
+  "validation_results": {
+    "status": "PASS_OFFLINE_REGRESSION_AND_ZIP_ROUNDTRIP_LIVE_CLOSURE_NOT_PROVEN",
+    "python_compile": "PASS",
+    "targeted_regression": "PASS (53 passed in the pre-build focused subset; latest transport-focused subset 45 passed)",
+    "full_regression_suite": {
+      "status": "PASS",
+      "passed": 656,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 172,
+      "scope": "Offline suite only; no official-provider API calls are made."
+    },
+    "fresh_zip_extraction_regression_suite": {
+      "status": "PASS",
+      "passed": 656,
+      "failed": 0,
+      "errors": 0,
+      "test_files": 172,
+      "scope": "Re-run by build_release.py from clean extraction of the exact candidate ZIP; no live provider calls."
+    },
+    "production_core_gate": "PASS",
+    "zip_roundtrip": {
+      "status": "PASS",
+      "archive_entry_count": 421,
+      "all_project_files_at_archive_root": true,
+      "nested_zips": 0,
+      "version_txt_preserved": true
+    },
+    "live_provider_calls_made_by_package_builder": false,
+    "live_final_closure_proven": false
+  },
+  "scope_note": "This package contains code-level fixes and offline regression tests. A local package build cannot authenticate against the user's deployed official APIs or establish live Run A/B closure. The live proof remains NOT_PROVEN until the updated application generates and validates new runtime evidence."
+}

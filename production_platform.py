@@ -216,6 +216,11 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         and runtime_bridge.get("user_prompt_contains_value") == "NO"
         and runtime_bridge.get("gemini_input_prompt_contains_value") == "NO"
         and runtime_bridge.get("runtime_http_payload_attested") == "YES"
+        and runtime_bridge.get("runtime_payload_request_binding_status") == "PASS"
+        and runtime_bridge.get("runtime_payload_round_binding_status") == "PASS"
+        and runtime_bridge.get("runtime_payload_target_binding_status") == "PASS"
+        and runtime_bridge.get("runtime_payload_response_binding_status") == "PASS"
+        and runtime_bridge.get("runtime_payload_canonical_round_binding_status") == "PASS"
         and runtime_bridge.get("runtime_http_payload_contains_value") == "NO"
         and runtime_bridge.get("runtime_http_payload_contains_bridge_key") == "NO"
         and runtime_bridge.get("gemini_received_sanitized_representation_only") == "PASS"
@@ -725,6 +730,11 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
                 and runtime.get("user_prompt_contains_value") == "NO"
                 and runtime.get("gemini_input_prompt_contains_value") == "NO"
                 and runtime.get("runtime_http_payload_attested") == "YES"
+                and runtime.get("runtime_payload_request_binding_status") == "PASS"
+                and runtime.get("runtime_payload_round_binding_status") == "PASS"
+                and runtime.get("runtime_payload_target_binding_status") == "PASS"
+                and runtime.get("runtime_payload_response_binding_status") == "PASS"
+                and runtime.get("runtime_payload_canonical_round_binding_status") == "PASS"
                 and runtime.get("runtime_http_payload_contains_value") == "NO"
                 and runtime.get("runtime_http_payload_contains_bridge_key") == "NO"
                 and runtime.get("gemini_received_sanitized_representation_only") == "PASS"
@@ -1158,6 +1168,11 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
         "runtime_http_payload_hash_integrity": "PASS",
         "runtime_payload_transport_boundary": "requests.PreparedRequest.body",
         "runtime_payload_prepared_request_verified": "YES",
+        "runtime_payload_request_binding_status": "PASS",
+        "runtime_payload_round_binding_status": "PASS",
+        "runtime_payload_target_binding_status": "PASS",
+        "runtime_payload_response_binding_status": "PASS",
+        "runtime_payload_canonical_round_binding_status": "PASS",
         "application_owned": "PASS",
         "bridge_gate_status": "PASS",
         "terminal_state": "COMMITTED",
@@ -1287,8 +1302,11 @@ def _strict_live_bridge_request_diagnostic(chat: dict[str, Any], request_record:
         "runtime_http_payload_contains_request_id", "runtime_http_payload_contains_canonical_round_id",
         "control_plane_identity_leak", "runtime_sequence_valid", "runtime_sequence_target_identity_status",
         "runtime_http_payload_hash_integrity", "runtime_payload_transport_boundary",
-        "runtime_payload_prepared_request_verified", "application_owned", "bridge_gate_status",
-        "terminal_state", "bridge_state_terminal", "bridge_id_hash", "runtime_payload_sha256",
+        "runtime_payload_prepared_request_verified", "runtime_payload_request_binding_status",
+        "runtime_payload_round_binding_status", "runtime_payload_target_binding_status",
+        "runtime_payload_response_binding_status", "runtime_payload_canonical_round_binding_status",
+        "application_owned", "bridge_gate_status", "terminal_state", "bridge_state_terminal",
+        "bridge_id_hash", "runtime_payload_sha256",
         "source_seat", "source_provider", "target_seat", "target_provider", "bridge_trace_count",
         "runtime_sequence", "round_id", "canonical_round_id",
     )

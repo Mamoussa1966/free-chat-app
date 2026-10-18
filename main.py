@@ -443,10 +443,11 @@ class SharedContextBridge:
         return "\n\n".join(part for part in (user_part, context_part) if part)
 
     def record_runtime_payload_attestation(self, seat, attestation: dict) -> None:
-        """Capture an integrity-checked attestation for the prepared HTTP JSON body.
+        """Capture an integrity-checked HTTP body attestation bound to this Request/Round.
 
-        An arbitrary non-empty digest is not proof. Require SHA-256(payload_json)
-        to match the supplied digest before this record can satisfy a security gate.
+        In strict live mode, a digest alone is insufficient: the provider runtime must
+        attach the attestation to the successful response of the same Request, Round,
+        Gemini seat, and executed model. Persistent exports retain only hashes/status.
         """
         slot = int(getattr(seat, "room_slot", 0) or 0)
         if not isinstance(attestation, dict) or not isinstance(attestation.get("payload_json"), str):
@@ -456,9 +457,35 @@ class SharedContextBridge:
         supplied = str(attestation.get("payload_sha256") or "").strip().lower()
         computed = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         valid_format = bool(re.fullmatch(r"[0-9a-f]{64}", supplied))
+        hash_valid = bool(valid_format and supplied == computed)
         checked = copy.deepcopy(attestation)
         checked["payload_sha256_computed"] = computed
-        checked["integrity_valid"] = bool(valid_format and supplied == computed)
+        checked["payload_bytes_verified"] = len(payload_json.encode("utf-8"))
+
+        request_bound = str(attestation.get("request_id") or "") == str(self.request_id)
+        round_bound = str(attestation.get("round_no") or "") == str(self.round_no)
+        seat_bound = (
+            slot == 2
+            and str(attestation.get("seat_key") or "").lower() == "gemini"
+            and str(attestation.get("seat_slot") or "") == str(slot)
+        )
+        transport_bound = (
+            attestation.get("transport_response_attached") is True
+            and attestation.get("prepared_request_verified") is True
+            and attestation.get("transport_boundary") == "requests.PreparedRequest.body"
+            and bool(str(attestation.get("executed_model") or "").strip())
+        )
+        canonical_round_id = str(self._runtime_bridge_evidence.get("canonical_round_id") or "")
+        checked["request_identity_binding_status"] = "PASS" if request_bound else ("NOT_PROVEN" if not attestation.get("request_id") else "FAIL")
+        checked["round_identity_binding_status"] = "PASS" if round_bound else ("NOT_PROVEN" if attestation.get("round_no") in (None, "") else "FAIL")
+        checked["target_identity_binding_status"] = "PASS" if seat_bound else ("NOT_PROVEN" if not attestation.get("seat_key") else "FAIL")
+        checked["transport_response_binding_status"] = "PASS" if transport_bound else "NOT_PROVEN"
+        checked["canonical_round_binding_status"] = "PASS" if (request_bound and round_bound and canonical_round_id) else "NOT_PROVEN"
+        checked["canonical_round_id"] = canonical_round_id if request_bound and round_bound else ""
+        # Non-strict legacy diagnostic probes retain their historical hash-only
+        # behavior; STRICT_LIVE must prove both exact-body integrity and identity.
+        identity_valid = bool(request_bound and round_bound and seat_bound and transport_bound and canonical_round_id)
+        checked["integrity_valid"] = bool(hash_valid and (not self.strict_live_source or identity_valid))
         self._runtime_payload_attestations[slot] = checked
 
     def _runtime_payload_text(self, seat_slot: int) -> str:
@@ -741,6 +768,11 @@ class SharedContextBridge:
             "runtime_payload_sha256": str(payload_attestation.get("payload_sha256") or ""),
             "runtime_payload_transport_boundary": str(payload_attestation.get("transport_boundary") or "NOT_PROVEN"),
             "runtime_payload_prepared_request_verified": "YES" if payload_attestation.get("prepared_request_verified") is True else "NOT_PROVEN",
+            "runtime_payload_request_binding_status": str(payload_attestation.get("request_identity_binding_status") or "NOT_PROVEN"),
+            "runtime_payload_round_binding_status": str(payload_attestation.get("round_identity_binding_status") or "NOT_PROVEN"),
+            "runtime_payload_target_binding_status": str(payload_attestation.get("target_identity_binding_status") or "NOT_PROVEN"),
+            "runtime_payload_response_binding_status": str(payload_attestation.get("transport_response_binding_status") or "NOT_PROVEN"),
+            "runtime_payload_canonical_round_binding_status": str(payload_attestation.get("canonical_round_binding_status") or "NOT_PROVEN"),
             "runtime_sequence_target_identity_status": audit.get("RUNTIME_SEQUENCE_TARGET_IDENTITIES_VALID", "NOT_PROVEN"),
             "commit_target_seat": audit.get("COMMIT_TARGET_SEAT", "NOT_PROVEN"),
             "barrier_target_seat": audit.get("BARRIER_TARGET_SEAT", "NOT_PROVEN"),
@@ -992,6 +1024,11 @@ class SharedContextBridge:
             and (not self.strict_live_source or (
                 runtime_attestation.get("prepared_request_verified") is True
                 and runtime_attestation.get("transport_boundary") == "requests.PreparedRequest.body"
+                and runtime_attestation.get("request_identity_binding_status") == "PASS"
+                and runtime_attestation.get("round_identity_binding_status") == "PASS"
+                and runtime_attestation.get("target_identity_binding_status") == "PASS"
+                and runtime_attestation.get("transport_response_binding_status") == "PASS"
+                and runtime_attestation.get("canonical_round_binding_status") == "PASS"
             ))
         )
         runtime_payload_is_sanitized = (
@@ -1048,6 +1085,11 @@ class SharedContextBridge:
             "TERMINAL_REASON": self._terminal_reason,
             "APPLICATION_OWNED_RUNTIME_RECORD": "PASS" if control_record_proven and self._runtime_bridge_evidence.get("sealed") else "NOT_PROVEN",
             "RUNTIME_HTTP_PAYLOAD_ATTESTED": "YES" if runtime_attestation_present else "NO",
+            "RUNTIME_HTTP_PAYLOAD_REQUEST_BINDING": str(runtime_attestation.get("request_identity_binding_status") or "NOT_PROVEN"),
+            "RUNTIME_HTTP_PAYLOAD_ROUND_BINDING": str(runtime_attestation.get("round_identity_binding_status") or "NOT_PROVEN"),
+            "RUNTIME_HTTP_PAYLOAD_TARGET_BINDING": str(runtime_attestation.get("target_identity_binding_status") or "NOT_PROVEN"),
+            "RUNTIME_HTTP_PAYLOAD_RESPONSE_BINDING": str(runtime_attestation.get("transport_response_binding_status") or "NOT_PROVEN"),
+            "RUNTIME_HTTP_PAYLOAD_CANONICAL_ROUND_BINDING": str(runtime_attestation.get("canonical_round_binding_status") or "NOT_PROVEN"),
             # This is derived from the app-owned transaction ordering, not from
             # provider response prose. Missing ordered runtime evidence is unknown.
             "TARGET_RESPONSE_USED_AS_BRIDGE_READ_PROOF": (
@@ -1107,6 +1149,11 @@ class SharedContextBridge:
                 "APPLICATION_OWNED_RUNTIME_RECORD": "PASS",
                 "RUNTIME_SEQUENCE_TARGET_IDENTITIES_VALID": "PASS",
                 "RUNTIME_HTTP_PAYLOAD_HASH_INTEGRITY": "PASS",
+                "RUNTIME_HTTP_PAYLOAD_REQUEST_BINDING": "PASS",
+                "RUNTIME_HTTP_PAYLOAD_ROUND_BINDING": "PASS",
+                "RUNTIME_HTTP_PAYLOAD_TARGET_BINDING": "PASS",
+                "RUNTIME_HTTP_PAYLOAD_RESPONSE_BINDING": "PASS",
+                "RUNTIME_HTTP_PAYLOAD_CANONICAL_ROUND_BINDING": "PASS",
                 "USER_PROMPT_CONTAINS_BRIDGE_ID": "NO",
                 "PROVIDER_PROMPT_CONTAINS_BRIDGE_ID": "NO",
                 "GEMINI_INPUT_PROMPT_CONTAINS_BRIDGE_ID": "NO",
@@ -3487,6 +3534,88 @@ def _hotfix16420_fingerprint(value: object) -> str:
     return hashlib.sha256(encoded.encode("utf-8", errors="replace")).hexdigest()
 
 
+def _hotfix16428_active_chat_binding(chat: dict | None) -> str:
+    """Fingerprint the active canonical conversation and its bridge evidence identities.
+
+    A read-only report is displayable as current only while it remains bound to the
+    same conversation, Request IDs, canonical Round IDs, history hash, and bridge
+    evidence seals. This prevents a prior PASS from being shown after switching runs.
+    """
+    live = chat if isinstance(chat, dict) else {}
+    canonical = live.get("conversation_record") if isinstance(live.get("conversation_record"), dict) else {}
+    if not canonical and isinstance(live.get("canonical_record"), dict):
+        canonical = live.get("canonical_record")
+    canonical = canonical if isinstance(canonical, dict) else {}
+    request_ids = [str(row.get("request_id") or "") for row in canonical.get("requests", []) if isinstance(row, dict)] if isinstance(canonical.get("requests"), list) else []
+    round_rows = [
+        {"request_id": str(row.get("request_id") or ""), "round_id": _hotfix16420_round_id(row),
+         "ordinal": _hotfix16420_round_ordinal(row)}
+        for row in canonical.get("rounds", []) if isinstance(row, dict)
+    ] if isinstance(canonical.get("rounds"), list) else []
+    evidence_source = live.get("bridge_runtime_evidence_store") if isinstance(live.get("bridge_runtime_evidence_store"), dict) else {}
+    evidence_fingerprints = {}
+    for rid, evidence in evidence_source.items():
+        if not isinstance(evidence, dict):
+            continue
+        evidence_fingerprints[str(rid)] = {
+            key: evidence.get(key) for key in (
+                "request_id", "canonical_round_id", "bridge_id_hash", "audit_seal_hash",
+                "runtime_sequence_valid", "bridge_gate_status", "runtime_payload_sha256",
+            )
+        }
+    canonical_record_evidence = {}
+    for row in canonical.get("requests", []) if isinstance(canonical.get("requests"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        evidence = row.get("bridge_runtime_evidence")
+        if isinstance(evidence, dict):
+            rid = str(row.get("request_id") or "")
+            canonical_record_evidence[rid] = {
+                key: evidence.get(key) for key in (
+                    "request_id", "canonical_round_id", "bridge_id_hash", "audit_seal_hash",
+                    "runtime_sequence_valid", "bridge_gate_status", "runtime_payload_sha256",
+                )
+            }
+    material = {
+        "conversation_id": str(live.get("conversation_id") or live.get("id") or canonical.get("conversation_id") or ""),
+        "history_hash": str(canonical.get("history_hash") or canonical.get("canonical_history_hash") or ""),
+        "request_ids": request_ids, "rounds": round_rows,
+        "bridge_runtime_evidence_store": evidence_fingerprints,
+        "canonical_request_evidence": canonical_record_evidence,
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+
+
+def _hotfix16428_report_bound_to_active_chat(chat: dict | None, report: dict | None) -> bool:
+    """Reject a stored forensic PASS that belongs to a different active conversation/run."""
+    if not isinstance(report, dict):
+        return False
+    current_binding = _hotfix16428_active_chat_binding(chat)
+    report_binding = str(report.get("audit_active_chat_binding_sha256") or "")
+    targets = report.get("target_request_ids")
+    current_ids = set(_hotfix16426_canonical_request_ids(chat))
+    if not report_binding or report_binding != current_binding:
+        return False
+    if not isinstance(targets, list) or not targets or any(not isinstance(rid, str) or rid not in current_ids for rid in targets):
+        return False
+    all_request_rows = report.get("requests")
+    if not isinstance(all_request_rows, list):
+        return False
+    all_report_request_ids = {str(row.get("request_id") or "") for row in all_request_rows if isinstance(row, dict)}
+    # Historical canonical requests are retained in this report; target IDs need
+    # to exist among them, but the full request list need not equal the target set.
+    if not set(targets).issubset(all_report_request_ids):
+        return False
+    target_rows = report.get("target_requests")
+    if not isinstance(target_rows, list) or [str(row.get("request_id") or "") for row in target_rows if isinstance(row, dict)] != targets:
+        return False
+    strict = report.get("strict_live_bridge_proof")
+    records = strict.get("records") if isinstance(strict, dict) else None
+    if not isinstance(records, list) or [str(row.get("request_id") or "") for row in records if isinstance(row, dict)] != targets:
+        return False
+    return True
+
+
 def _hotfix16420_round_id(row: dict) -> str:
     return str(row.get("round_id") or row.get("canonical_round_record_id") or "").strip()
 
@@ -3940,6 +4069,7 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         "new_bridges": 0,
         "blockers": sorted(set(str(x) for x in blockers if x)),
         "fail_closed_rule": "FAIL_OR_NOT_PROVEN_IF_ANY_COUNTER_CONFLICTS_OR_REQUIRED_TARGET_OR_BRIDGE_EVIDENCE_IS_MISSING",
+        "audit_active_chat_binding_sha256": _hotfix16428_active_chat_binding(live),
     })
     return report
 
@@ -3954,7 +4084,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25", "HOTFIX164.26"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25", "HOTFIX164.26", "HOTFIX164.27", "HOTFIX164.28"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -3974,12 +4104,16 @@ def _render_hotfix16419_read_only_page() -> None:
     st.session_state["hotfix16422_target_request_2"] = session_targets[1]
 
     report = st.session_state.get("last_hotfix16422_read_only_audit")
-    if not isinstance(report, dict):
+    # HOTFIX164.28: never render a historical PASS as though it describes the
+    # active conversation. When the stored report's active-chat fingerprint or
+    # explicit Request IDs no longer match, clear/re-run only against IDs that
+    # remain valid in this active canonical record. Empty targets stay NOT_PROVEN.
+    if not _hotfix16428_report_bound_to_active_chat(chat, report):
         report = _hotfix16420_read_only_target_audit(chat, session_targets)
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.26 — Canonical Bridge Evidence Rehydration")
+        st.title("HOTFIX164.28 — Request-Bound Bridge Closure")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
@@ -4024,10 +4158,10 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.26 — Canonical Bridge Evidence Rehydration",
+            "HOTFIX164.28 — Request-Bound Bridge Closure",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.26_BRIDGE_EVIDENCE_FORENSICS.json",
+            download_name="HOTFIX164.28_BRIDGE_EVIDENCE_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -4048,7 +4182,7 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.26 — Canonical Bridge Evidence Rehydration", key="hotfix16422_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.28 — Request-Bound Bridge Closure", key="hotfix16422_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16422_read_only_requested"] = True
         st.session_state["_hotfix16422_read_only_mode"] = True
         st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [
