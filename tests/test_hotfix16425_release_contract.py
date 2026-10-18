@@ -14,7 +14,7 @@ REPORT_SCHEMA = "hotfix164.23-explicit-target-read-only-forensics/v1"
 
 def test_hotfix16425_display_release_uses_provider_owned_identity():
     assert providers.CURRENT_HOTFIX_RELEASE_VERSION == (
-        "HOTFIX164.29 — INDEPENDENT HTTP-ATTESTED BRIDGE CLOSURE GATE"
+        "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE"
     )
     assert main.DISPLAY_VERSION == providers.CURRENT_HOTFIX_RELEASE_VERSION
 
@@ -34,8 +34,8 @@ def test_hotfix16425_frozen_provider_and_version_file_are_unchanged():
 
 
 def test_hotfix16425_current_manifest_matches_live_source_contract():
-    manifest = json.loads((ROOT / "HOTFIX164.29_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
-    assert manifest["release"] == "HOTFIX164.29"
+    manifest = json.loads((ROOT / "HOTFIX164.30_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["release"] == "HOTFIX164.30"
     assert manifest["provider_core_identity"] == providers.VERSION
     assert manifest["release_contract"]["runtime_label_matches_main_display_version"] is True
     assert manifest["release_contract"]["platform_release_identity_single_source"] is True
