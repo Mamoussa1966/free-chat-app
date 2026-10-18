@@ -1,0 +1,78 @@
+{
+  "schema": "hotfix164.26-live-bridge-runtime-evidence-supplement/v1",
+  "package": "HOTFIX164.26_LIVE_BRIDGE_RUNTIME_AUDIT_GATE_REPLACEMENT_FILES",
+  "target_repository": "Mamoussa1966/free-chat-app",
+  "target_branch": "gitops-v0.4-final",
+  "base_commit": "8d4dc1233ce40118b95cc41c81fc7ec0f1d1ba97",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "version_txt_unchanged": true,
+  "replacement_paths": [
+    "main.py",
+    "providers.py",
+    "conversation_store.py",
+    "conversation_v25_runtime.py",
+    "build_release.py",
+    "tests/test_hotfix16425_release_contract.py",
+    "tests/test_provider_runtime.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "tests/test_hotfix16426_canonical_bridge_evidence_persistence.py",
+    ".github/workflows/hotfix164-18-proof-diagnostics.yml",
+    "HOTFIX164.26_RELEASE_NOTES.md",
+    "HOTFIX164.26_RELEASE_MANIFEST.json",
+    "HOTFIX164.26_REPLACEMENT_MANIFEST.json",
+    "HOTFIX164.26_FINAL_CLOSURE_STATUS.md",
+    "verify_hotfix16426_live_bridge_audit.py",
+    "tests/test_hotfix16426_live_bridge_audit_gate.py",
+    "evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json",
+    "HOTFIX164.26_LIVE_BRIDGE_CLOSURE_SUPPLEMENT.md",
+    "HOTFIX164.26_RUNTIME_CLOSURE_REPLACEMENT_MANIFEST.json"
+  ],
+  "purpose": "Add a fail-closed release acceptance gate for the two real, explicit deployed-application STRICT_LIVE audit targets without changing provider runtime behavior.",
+  "runtime_evidence": {
+    "request_ids": [
+      "274521681c3b49b68bf988c128803b69",
+      "317d3f311ffe4ff782eeff2fa4351454"
+    ],
+    "application_report_status": "PASS",
+    "strict_live_bridge_proof_status": "PASS",
+    "persisted_runtime_execution_events": 6,
+    "distinct_request_bound_bridge_hashes": 2,
+    "source": "User-supplied deployed application audit report, normalized without Bridge values or prompt/HTTP bodies"
+  },
+  "validation_scope": {
+    "offline_report_acceptance_gate": "PASS when verifier succeeds",
+    "live_provider_calls_in_release_test": false,
+    "release_test_scope_disclosed": true
+  },
+  "instructions": "Extract at repository root, preserving paths. Do not overwrite VERSION.txt or provider configuration. Run pytest -q and python verify_hotfix16426_live_bridge_audit.py. This supplement does not modify main.py or providers.py.",
+  "prior_hotfix_replacement_paths": [
+    "main.py",
+    "providers.py",
+    "conversation_store.py",
+    "conversation_v25_runtime.py",
+    "build_release.py",
+    "tests/test_hotfix16425_release_contract.py",
+    "tests/test_provider_runtime.py",
+    "tests/test_hotfix1649_live_bridge_evidence_export.py",
+    "tests/test_hotfix164_final_runtime_bridge_closure.py",
+    "tests/test_hotfix16426_canonical_bridge_evidence_persistence.py",
+    ".github/workflows/hotfix164-18-proof-diagnostics.yml",
+    "HOTFIX164.26_RELEASE_NOTES.md",
+    "HOTFIX164.26_RELEASE_MANIFEST.json",
+    "HOTFIX164.26_REPLACEMENT_MANIFEST.json",
+    "HOTFIX164.26_FINAL_CLOSURE_STATUS.md"
+  ],
+  "validation": {
+    "runtime_audit_acceptance_gate": "PASS",
+    "new_audit_gate_tests": "PASS (3 passed)",
+    "full_regression_suite": "PASS (647 passed, 0 failed, 0 errors across 171 test files)",
+    "fresh_zip_extraction_suite": "PASS (647 passed, 0 failed, 0 errors across 171 test files)",
+    "production_core_gate": "PASS",
+    "zip_roundtrip": "PASS (root-level project files; no nested project ZIP included in the final release archive)",
+    "live_provider_calls_made_by_gate": false,
+    "provider_core_identity_changed": false,
+    "version_txt_unchanged": true,
+    "scope": "The provided deployed-app report supplies the live runtime evidence; offline tests validate the report contract and fail-closed behavior."
+  }
+}

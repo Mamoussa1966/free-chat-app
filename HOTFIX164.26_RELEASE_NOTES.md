@@ -21,3 +21,7 @@ Regression tests for canonical evidence recovery, sidecar loss, sidecar-only rej
 ## Deployment note
 
 This is a local release candidate only until its files are committed and the matching CI workflow succeeds on the deployment branch. After deployment, send the two Bridge test messages in the same canonical conversation and run the read-only explicit-target audit against those exact Request IDs. Do not use synthetic fixtures or a blank-target audit as proof of live closure.
+
+## Post-deployment runtime evidence supplement
+
+A subsequent read-only explicit-target audit was supplied for two actual deployed application requests. The audit reports `STRICT_LIVE` PASS for both Request IDs, 2 canonical messages / 2 requests / 2 rounds, six persisted application-owned runtime execution events, no missing evidence, and two distinct request-bound Bridge hashes. See `HOTFIX164.26_FINAL_CLOSURE_STATUS.md` and `evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json` for the bounded evidence record and acceptance gate. This external runtime evidence is distinct from the offline regression suite; the verifier does not issue provider calls.

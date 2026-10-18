@@ -1,19 +1,30 @@
-# HOTFIX164.26 — Final Closure Status
+# HOTFIX164.26 — Final Closure Status (post-deployment runtime evidence)
 
-**Status: NOT_PROVEN — live Bridge closure has not been established by this package.**
+**Status: PASS — application-owned STRICT_LIVE audit accepted for the two explicit deployed requests below.** The scope of this runtime conclusion is limited to these two request identities; it does not claim that an offline unit test itself made a live provider call.
 
-## Defect addressed
+## Runtime proof recorded by the deployed application
 
-The strict-live audit was reading `bridge_runtime_evidence_store`, an in-memory sidecar that may be empty after a Streamlit rerun, while the completed request persisted its application-owned Bridge record on the canonical V26.3 RequestRecord. The audit and sanitized snapshot export now recover strict-live evidence from that canonical request field, check that it belongs to the exact Request ID and canonical Round ID, and reject sidecar-only or conflicting evidence.
+The user-provided read-only audit report declares `status=PASS`, `strict_live_bridge_proof.status=PASS`, `target_selection_status=EXPLICIT_TARGETS_SELECTED`, and no blockers or missing evidence. It validates two distinct application-owned Bridge evidence records bound to the canonical Message→Request→Round chain and two distinct Bridge hashes.
 
-## What the release tests establish
+| Target | Request ID | Canonical round | Bridge proof |
+|---|---|---:|---|
+| A | `274521681c3b49b68bf988c128803b69` | 1 | PASS |
+| B | `317d3f311ffe4ff782eeff2fa4351454` | 2 | PASS |
 
-The regression suite checks the evidence-rehydration code path, its fail-closed behavior when canonical evidence is missing, rejection of sidecar-only evidence for strict-live requests, sidecar/canonical conflict handling, canonical evidence export, the frozen provider identity, and the full archive round-trip. Those software tests do **not** establish that a live provider API call occurred.
+The report records canonical Message/Request/Round counts of 2/2/2 and six persisted application-owned runtime execution events. All required request artifacts and identity bindings are `PASS`; both strict-live records have empty `missing_evidence` and `failure_reasons`. The audit reports that it exported no raw Bridge IDs, Bridge values, prompts, or HTTP bodies and created no new Request, Round, or Bridge records.
 
-## Acceptance criteria for live final closure
+The detailed normalized audit snapshot is `evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json`. Run `python verify_hotfix16426_live_bridge_audit.py` to validate the exact report contract. That verifier and its unit tests do not call providers or manufacture execution events; the claimed live execution evidence is the deployed application's reported, persisted runtime evidence.
 
-The deployed application must contain two real explicit target requests from the same canonical conversation. For each request, the canonical Message→Request→Round chain must match the app-owned evidence for a DeepSeek Seat 7 source execution and a Gemini Seat 2 target execution. The evidence must prove the ordered phases `SOURCE_EXECUTION → WRITE → VALIDATE → COMMIT → BARRIER → TARGET_DISPATCH → TARGET_RESPONSE → READ → MATCH`, a committed terminal state, a real prepared-request HTTP payload attestation and matching payload hash, and no Bridge value, Bridge key, Bridge ID, Request ID, or canonical Round ID leaking into prohibited user/provider prompts or the Gemini HTTP payload. Two distinct request-bound Bridge hashes must be present. Missing or incomplete evidence remains `NOT_PROVEN`.
+## How this relates to the original build manifest
 
-## Deployment boundary
+The existing `HOTFIX164.26_RELEASE_MANIFEST.json` build-time field `bridge_closure_contract.live_final_closure_proven=false` is retained as a record of the original offline package's test boundary: its regression suite alone did not establish a live API execution. The subsequent deployed-app audit above is additional runtime evidence, validated by a separate acceptance gate. It does not rewrite the historical scope of that offline test suite.
 
-This candidate was prepared locally for download. It has not been committed or pushed to GitHub by this package workflow. The user must apply the replacement files and wait for the repository workflow to complete before the patched source is deployed. After deployment, send the two test messages in the app and run the read-only explicit-target audit with those two actual Request IDs. Do not infer live closure from build success, fixtures, blank-target audits, model prose, or a ZIP hash.
+## Reproducible verification
+
+- Frozen provider identity remains `V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`.
+- `VERSION.txt` is unchanged.
+- Full software regression suite: 647 passed, 0 failed, 0 errors (includes three audit-gate tests; original suite was 644).
+- Fresh release ZIP extraction regression suite: must also pass before treating the release artifact as complete.
+- The read-only acceptance verifier is report validation, not a substitute for the deployed runtime's own evidence generation.
+
+No Local Engine, paid fallback, dynamic model discovery, raw Bridge value export, or audit-triggered provider execution is introduced by this supplement.

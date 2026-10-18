@@ -107,5 +107,26 @@
     },
     "github_push_or_release": "NOT_PUBLISHED",
     "live_final_closure_proven": false
+  },
+  "post_deployment_runtime_evidence": {
+    "source": "evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json",
+    "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
+    "audit_status": "PASS",
+    "strict_live_bridge_proof_status": "PASS",
+    "target_request_ids": [
+      "274521681c3b49b68bf988c128803b69",
+      "317d3f311ffe4ff782eeff2fa4351454"
+    ],
+    "canonical_message_request_round_counts": [
+      2,
+      2,
+      2
+    ],
+    "persisted_application_owned_runtime_execution_events": 6,
+    "distinct_request_bound_bridge_hashes": 2,
+    "read_only_audit_side_effects": "NONE_OBSERVED",
+    "scope": "The deployed-app report supports runtime acceptance for these two requests. Offline unit tests do not perform live provider calls.",
+    "automated_gate": "verify_hotfix16426_live_bridge_audit.py",
+    "note": "Original bridge_closure_contract.live_final_closure_proven=false remains the build-time boundary of the base offline package, not the status of this separately supplied runtime audit."
   }
 }
