@@ -4,14 +4,12 @@
 
 For `STRICT_LIVE`, the canonical V26.3 RequestRecord remains the authority for application-owned Bridge evidence. Audit and sanitized export recover evidence from the canonical request record, bind it to its exact Request ID and Round ID, reject sidecar-only evidence and fail closed on conflicts. Auditing remains read-only and does not allocate requests, rounds, bridges, or provider work.
 
-## Corrected deployed runtime report
+## Latest deployed runtime report supplied by the user
 
-The final user-provided read-only application audit selects the correct Request IDs:
+- Run A: `5acf12d46319424082fce5db5a1be9f2` — Round 1 — Bridge hash `5e90ff8b7d09cc925cc40eff93f069ac1ced368d0782e01c40d31e99c81a8537` — `PASS`.
+- Run B: `018889aa696f4be0a1ddf107e6c2ceec` — Round 2 — Bridge hash `b0696582ebb77b961ec91dd7a00e9d37270d238f7a77e1d915ae45632e28a658` — `PASS`.
 
-- Run A: `6d3429f1dae84863a362e3abbc7aede2` — Round 1 — Bridge hash `40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79` — `PASS`.
-- Run B: `efc1820735ba45ddb9eb04e676ec795a` — Round 2 — Bridge hash `eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f` — `PASS`.
-
-The aggregate application report, strict-live proof, target bindings and target independence are all `PASS`, with no blockers. It reports 2 canonical Messages / 2 Requests / 2 Rounds, four persisted application-owned runtime execution events, one Bridge evidence record and one ledger projection per target, and two distinct request-bound Bridge hashes. The earlier report using `274521681c3b49b68bf988c128803b69` and `317d3f311ffe4ff782eeff2fa4351454` was a stale-target attempt and returned `NOT_PROVEN`; it is not the report accepted by this package.
+The latest aggregate application report, strict-live proof, target bindings and target independence are `PASS`, with no blockers. It reports 2 canonical Messages / 2 Requests / 2 Rounds and five persisted application-owned runtime execution events (3 for A, 2 for B), one Bridge evidence record and one ledger projection per target, and two distinct request-bound Bridge hashes. The first stale-target audit with `274521681c3b49b68bf988c128803b69` and `317d3f311ffe4ff782eeff2fa4351454` returned `NOT_PROVEN`; the previously accepted run `6d3429f1dae84863a362e3abbc7aede2` and `efc1820735ba45ddb9eb04e676ec795a` is now superseded by this latest report.
 
 ## Regression and proof boundary
 

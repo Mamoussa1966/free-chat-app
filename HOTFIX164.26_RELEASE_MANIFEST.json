@@ -1,7 +1,7 @@
 {
   "schema": "hotfix-release-manifest/v1",
   "release": "HOTFIX164.26",
-  "title": "Canonical Bridge Evidence Rehydration — corrected live runtime closure report",
+  "title": "Canonical Bridge Evidence Rehydration — latest deployed runtime closure report",
   "parent_release": "HOTFIX164.25",
   "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
   "changed_files": [
@@ -55,7 +55,7 @@
     "closure_blocker_addressed": "Strict-live audit previously depended on a volatile bridge_runtime_evidence_store cache even though the completed evidence was persisted on the canonical RequestRecord; audit and sanitized export now recover strict-live evidence from that canonical RequestRecord and reject sidecar-only proof",
     "prior_explicit_two_request_audit_status": "PASS previously reported for two explicit targets only; not revalidated or broadened by this package",
     "build_time_offline_test_scope": "The original offline suite alone does not perform live provider calls; see post_deployment_runtime_evidence for the later user-supplied deployed audit status.",
-    "post_deployment_audit_status": "PASS for the two explicit request IDs in post_deployment_runtime_evidence"
+    "post_deployment_audit_status": "PASS for the latest two explicit targets in post_deployment_runtime_evidence, as reported by the deployed application"
   },
   "guardrails": {
     "provider_core_identity_changed": false,
@@ -74,7 +74,7 @@
     "read_only_forensics_mutates_state": false
   },
   "validation_results": {
-    "status": "PASS_WITH_CORRECTED_DEPLOYED_APPLICATION_AUDIT_AND_OFFLINE_REGRESSION_PASS",
+    "status": "PASS_WITH_LATEST_USER_SUPPLIED_DEPLOYED_APPLICATION_AUDIT_AND_OFFLINE_REGRESSION_PASS",
     "python_compile": "PASS",
     "canonical_bridge_evidence_persistence_regression": {
       "status": "PASS",
@@ -91,7 +91,7 @@
     },
     "full_regression_suite": {
       "status": "PASS",
-      "passed": 649,
+      "passed": 650,
       "failed": 0,
       "errors": 0,
       "test_files": 171,
@@ -99,7 +99,7 @@
     },
     "fresh_zip_extraction_regression_suite": {
       "status": "PASS",
-      "passed": 649,
+      "passed": 650,
       "failed": 0,
       "errors": 0,
       "test_files": 171,
@@ -118,19 +118,23 @@
     "application_runtime_audit": {
       "status": "PASS",
       "target_request_ids": [
-        "6d3429f1dae84863a362e3abbc7aede2",
-        "efc1820735ba45ddb9eb04e676ec795a"
+        "5acf12d46319424082fce5db5a1be9f2",
+        "018889aa696f4be0a1ddf107e6c2ceec"
       ],
       "bridge_id_hashes": [
-        "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
-        "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f"
+        "5e90ff8b7d09cc925cc40eff93f069ac1ced368d0782e01c40d31e99c81a8537",
+        "b0696582ebb77b961ec91dd7a00e9d37270d238f7a77e1d915ae45632e28a658"
       ],
       "canonical_round_ids": [
-        "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
-        "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2"
+        "feed1d2f115b4dbc83fe3461cd840647:5acf12d46319424082fce5db5a1be9f2:r1",
+        "feed1d2f115b4dbc83fe3461cd840647:018889aa696f4be0a1ddf107e6c2ceec:r2"
       ],
-      "persisted_runtime_execution_events": 4,
-      "source": "Final corrected deployed-application audit report supplied by the user",
+      "persisted_runtime_execution_events": 5,
+      "per_request_execution_event_counts": [
+        3,
+        2
+      ],
+      "source": "Latest deployed-application audit report supplied by the user on 2026-10-18",
       "offline_tests_are_provider_calls": false
     }
   },
@@ -141,30 +145,38 @@
     "target_selection_status": "EXPLICIT_TARGETS_SELECTED",
     "blockers": [],
     "target_request_ids": [
-      "6d3429f1dae84863a362e3abbc7aede2",
-      "efc1820735ba45ddb9eb04e676ec795a"
+      "5acf12d46319424082fce5db5a1be9f2",
+      "018889aa696f4be0a1ddf107e6c2ceec"
     ],
     "canonical_round_ids": [
-      "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
-      "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2"
+      "feed1d2f115b4dbc83fe3461cd840647:5acf12d46319424082fce5db5a1be9f2:r1",
+      "feed1d2f115b4dbc83fe3461cd840647:018889aa696f4be0a1ddf107e6c2ceec:r2"
     ],
     "target_bridge_id_hashes": [
-      "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
-      "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f"
+      "5e90ff8b7d09cc925cc40eff93f069ac1ced368d0782e01c40d31e99c81a8537",
+      "b0696582ebb77b961ec91dd7a00e9d37270d238f7a77e1d915ae45632e28a658"
     ],
-    "runtime_execution_event_count": 4,
+    "runtime_execution_event_count": 5,
     "canonical_counts": {
       "canonical_message_count": 2,
       "canonical_request_count": 2,
       "canonical_round_count": 2
     },
-    "source": "Final corrected deployed-application audit report supplied by the user on 2026-10-18",
-    "scope": "The application report declares PASS for these two explicit targets. Offline tests validate the report contract and do not independently call providers or create runtime events.",
+    "source": "Latest user-provided deployed-application audit report on 2026-10-18",
+    "scope": "Application audit declares PASS for these latest explicit targets. Offline tests validate report contract only and do not make provider calls or create runtime events.",
     "previous_mistyped_target_request_ids": [
       "274521681c3b49b68bf988c128803b69",
       "317d3f311ffe4ff782eeff2fa4351454"
     ],
-    "previous_mistyped_target_audit_status": "NOT_PROVEN"
+    "previous_mistyped_target_audit_status": "NOT_PROVEN",
+    "per_request_runtime_execution_event_counts": [
+      3,
+      2
+    ],
+    "superseded_prior_corrected_request_ids": [
+      "6d3429f1dae84863a362e3abbc7aede2",
+      "efc1820735ba45ddb9eb04e676ec795a"
+    ]
   },
   "corrective_change": {
     "stale_target_ids_cleared": true,

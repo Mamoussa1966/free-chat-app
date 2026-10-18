@@ -1,6 +1,6 @@
 {
   "schema": "hotfix164.26-corrected-runtime-closure-replacement/v1",
-  "package": "HOTFIX164.26_CORRECTED_RUNTIME_BRIDGE_CLOSURE_REPLACEMENT_FILES",
+  "package": "HOTFIX164.26_LATEST_RUNTIME_BRIDGE_CLOSURE_REPLACEMENT_FILES",
   "target_repository": "Mamoussa1966/free-chat-app",
   "target_branch": "gitops-v0.4-final",
   "base_commit": "8d4dc1233ce40118b95cc41c81fc7ec0f1d1ba97",
@@ -34,16 +34,16 @@
     "strict_live_bridge_proof_status": "PASS",
     "target_bridge_independence_status": "PASS",
     "target_request_ids": [
-      "6d3429f1dae84863a362e3abbc7aede2",
-      "efc1820735ba45ddb9eb04e676ec795a"
+      "5acf12d46319424082fce5db5a1be9f2",
+      "018889aa696f4be0a1ddf107e6c2ceec"
     ],
     "canonical_round_ids": [
-      "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
-      "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2"
+      "feed1d2f115b4dbc83fe3461cd840647:5acf12d46319424082fce5db5a1be9f2:r1",
+      "feed1d2f115b4dbc83fe3461cd840647:018889aa696f4be0a1ddf107e6c2ceec:r2"
     ],
     "bridge_id_hashes": [
-      "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
-      "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f"
+      "5e90ff8b7d09cc925cc40eff93f069ac1ced368d0782e01c40d31e99c81a8537",
+      "b0696582ebb77b961ec91dd7a00e9d37270d238f7a77e1d915ae45632e28a658"
     ],
     "blockers": [],
     "canonical_counts": {
@@ -51,13 +51,21 @@
       "canonical_request_count": 2,
       "canonical_round_count": 2
     },
-    "runtime_execution_event_count": 4,
-    "source": "Final corrected user-supplied deployed application audit report",
+    "runtime_execution_event_count": 5,
+    "source": "Latest user-supplied deployed application audit report on 2026-10-18",
     "previous_mistyped_target_request_ids": [
       "274521681c3b49b68bf988c128803b69",
       "317d3f311ffe4ff782eeff2fa4351454"
     ],
-    "previous_mistyped_target_audit_status": "NOT_PROVEN"
+    "previous_mistyped_target_audit_status": "NOT_PROVEN",
+    "per_request_runtime_execution_event_counts": [
+      3,
+      2
+    ],
+    "superseded_prior_corrected_run_request_ids": [
+      "6d3429f1dae84863a362e3abbc7aede2",
+      "efc1820735ba45ddb9eb04e676ec795a"
+    ]
   },
   "validation_scope": {
     "offline_report_acceptance_gate": "PASS when verifier succeeds",
@@ -83,16 +91,16 @@
     "HOTFIX164.26_FINAL_CLOSURE_STATUS.md"
   ],
   "validation": {
-    "application_runtime_audit": "PASS for two explicit current request IDs in the supplied report",
-    "full_regression_suite": "PASS (649 passed, 0 failed, 0 errors across 171 test files)",
-    "fresh_zip_extraction_suite": "PASS (649 passed, 0 failed, 0 errors across 171 test files)",
+    "application_runtime_audit": "PASS for the latest two explicit request IDs in the supplied report",
+    "full_regression_suite": "PASS (650 passed, 0 failed, 0 errors across 171 test files)",
+    "fresh_zip_extraction_suite": "PASS (650 passed, 0 failed, 0 errors across 171 test files)",
     "zip_roundtrip": "PASS (full release has 415 entries at archive root; no nested ZIP)",
     "production_core_gate": "PASS",
     "live_provider_calls_made_by_offline_gate": false,
     "provider_core_identity_changed": false,
     "version_txt_unchanged": true,
     "github_write_performed": false,
-    "runtime_audit_acceptance_gate": "PASS",
-    "replacement_zip_roundtrip": "PASS (20 replacement files directly at archive root; no nested ZIP)"
+    "runtime_audit_acceptance_gate": "PASS for the latest supplied report snapshot",
+    "replacement_zip_roundtrip": "PASS (20 replacement files at archive root; no nested ZIP)"
   }
 }

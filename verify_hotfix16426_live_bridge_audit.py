@@ -166,7 +166,7 @@ def main() -> int:
     print(f"REQUEST_A={selected_ids[0]}")
     print(f"REQUEST_B={selected_ids[1]}")
     print("CANONICAL_MESSAGE_REQUEST_ROUND=2/2/2")
-    print("PERSISTED_RUNTIME_EXECUTION_EVENTS=4")
+    print(f"PERSISTED_RUNTIME_EXECUTION_EVENTS={report.get('runtime_execution_event_count')}")
     print("STRICT_LIVE_BRIDGE_EVIDENCE=2 PASS / 2 distinct bridge hashes")
     print("SIDE_EFFECTS=NONE_OBSERVED")
     return 0
