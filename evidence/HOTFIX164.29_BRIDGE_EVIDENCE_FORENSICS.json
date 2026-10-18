@@ -1,0 +1,161 @@
+{
+  "application_release_identity": "HOTFIX164.29 — INDEPENDENT HTTP-ATTESTED BRIDGE CLOSURE GATE",
+  "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE_AND_APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE",
+  "blockers": [
+    "NO_EXPLICIT_TARGETS_PROVIDED"
+  ],
+  "canonical_counter_consistent": true,
+  "canonical_counter_status": "PASS",
+  "canonical_counts": {
+    "canonical_message_count": 2,
+    "canonical_request_count": 2,
+    "canonical_round_count": 2
+  },
+  "canonical_history_hash_stable_during_audit": true,
+  "canonical_identity_chain_valid": true,
+  "canonical_request_ids_count": 2,
+  "canonical_vs_persisted_request_counter_status": "PASS",
+  "cascade_execution": 0,
+  "duplicate_canonical_request_ids": [],
+  "execution_started_count": 4,
+  "execution_started_source": "PERSISTED_APPLICATION_OWNED_RUNTIME_EXECUTION_EVENTS_ONLY",
+  "fail_closed_rule": "FAIL_OR_NOT_PROVEN_IF_ANY_COUNTER_CONFLICTS_OR_REQUIRED_TARGET_OR_BRIDGE_EVIDENCE_IS_MISSING",
+  "historical_canonical_counts_unchanged": {
+    "canonical_message_count": 2,
+    "canonical_request_count": 2,
+    "canonical_round_count": 2
+  },
+  "historical_records_preserved": true,
+  "live_state_unchanged": true,
+  "mode": "READ_ONLY_EXPLICIT_TARGETS",
+  "new_bridges": 0,
+  "new_requests": 0,
+  "new_rounds": 0,
+  "parent_schema": "hotfix164.19-read-only-existing-records-audit/v1",
+  "persisted_request_record_count": 2,
+  "projection_only_request_ids": [],
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "provider_execution": 0,
+  "read_only": true,
+  "read_only_live_state_unchanged": true,
+  "read_only_side_effects": "NONE_OBSERVED",
+  "read_side_effects": "NONE_OBSERVED",
+  "report_generated_at": "2026-10-18T15:41:39+00:00",
+  "request_created_count": 2,
+  "request_diagnostic_count": 2,
+  "requests": [
+    {
+      "actual_model_attestation_present": true,
+      "authoritative_metrics_present": true,
+      "bridge_contract": "STRICT_LIVE",
+      "bridge_requested": true,
+      "canonical_request_present": true,
+      "canonical_round_binding_status": "PASS",
+      "canonical_round_ordinals": [
+        1
+      ],
+      "canonical_round_records_for_request": 1,
+      "cascade_summary_present": true,
+      "direct_request_projection_present": true,
+      "execution_identity_status": "PASS",
+      "execution_started_count": 2,
+      "message_identity_status": "PASS",
+      "missing_required_artifacts": [],
+      "request_execution_status": "PASS",
+      "request_id": "adaa67bb2267476bac36d4ae6b67610b",
+      "required_artifacts": {
+        "AUTHORITATIVE_METRICS": "PASS",
+        "BRIDGE_AUDIT": "PASS",
+        "CASCADE_SUMMARIES": "PASS",
+        "EXECUTED_MODELS": "PASS",
+        "FINAL_RESULT": "PASS",
+        "REQUEST_ID": "PASS",
+        "ROUND_ID": "PASS",
+        "SEAT_RESULTS": "PASS",
+        "SESSION_ID": "PASS",
+        "USER_MESSAGE": "PASS"
+      },
+      "result_record_count": 6,
+      "result_request_identity_status": "PASS",
+      "status": "PASS",
+      "strict_live_bridge_status": "PASS",
+      "synthesis_record_present": true
+    },
+    {
+      "actual_model_attestation_present": true,
+      "authoritative_metrics_present": true,
+      "bridge_contract": "STRICT_LIVE",
+      "bridge_requested": true,
+      "canonical_request_present": true,
+      "canonical_round_binding_status": "PASS",
+      "canonical_round_ordinals": [
+        2
+      ],
+      "canonical_round_records_for_request": 1,
+      "cascade_summary_present": true,
+      "direct_request_projection_present": true,
+      "execution_identity_status": "PASS",
+      "execution_started_count": 2,
+      "message_identity_status": "PASS",
+      "missing_required_artifacts": [],
+      "request_execution_status": "PASS",
+      "request_id": "bd9dc770dd6949669950fcdf7c28df27",
+      "required_artifacts": {
+        "AUTHORITATIVE_METRICS": "PASS",
+        "BRIDGE_AUDIT": "PASS",
+        "CASCADE_SUMMARIES": "PASS",
+        "EXECUTED_MODELS": "PASS",
+        "FINAL_RESULT": "PASS",
+        "REQUEST_ID": "PASS",
+        "ROUND_ID": "PASS",
+        "SEAT_RESULTS": "PASS",
+        "SESSION_ID": "PASS",
+        "USER_MESSAGE": "PASS"
+      },
+      "result_record_count": 6,
+      "result_request_identity_status": "PASS",
+      "status": "PASS",
+      "strict_live_bridge_status": "PASS",
+      "synthesis_record_present": true
+    }
+  ],
+  "runtime_execution_event_count": 4,
+  "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
+  "security_audit_status": "PASS",
+  "status": "NOT_PROVEN",
+  "strict_live_bridge_proof": {
+    "authoritative_source": "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE",
+    "fail_closed_rule": "MISSING_OR_INCOMPLETE_EVIDENCE_NEVER_PASSES",
+    "raw_bridge_id_exported": false,
+    "raw_bridge_value_exported": false,
+    "raw_prompt_or_http_body_exported": false,
+    "records": [
+      {
+        "canonical_round_binding_status": "PASS",
+        "evidence_record_present": true,
+        "failure_reasons": [],
+        "missing_evidence": [],
+        "request_id": "adaa67bb2267476bac36d4ae6b67610b",
+        "request_identity_status": "PASS",
+        "status": "PASS"
+      },
+      {
+        "canonical_round_binding_status": "PASS",
+        "evidence_record_present": true,
+        "failure_reasons": [],
+        "missing_evidence": [],
+        "request_id": "bd9dc770dd6949669950fcdf7c28df27",
+        "request_identity_status": "PASS",
+        "status": "PASS"
+      }
+    ],
+    "request_count": 2,
+    "schema": "strict-live-bridge-proof-diagnostics/v1",
+    "status": "PASS"
+  },
+  "target_bridge_independence_status": "NOT_PROVEN",
+  "target_request_count": 0,
+  "target_request_ids": [],
+  "target_requests": [],
+  "target_selection_status": "NO_TARGETS"
+}
