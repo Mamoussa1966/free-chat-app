@@ -766,6 +766,9 @@ class SharedContextBridge:
             "runtime_http_payload_attested": audit.get("RUNTIME_HTTP_PAYLOAD_ATTESTED", "NOT_PROVEN"),
             "runtime_http_payload_hash_integrity": audit.get("RUNTIME_HTTP_PAYLOAD_HASH_INTEGRITY", "NOT_PROVEN"),
             "runtime_payload_sha256": str(payload_attestation.get("payload_sha256") or ""),
+            "runtime_payload_bytes": int(payload_attestation.get("payload_bytes_verified") or payload_attestation.get("payload_bytes") or 0),
+            "runtime_payload_endpoint_sha256": str(payload_attestation.get("endpoint_sha256") or ""),
+            "runtime_payload_executed_model": str(payload_attestation.get("executed_model") or ""),
             "runtime_payload_transport_boundary": str(payload_attestation.get("transport_boundary") or "NOT_PROVEN"),
             "runtime_payload_prepared_request_verified": "YES" if payload_attestation.get("prepared_request_verified") is True else "NOT_PROVEN",
             "runtime_payload_request_binding_status": str(payload_attestation.get("request_identity_binding_status") or "NOT_PROVEN"),
@@ -3561,6 +3564,11 @@ def _hotfix16428_active_chat_binding(chat: dict | None) -> str:
             key: evidence.get(key) for key in (
                 "request_id", "canonical_round_id", "bridge_id_hash", "audit_seal_hash",
                 "runtime_sequence_valid", "bridge_gate_status", "runtime_payload_sha256",
+                "runtime_payload_bytes", "runtime_payload_endpoint_sha256", "runtime_payload_executed_model",
+                "runtime_payload_transport_boundary", "runtime_payload_prepared_request_verified",
+                "runtime_payload_request_binding_status", "runtime_payload_round_binding_status",
+                "runtime_payload_target_binding_status", "runtime_payload_response_binding_status",
+                "runtime_payload_canonical_round_binding_status",
             )
         }
     canonical_record_evidence = {}
@@ -3574,6 +3582,11 @@ def _hotfix16428_active_chat_binding(chat: dict | None) -> str:
                 key: evidence.get(key) for key in (
                     "request_id", "canonical_round_id", "bridge_id_hash", "audit_seal_hash",
                     "runtime_sequence_valid", "bridge_gate_status", "runtime_payload_sha256",
+                "runtime_payload_bytes", "runtime_payload_endpoint_sha256", "runtime_payload_executed_model",
+                "runtime_payload_transport_boundary", "runtime_payload_prepared_request_verified",
+                "runtime_payload_request_binding_status", "runtime_payload_round_binding_status",
+                "runtime_payload_target_binding_status", "runtime_payload_response_binding_status",
+                "runtime_payload_canonical_round_binding_status",
                 )
             }
     material = {
@@ -3626,6 +3639,109 @@ def _hotfix16420_round_ordinal(row: dict) -> str:
         if value not in (None, ""):
             return str(value).strip()
     return ""
+
+
+def _hotfix16429_export_runtime_http_attestation(evidence: dict | None, request_id: str, round_ordinal: str) -> dict:
+    """Expose only safe HTTP-body integrity metadata for independent release verification.
+
+    No raw Bridge value, Bridge ID, prompt, request payload, or endpoint is exported.
+    Internal request/round IDs are represented as PASS/FAIL bindings in each event.
+    """
+    evidence = evidence if isinstance(evidence, dict) else {}
+    sequence = evidence.get("runtime_sequence") if isinstance(evidence.get("runtime_sequence"), list) else []
+    safe_sequence = []
+    source_phases = {"SOURCE_EXECUTION", "WRITE", "VALIDATE"}
+    phases = ["SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH"]
+    for event in sequence:
+        if not isinstance(event, dict):
+            continue
+        phase = str(event.get("phase") or "").upper()
+        try:
+            event_round = str(int(event.get("round_id") or 0))
+        except (TypeError, ValueError):
+            event_round = ""
+        seat = str(event.get("seat") or "")
+        target_seat = str(event.get("target_seat") or "")
+        if phase in source_phases:
+            role_match = seat == "7"
+        elif phase == "COMMIT":
+            role_match = target_seat == "2"
+        else:
+            role_match = seat == "2" and target_seat == "2"
+        safe_sequence.append({
+            "seq": event.get("seq"),
+            "phase": phase,
+            "status": str(event.get("status") or "NOT_PROVEN").upper(),
+            "seat": seat or "NOT_PROVEN",
+            "target_seat": target_seat or "NOT_PROVEN",
+            "request_identity_status": "PASS" if str(event.get("request_id") or "") == str(request_id) else "FAIL",
+            "round_identity_status": "PASS" if event_round == str(round_ordinal) else "FAIL",
+            "role_identity_status": "PASS" if role_match else "FAIL",
+        })
+    try:
+        payload_bytes = int(evidence.get("runtime_payload_bytes") or 0)
+    except (TypeError, ValueError):
+        payload_bytes = 0
+    payload_hash = str(evidence.get("runtime_payload_sha256") or "").strip().lower()
+    return {
+        "schema": "hotfix164.29-runtime-http-attestation/v1",
+        "request_id": str(request_id or ""),
+        "canonical_round_id": str(evidence.get("canonical_round_id") or ""),
+        "canonical_round_ordinal": str(round_ordinal or ""),
+        "bridge_id_hash": str(evidence.get("bridge_id_hash") or "").strip().lower(),
+        "source_provider": str(evidence.get("source_provider") or "NOT_PROVEN"),
+        "source_seat": str(evidence.get("source_seat") or "NOT_PROVEN"),
+        "target_provider": str(evidence.get("target_provider") or "NOT_PROVEN"),
+        "target_seat": str(evidence.get("target_seat") or "NOT_PROVEN"),
+        "executed_model": str(evidence.get("runtime_payload_executed_model") or "NOT_PROVEN"),
+        "payload_sha256": payload_hash,
+        "endpoint_sha256": str(evidence.get("runtime_payload_endpoint_sha256") or "").strip().lower(),
+        "payload_bytes": payload_bytes,
+        "payload_hash_integrity": str(evidence.get("runtime_http_payload_hash_integrity") or "NOT_PROVEN"),
+        "http_payload_attested": str(evidence.get("runtime_http_payload_attested") or "NOT_PROVEN"),
+        "transport_boundary": str(evidence.get("runtime_payload_transport_boundary") or "NOT_PROVEN"),
+        "prepared_request_verified": str(evidence.get("runtime_payload_prepared_request_verified") or "NOT_PROVEN"),
+        "request_binding_status": str(evidence.get("runtime_payload_request_binding_status") or "NOT_PROVEN"),
+        "round_binding_status": str(evidence.get("runtime_payload_round_binding_status") or "NOT_PROVEN"),
+        "target_binding_status": str(evidence.get("runtime_payload_target_binding_status") or "NOT_PROVEN"),
+        "response_binding_status": str(evidence.get("runtime_payload_response_binding_status") or "NOT_PROVEN"),
+        "canonical_round_binding_status": str(evidence.get("runtime_payload_canonical_round_binding_status") or "NOT_PROVEN"),
+        "runtime_sequence_valid": str(evidence.get("runtime_sequence_valid") or "NOT_PROVEN"),
+        "source_execution_proven": str(evidence.get("source_execution_proven") or "NOT_PROVEN"),
+        "write_status": str(evidence.get("write_status") or "NOT_PROVEN"),
+        "validate_status": str(evidence.get("validate_status") or "NOT_PROVEN"),
+        "commit_status": str(evidence.get("commit_status") or "NOT_PROVEN"),
+        "barrier_status": str(evidence.get("barrier_status") or "NOT_PROVEN"),
+        "target_dispatch_status": str(evidence.get("target_dispatch_status") or "NOT_PROVEN"),
+        "target_response_status": str(evidence.get("target_response_status") or "NOT_PROVEN"),
+        "read_status": str(evidence.get("read_status") or "NOT_PROVEN"),
+        "match_status": str(evidence.get("match_status") or "NOT_PROVEN"),
+        "user_prompt_contains_value": str(evidence.get("user_prompt_contains_value") or "NOT_PROVEN"),
+        "target_prompt_contains_value": str(evidence.get("gemini_input_prompt_contains_value") or "NOT_PROVEN"),
+        "http_payload_contains_value": str(evidence.get("runtime_http_payload_contains_value") or "NOT_PROVEN"),
+        "http_payload_contains_bridge_key": str(evidence.get("runtime_http_payload_contains_bridge_key") or "NOT_PROVEN"),
+        "http_payload_contains_bridge_id": str(evidence.get("runtime_http_payload_contains_bridge_id") or "NOT_PROVEN"),
+        "http_payload_contains_request_id": str(evidence.get("runtime_http_payload_contains_request_id") or "NOT_PROVEN"),
+        "http_payload_contains_canonical_round_id": str(evidence.get("runtime_http_payload_contains_canonical_round_id") or "NOT_PROVEN"),
+        "user_prompt_contains_bridge_id": str(evidence.get("user_prompt_contains_bridge_id") or "NOT_PROVEN"),
+        "provider_prompt_contains_bridge_id": str(evidence.get("provider_prompt_contains_bridge_id") or "NOT_PROVEN"),
+        "target_prompt_contains_bridge_id": str(evidence.get("gemini_input_prompt_contains_bridge_id") or "NOT_PROVEN"),
+        "target_prompt_contains_bridge_key": str(evidence.get("gemini_input_prompt_contains_bridge_key") or "NOT_PROVEN"),
+        "target_prompt_contains_request_id": str(evidence.get("gemini_input_prompt_contains_request_id") or "NOT_PROVEN"),
+        "target_prompt_contains_canonical_round_id": str(evidence.get("gemini_input_prompt_contains_canonical_round_id") or "NOT_PROVEN"),
+        "control_plane_identity_leak": str(evidence.get("control_plane_identity_leak") or "NOT_PROVEN"),
+        "sanitized_representation_only": str(evidence.get("gemini_received_sanitized_representation_only") or "NOT_PROVEN"),
+        "application_owned": str(evidence.get("application_owned") or "NOT_PROVEN"),
+        "bridge_gate_status": str(evidence.get("bridge_gate_status") or "NOT_PROVEN"),
+        "terminal_state": str(evidence.get("terminal_state") or "NOT_PROVEN"),
+        "bridge_state_terminal": str(evidence.get("bridge_state_terminal") or "NOT_PROVEN"),
+        "phase_sequence": safe_sequence,
+        "expected_phase_sequence": phases,
+        "raw_payload_exported": False,
+        "raw_prompt_exported": False,
+        "raw_bridge_value_exported": False,
+        "raw_bridge_id_exported": False,
+    }
 
 
 def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=None) -> dict:
@@ -3763,6 +3879,9 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         report.update({
             "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
             "parent_schema": str(base.get("schema") or "NOT_PROVEN"),
+            "application_release_identity": CURRENT_HOTFIX_RELEASE_VERSION,
+            "provider_core_identity": PROVIDER_VERSION,
+            "report_generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "status": status,
             "mode": "READ_ONLY_EXPLICIT_TARGETS",
             "target_selection_status": "NO_TARGETS",
@@ -3988,6 +4107,10 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
             "bridge_request_round_binding_status": "FAIL" if "BRIDGE_REQUEST_ROUND_BINDING_MISMATCH" in failures or "BRIDGE_REQUEST_ID_BINDING_MISMATCH" in failures else "PASS" if bridge_status == "PASS" else "NOT_PROVEN",
             "bridge_proof_status": bridge_status,
             "bridge_id_hash": bridge_hash or "NOT_PROVEN",
+            "runtime_http_attestation": _hotfix16429_export_runtime_http_attestation(
+                evidence if len(evidence_matches) == 1 and isinstance(evidence_matches[0][1], dict) else {},
+                rid, str(round_ordinal or ""),
+            ),
             "missing_evidence": sorted(set(missing)),
             "failure_reasons": sorted(set(failures)),
             "status": target_status,
@@ -4045,6 +4168,9 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
     report.update({
         "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
         "parent_schema": str(base.get("schema") or "NOT_PROVEN"),
+        "application_release_identity": CURRENT_HOTFIX_RELEASE_VERSION,
+        "provider_core_identity": PROVIDER_VERSION,
+        "report_generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "status": overall,
         "mode": "READ_ONLY_EXPLICIT_TARGETS",
         "read_only": True,
@@ -4084,7 +4210,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25", "HOTFIX164.26", "HOTFIX164.27", "HOTFIX164.28"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25", "HOTFIX164.26", "HOTFIX164.27", "HOTFIX164.28", "HOTFIX164.29"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -4113,7 +4239,7 @@ def _render_hotfix16419_read_only_page() -> None:
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.28 — Request-Bound Bridge Closure")
+        st.title("HOTFIX164.29 — Independent HTTP-Attested Bridge Closure Gate")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
@@ -4158,10 +4284,10 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.28 — Request-Bound Bridge Closure",
+            "HOTFIX164.29 — Independent HTTP-Attested Bridge Closure Gate",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.28_BRIDGE_EVIDENCE_FORENSICS.json",
+            download_name="HOTFIX164.29_BRIDGE_EVIDENCE_FORENSICS.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -4182,7 +4308,7 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.28 — Request-Bound Bridge Closure", key="hotfix16422_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.29 — Independent Closure Gate", key="hotfix16422_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16422_read_only_requested"] = True
         st.session_state["_hotfix16422_read_only_mode"] = True
         st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [

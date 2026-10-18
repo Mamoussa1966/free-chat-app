@@ -1,0 +1,51 @@
+{
+  "schema": "hotfix164.29-replacement-files-manifest/v1",
+  "package": "HOTFIX164.29_INDEPENDENT_CLOSURE_GATE_REPLACEMENT_FILES.zip",
+  "release": "HOTFIX164.29",
+  "target_repository": "Mamoussa1966/free-chat-app",
+  "target_branch": "gitops-v0.4-final",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "version_txt_changed": false,
+  "replacement_paths": [
+    "HOTFIX164.29_INDEPENDENT_CLOSURE_GATE.py",
+    "HOTFIX164.29_RELEASE_MANIFEST.json",
+    "HOTFIX164.29_RELEASE_NOTES.md",
+    "HOTFIX164.29_FINAL_CLOSURE_STATUS.md",
+    "HOTFIX164.29_PATCH_APPLY_STEPS.md",
+    "VERSION.txt",
+    "main.py",
+    "providers.py",
+    "build_release.py",
+    ".github/workflows/hotfix164-29-independent-closure.yml",
+    "tests/test_hotfix16425_release_contract.py",
+    "tests/test_provider_runtime.py",
+    "tests/test_hotfix16429_independent_closure_gate.py"
+  ],
+  "sha256_by_path": {
+    "HOTFIX164.29_INDEPENDENT_CLOSURE_GATE.py": "fbad158e169987cc10994036975c0f036c64a414e25b3fe729203df4875125fc",
+    "HOTFIX164.29_RELEASE_MANIFEST.json": "de201d910cfa77adae633868f8c21f4caffb22ab5c415f285223aef6489c8ca5",
+    "HOTFIX164.29_RELEASE_NOTES.md": "2817d6a93e3cd87d41886a913595adfbe95033eb92211cf48b60de3538842276",
+    "HOTFIX164.29_FINAL_CLOSURE_STATUS.md": "17b6f7e4944c9afa6b8c064be985f98c8617b482f2f589656d20db28350c971f",
+    "HOTFIX164.29_PATCH_APPLY_STEPS.md": "d3dba58e03d82746cf9fe49337ec31bb050c7f6447f8bfa32da9cabfe3829913",
+    "VERSION.txt": "de5a5d916559ce86c0a39e39b175968cbe479d3919ca6502322eb3004a533b26",
+    "main.py": "7d3a673d7c3e74ed4cc4ccb1179c3433c6ec6c15ac3b200b61d2ced28126fecf",
+    "providers.py": "f9fab0525dc97d67574052de9cba6ea0cc67f8218eadf6d141a8f31620ac43e0",
+    "build_release.py": "f37229518d2a7512a388eba22beb30fa9d0765f72eaa377acb5521a8246f4aae",
+    ".github/workflows/hotfix164-29-independent-closure.yml": "2ddf9343d9b3c5a8171ee552727d19267a87bedfd9f3bb5d3b95e6e49fc3beac",
+    "tests/test_hotfix16425_release_contract.py": "d61e23116a4df13b04a88ccd3f055647ca8a533d7ea3d87ed37ad4a243ba0398",
+    "tests/test_provider_runtime.py": "bf3b8f19a66c3e5f0ede38bae6c7e1724315ad61f258741c2c78b3dd5dedf5b8",
+    "tests/test_hotfix16429_independent_closure_gate.py": "89bddb5a6926dcdfec1c94f0e880c5a66a528aab1edcbb7c2692d32d307b6301"
+  },
+  "verified_contracts": {
+    "release_identity_bumped_to_hotfix16429": true,
+    "app_report_exports_redacted_http_body_attestations": true,
+    "independent_gate_checks_evidence_archive_manifest_and_version": true,
+    "missing_or_stale_live_evidence_fails_closed": true,
+    "full_suite_passed": 660,
+    "failed": 0,
+    "errors": 0,
+    "test_files": 173,
+    "root_level_full_archive_roundtrip_passed": true,
+    "live_final_closure_proven": false
+  }
+}
