@@ -1,0 +1,157 @@
+name: HOTFIX164.30 Deployed Commit-Bound Live Closure
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_path:
+        description: "Fresh JSON exported from the deployed HOTFIX164.30 app"
+        required: true
+        default: "evidence/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json"
+        type: string
+      deployed_commit_sha:
+        description: "Fallback only if the deployed host cannot report its own Git SHA"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hotfix164-30-deployed-commit-closure-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deployed-commit-closure:
+    name: Regression, package identity, runtime commit and source-bundle gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout evidence-bearing revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Save fresh app-exported report before checking out deployed source
+        id: report
+        env:
+          EVIDENCE_PATH: ${{ inputs.evidence_path }}
+          FALLBACK_COMMIT: ${{ inputs.deployed_commit_sha }}
+        run: |
+          test -f "$EVIDENCE_PATH"
+          cp "$EVIDENCE_PATH" "$RUNNER_TEMP/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json"
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          report = json.loads(Path(os.environ["RUNNER_TEMP"]).joinpath("HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json").read_text(encoding="utf-8"))
+          att = report.get("deployment_attestation") if isinstance(report, dict) else None
+          observed = str((att or {}).get("observed_git_commit_sha") or "").strip().lower()
+          fallback = str(os.environ.get("FALLBACK_COMMIT") or "").strip().lower()
+          if re.fullmatch(r"[0-9a-f]{40}", observed):
+              selected = observed
+              method = "runtime_git_sha"
+          elif re.fullmatch(r"[0-9a-f]{40}", fallback):
+              selected = fallback
+              method = "user_supplied_fallback"
+          else:
+              raise SystemExit("DEPLOYED_COMMIT_NOT_AVAILABLE: wait for app deployment or enter the exact deployed commit SHA")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"sha={selected}\nmethod={method}\n")
+          print(f"DEPLOYED_SOURCE_COMMIT_SELECTED={selected}")
+          print(f"COMMIT_SELECTION_METHOD={method}")
+          PY
+
+      - name: Checkout exact commit claimed by the deployed app
+        env:
+          TARGET_SHA: ${{ steps.report.outputs.sha }}
+        run: |
+          git fetch --no-tags origin "$TARGET_SHA"
+          git checkout --detach "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          echo "CHECKED_OUT_DEPLOYED_COMMIT=$TARGET_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Confirm frozen provider core and HOTFIX164.30 source contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import main, providers
+          expected = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+          manifest = json.loads(Path("HOTFIX164.30_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+          assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == expected
+          assert providers.VERSION == expected and main.DISPLAY_VERSION == providers.CURRENT_HOTFIX_RELEASE_VERSION
+          assert providers.CURRENT_HOTFIX_RELEASE_VERSION == manifest["deployed_release_label"]
+          assert manifest["release"] == "HOTFIX164.30"
+          assert manifest["bridge_closure_contract"]["live_final_closure_proven"] is False
+          print("FROZEN_PROVIDER_IDENTITY=PASS")
+          print("HOTFIX164.30_RELEASE_IDENTITY=PASS")
+          print("CLOSURE_NOT_PRECLAIMED=PASS")
+          PY
+
+      - name: Run complete offline regression suite
+        run: pytest -q
+
+      - name: Build exact root-level HOTFIX164.30 release archive and checksum
+        run: |
+          mkdir -p dist
+          python build_release.py --output dist/HOTFIX164.30_FULL_RELEASE_CANDIDATE.zip
+
+      - name: Independently bind fresh app evidence to exact deployed commit and source bundle
+        id: live_gate
+        run: |
+          python HOTFIX164.30_DEPLOYMENT_COMMIT_GATE.py \
+            --evidence "$RUNNER_TEMP/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json" \
+            --manifest HOTFIX164.30_RELEASE_MANIFEST.json \
+            --zip dist/HOTFIX164.30_FULL_RELEASE_CANDIDATE.zip \
+            --sha256 dist/HOTFIX164.30_FULL_RELEASE_CANDIDATE.zip.sha256 \
+            --expected-commit "$(git rev-parse HEAD)" \
+            --output dist/HOTFIX164.30_INDEPENDENT_CLOSURE_RESULT.json \
+            --verified-manifest-output dist/HOTFIX164.30_VERIFIED_RELEASE_MANIFEST.json
+
+      - name: Upload diagnostic result even when the closure gate blocks
+        if: ${{ always() && hashFiles('dist/HOTFIX164.30_INDEPENDENT_CLOSURE_RESULT.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: HOTFIX164.30-deployed-commit-closure-diagnostics
+          path: dist/HOTFIX164.30_INDEPENDENT_CLOSURE_RESULT.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish candidate artifact only after independently verified deployed closure
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: HOTFIX164.30-deployed-commit-closure-verified-candidate
+          path: |
+            dist/HOTFIX164.30_FULL_RELEASE_CANDIDATE.zip
+            dist/HOTFIX164.30_FULL_RELEASE_CANDIDATE.zip.sha256
+            dist/HOTFIX164.30_INDEPENDENT_CLOSURE_RESULT.json
+            dist/HOTFIX164.30_VERIFIED_RELEASE_MANIFEST.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Assert final deployment-bound closure PASS
+        if: ${{ success() }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("dist/HOTFIX164.30_INDEPENDENT_CLOSURE_RESULT.json").read_text(encoding="utf-8"))
+          if report.get("status") != "PASS" or report.get("live_final_closure_proven") is not True:
+              raise SystemExit("HOTFIX164.30_DEPLOYED_COMMIT_FINAL_CLOSURE_NOT_PROVEN")
+          if not report.get("verified_deployed_commit_sha") or report.get("deployment_commit_binding_method") == "NOT_PROVEN":
+              raise SystemExit("HOTFIX164.30_DEPLOYED_COMMIT_IDENTITY_NOT_PROVEN")
+          print("HOTFIX164.30_DEPLOYED_COMMIT_FINAL_CLOSURE=PASS")
+          print("VERIFIED_DEPLOYED_COMMIT_SHA=" + report["verified_deployed_commit_sha"])
+          PY
