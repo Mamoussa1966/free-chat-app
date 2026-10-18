@@ -63,7 +63,7 @@ jobs:
         run: |
           python build_release.py --output dist/HOTFIX164.29_FULL_RELEASE_CANDIDATE.zip
           cp RELEASE_MANIFEST.json dist/RELEASE_MANIFEST.json
-
+          sha256sum dist/HOTFIX164.29_FULL_RELEASE_CANDIDATE.zip > dist/HOTFIX164.29_FULL_RELEASE_CANDIDATE.zip.sha256
       - name: Verify live A/B evidence against the exact archive, manifest, and frozen identity
         id: live_gate
         env:
