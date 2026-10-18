@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -7,6 +8,15 @@ import providers
 from providers import SEATS, call_seat
 
 DEEPSEEK = next(seat for seat in SEATS if seat.key == "deepseek")
+
+
+def _posted_payload(post):
+    """Decode the one attested body actually passed to requests.post."""
+    kwargs = post.call_args.kwargs
+    assert "json" not in kwargs
+    body = kwargs["data"]
+    assert isinstance(body, bytes)
+    return json.loads(body.decode("utf-8"))
 
 
 def _response(status, text, payload=None, headers=None):
@@ -32,9 +42,9 @@ def test_deepseek_success_records_exact_executed_model():
     with patch("providers.requests.post", return_value=response) as post:
         result = call_seat(DEEPSEEK, "Hello", "", 1, False, "fake-key", [], ("configured-free-a",))
     assert post.call_count == 1
-    assert post.call_args.kwargs["json"]["model"] == "configured-free-a"
-    assert isinstance(post.call_args.kwargs["json"]["messages"][0]["content"], str)
-    assert post.call_args.kwargs["json"]["messages"][0]["content"]
+    assert _posted_payload(post)["model"] == "configured-free-a"
+    assert isinstance(_posted_payload(post)["messages"][0]["content"], str)
+    assert _posted_payload(post)["messages"][0]["content"]
     assert result["status"] == "SUCCESS"
     assert result["content"] == "DEEPSEEK_OK"
     assert result["model"] == result["executed_model"] == "configured-free-a"
@@ -172,7 +182,7 @@ def test_deepseek_provider_model_is_attested_end_to_end():
     with patch("providers.requests.post", return_value=response) as post:
         result = call_seat(DEEPSEEK, "identity", "", 1, False, "TEST_KEY", [], ("deepseek-v4-flash",), request_id="identity-1")
     assert post.call_count == 1
-    assert post.call_args.kwargs["json"]["model"] == "deepseek-v4-flash"
+    assert _posted_payload(post)["model"] == "deepseek-v4-flash"
     assert result["status"] == "SUCCESS"
     assert result["model"] == result["executed_model"] == result["provider_reported_model"] == "deepseek-v4-flash"
 
@@ -352,7 +362,7 @@ def test_deepseek_real_adapter_builds_official_request_and_attests_response_mode
 
     assert post.call_count == 1
     assert post.call_args.args[0] == "https://api.deepseek.com/chat/completions"
-    assert post.call_args.kwargs["json"]["model"] == "deepseek-v4-flash"
+    assert _posted_payload(post)["model"] == "deepseek-v4-flash"
     assert result["status"] == "SUCCESS"
     assert result["provider_reported_model"] == "deepseek-v4-flash"
     assert result["executed_model"] == "deepseek-v4-flash"

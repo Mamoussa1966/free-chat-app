@@ -19,7 +19,9 @@ def _runtime_success(seat, rid, round_no, content="live result"):
         "content": content, "_provider_input_prompt": "runtime prompt",
         "_runtime_payload_attestation": ({"payload_json": '{"input":"runtime prompt"}',
             "payload_sha256": hashlib.sha256('{"input":"runtime prompt"}'.encode()).hexdigest(),
-            "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True}
+            "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True,
+            "request_id": rid, "round_no": round_no, "seat_key": "gemini", "seat_slot": 2,
+            "executed_model": model, "transport_response_attached": True}
                                          if seat.key == "gemini" else {}),
     }
 

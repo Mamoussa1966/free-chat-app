@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,7 +42,8 @@ def test_deepseek_payload_is_explicit_non_streaming_and_identity_attested():
             seat, "hello", "", 1, False, "TEST_KEY", [],
             ("deepseek-v4-flash",), request_id="hf60-deepseek"
         )
-    payload = post.call_args.kwargs["json"]
+    assert "json" not in post.call_args.kwargs
+    payload = json.loads(post.call_args.kwargs["data"].decode("utf-8"))
     assert payload["model"] == "deepseek-v4-flash"
     assert payload["stream"] is False
     assert payload["thinking"]["type"] == providers.DEEPSEEK_THINKING_MODE

@@ -54,6 +54,8 @@ def _live_result(seat, request_id: str, round_no: int, content: str, user_prompt
             "payload_json": payload_json,
             "payload_sha256": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
             "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True,
+            "request_id": request_id, "round_no": round_no, "seat_key": "gemini", "seat_slot": 2,
+            "executed_model": model, "transport_response_attached": True,
         }
     return result
 
@@ -251,7 +253,12 @@ def test_hotfix164_bridge_security_gate_fails_closed_on_control_plane_identity_l
     # negative security test: the gate must expose the alias and reject the audit.
     bridge.record_provider_input(target, f"leaked control plane identity {bridge.bridge_id}")
     payload = json.dumps({"contents": [{"parts": [{"text": "clean payload"}]}]}, sort_keys=True)
-    bridge.record_runtime_payload_attestation(target, {"payload_json": payload, "payload_sha256": hashlib.sha256(payload.encode()).hexdigest()})
+    bridge.record_runtime_payload_attestation(target, {
+        "payload_json": payload, "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True,
+        "request_id": rid, "round_no": 1, "seat_key": "gemini", "seat_slot": 2,
+        "executed_model": "gemini-3.8-flash", "transport_response_attached": True,
+    })
     bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status="SUCCESS")
     value = bridge.read("BRIDGE_RESULT", target)
     bridge._record_bridge_event("MATCH", seat=2, provider="Application", status="PASS" if value else "FAIL")
@@ -294,6 +301,8 @@ def test_hotfix16413_wrong_or_synthetic_http_payload_hash_fails_closed():
         "payload_sha256": "x",  # Deliberately fabricated, not SHA-256(payload).
         "transport_boundary": "requests.PreparedRequest.body",
         "prepared_request_verified": True,
+        "request_id": rid, "round_no": 1, "seat_key": "gemini", "seat_slot": 2,
+        "executed_model": "gemini-3.8-flash", "transport_response_attached": True,
     })
     bridge._record_bridge_event("TARGET_RESPONSE", seat=2, provider="Gemini", status="SUCCESS")
     value = bridge.read("BRIDGE_RESULT", target)

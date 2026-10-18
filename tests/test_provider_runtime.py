@@ -41,7 +41,7 @@ def test_hotfix16413_attests_exact_prepared_http_body_bytes():
         assert _post("https://example.invalid/v1/messages", {"Content-Type": "application/json"}, payload, 5) == {}
     sent_body = post.call_args.kwargs["data"]
     assert isinstance(sent_body, bytes)
-    assert post.call_args.kwargs["json"] == payload  # backward-compatible adapter kwarg; non-empty data is the transmitted body
+    assert "json" not in post.call_args.kwargs  # exactly one serialized body reaches the transport
     assert json.loads(sent_body.decode("utf-8")) == payload
     attestation = providers._take_runtime_payload_attestation()
     assert attestation["prepared_request_verified"] is True
@@ -55,10 +55,27 @@ def test_current_runtime_release_label_matches_release_manifest():
     import json
     from pathlib import Path
 
-    manifest = json.loads(Path("HOTFIX164.26_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
-    assert manifest["release"] == "HOTFIX164.26"
+    manifest = json.loads(Path("HOTFIX164.28_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["release"] == "HOTFIX164.28"
     assert providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith(manifest["release"] + " ")
     import main
     assert main.DISPLAY_VERSION == providers.CURRENT_HOTFIX_RELEASE_VERSION
     assert main.PLATFORM_RELEASE_VERSION == providers.PLATFORM_RELEASE_VERSION
     assert providers.VERSION == Path("VERSION.txt").read_text(encoding="utf-8").strip()
+
+
+def test_hotfix16428_transport_sends_only_the_attested_prepared_body():
+    import hashlib
+    import json
+    response = type("Response", (), {"status_code": 200, "text": "{}", "headers": {}, "json": lambda self: {}})()
+    payload = {"contents": [{"parts": [{"text": "sanitized target prompt"}]}]}
+    with patch("providers.requests.post", return_value=response) as post:
+        assert _post("https://example.invalid/v1beta/models/gemini:generateContent", {"Content-Type": "application/json"}, payload, 5) == {}
+    kwargs = post.call_args.kwargs
+    body = kwargs["data"]
+    attestation = providers._take_runtime_payload_attestation()
+    assert isinstance(body, bytes)
+    assert "json" not in kwargs
+    assert hashlib.sha256(body).hexdigest() == attestation["payload_sha256"]
+    assert body == attestation["payload_json"].encode("utf-8")
+    assert json.loads(body) == payload

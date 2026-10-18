@@ -23,7 +23,9 @@ def _live_result(seat, request_id, round_no, content):
         "content": content, "_provider_input_prompt": "sanitized runtime prompt",
         "_runtime_payload_attestation": ({"payload_json": payload,
             "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
-            "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True}
+            "transport_boundary": "requests.PreparedRequest.body", "prepared_request_verified": True,
+            "request_id": request_id, "round_no": round_no, "seat_key": "gemini", "seat_slot": 2,
+            "executed_model": model, "transport_response_attached": True}
                                          if seat.key == "gemini" else {}),
     }
 
@@ -42,6 +44,9 @@ def _strict_bridge_evidence(rid, round_no, bridge_hash):
         "runtime_http_payload_hash_integrity": "PASS", "runtime_payload_sha256": "a" * 64,
         "runtime_payload_transport_boundary": "requests.PreparedRequest.body",
         "runtime_payload_prepared_request_verified": "YES",
+        "runtime_payload_request_binding_status": "PASS", "runtime_payload_round_binding_status": "PASS",
+        "runtime_payload_target_binding_status": "PASS", "runtime_payload_response_binding_status": "PASS",
+        "runtime_payload_canonical_round_binding_status": "PASS",
         "runtime_sequence_target_identity_status": "PASS",
         "source_provider": "DeepSeek", "source_seat": 7, "target_provider": "Gemini", "target_seat": 2,
         "commit_target_seat": 2, "barrier_target_seat": 2, "read_target_seat": 2,

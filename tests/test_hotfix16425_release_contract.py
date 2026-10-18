@@ -14,7 +14,7 @@ REPORT_SCHEMA = "hotfix164.23-explicit-target-read-only-forensics/v1"
 
 def test_hotfix16425_display_release_uses_provider_owned_identity():
     assert providers.CURRENT_HOTFIX_RELEASE_VERSION == (
-        "HOTFIX164.26 — CANONICAL BRIDGE EVIDENCE REHYDRATION"
+        "HOTFIX164.28 — REQUEST-BOUND BRIDGE CLOSURE AND STALE-AUDIT INVALIDATION"
     )
     assert main.DISPLAY_VERSION == providers.CURRENT_HOTFIX_RELEASE_VERSION
 
@@ -34,8 +34,8 @@ def test_hotfix16425_frozen_provider_and_version_file_are_unchanged():
 
 
 def test_hotfix16425_current_manifest_matches_live_source_contract():
-    manifest = json.loads((ROOT / "HOTFIX164.26_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
-    assert manifest["release"] == "HOTFIX164.26"
+    manifest = json.loads((ROOT / "HOTFIX164.28_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["release"] == "HOTFIX164.28"
     assert manifest["provider_core_identity"] == providers.VERSION
     assert manifest["release_contract"]["runtime_label_matches_main_display_version"] is True
     assert manifest["release_contract"]["platform_release_identity_single_source"] is True
@@ -100,12 +100,11 @@ def test_hotfix16425_empty_canonical_history_never_qualifies_as_closure():
 
 
 def test_hotfix16425_current_release_workflow_checks_current_contract():
-    workflow = (ROOT / ".github/workflows/hotfix164-18-proof-diagnostics.yml").read_text(encoding="utf-8")
-    assert "HOTFIX164.26_RELEASE_MANIFEST.json" in workflow
-    assert "HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip" in workflow
-    assert "HOTFIX164.26_RUNTIME_LABEL_FAILED" in workflow
-    assert "PLATFORM_RELEASE_IDENTITY_FAILED" in workflow
-    assert "REPORT_SCHEMA_COMPATIBILITY_FAILED" in workflow
+    workflow = (ROOT / ".github/workflows/hotfix164-28-closure.yml").read_text(encoding="utf-8")
+    assert "HOTFIX164.28_RELEASE_MANIFEST.json" in workflow
+    assert "HOTFIX164.28_RUNTIME_BRIDGE_FINAL_CLOSURE.zip" in workflow
+    assert "pytest -q" in workflow
+    assert "HOTFIX164.28_RUNTIME_LABEL_FAILED" in workflow
 
 
 def test_hotfix16419_historical_workflow_is_manual_only():
