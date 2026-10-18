@@ -225,7 +225,13 @@ def package(output: Path) -> None:
             rel = path.relative_to(ROOT).as_posix()
             if any(part in IGNORED_DIRS for part in path.relative_to(ROOT).parts):
                 continue
-            if rel.endswith((".pyc", ".pyo", ".zip", ".sha256")) or rel == "RELEASE_MANIFEST.json":
+            # Runtime forensic exports belong in the evidence workflow, not inside
+            # a distributable source archive. In particular, never ship stale prior
+            # deployment reports as if they were evidence for this release.
+            if (rel.endswith((".pyc", ".pyo", ".zip", ".sha256"))
+                    or rel == "RELEASE_MANIFEST.json"
+                    or (rel.startswith("evidence/")
+                        and rel != "evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json")):
                 continue
             if path.is_symlink():
                 # Never ship the runtime Streamlit secret, even when a hosting

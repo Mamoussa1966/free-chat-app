@@ -31,6 +31,7 @@ from timeline_runtime import event as timeline_event
 from memory_layers import update_memory
 from export_engine import export_conversation
 from conversation_v25_runtime import ensure_v25_store, reconcile_request, authoritative_audit, sync_v26_message_record
+from hotfix16430_deployment_attestation import build_runtime_deployment_attestation
 
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
@@ -4196,6 +4197,9 @@ def _hotfix16420_read_only_target_audit(chat: dict | None, target_request_ids=No
         "blockers": sorted(set(str(x) for x in blockers if x)),
         "fail_closed_rule": "FAIL_OR_NOT_PROVEN_IF_ANY_COUNTER_CONFLICTS_OR_REQUIRED_TARGET_OR_BRIDGE_EVIDENCE_IS_MISSING",
         "audit_active_chat_binding_sha256": _hotfix16428_active_chat_binding(live),
+        # HOTFIX164.30: runtime-generated commit/source attestation binds this
+        # read-only report to the code actually running in the deployed app.
+        "deployment_attestation": build_runtime_deployment_attestation(),
     })
     return report
 
@@ -4210,7 +4214,7 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     """
     text = re.sub(r"[\s#>*`-]+", " ", str(prompt or "")).upper()
     text = text.replace("—", "-").replace("–", "-")
-    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25", "HOTFIX164.26", "HOTFIX164.27", "HOTFIX164.28", "HOTFIX164.29"))
+    has_version = any(version in text for version in ("HOTFIX164.18", "HOTFIX164.19", "HOTFIX164.20", "HOTFIX164.22", "HOTFIX164.23", "HOTFIX164.24", "HOTFIX164.25", "HOTFIX164.26", "HOTFIX164.27", "HOTFIX164.28", "HOTFIX164.29", "HOTFIX164.30"))
     has_read_only = "READ-ONLY" in text or "READ_ONLY" in text or "READ ONLY" in text
     has_audit = "AUDIT" in text or "FORENSICS" in text
     return has_version and has_read_only and has_audit
@@ -4239,7 +4243,7 @@ def _render_hotfix16419_read_only_page() -> None:
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
-        st.title("HOTFIX164.29 — Independent HTTP-Attested Bridge Closure Gate")
+        st.title("HOTFIX164.30 — Deployed-Commit-Bound Live Closure")
         st.warning(
             "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
@@ -4284,10 +4288,10 @@ def _render_hotfix16419_read_only_page() -> None:
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
         _render_section_actions(
-            "HOTFIX164.29 — Independent HTTP-Attested Bridge Closure Gate",
+            "HOTFIX164.30 — Deployed-Commit-Bound Live Closure",
             payload,
             "hotfix16420_explicit_target_read_only_forensics",
-            download_name="HOTFIX164.29_BRIDGE_EVIDENCE_FORENSICS.json",
+            download_name="HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json",
         )
         if st.button(
             "↩️ العودة إلى غرفة المجلس",
@@ -4308,7 +4312,7 @@ def run_app() -> None:
     if st.session_state.get("_hotfix16422_read_only_mode"):
         _render_hotfix16419_read_only_page()
         return
-    if st.sidebar.button("🧭 HOTFIX164.29 — Independent Closure Gate", key="hotfix16422_read_only_entry", use_container_width=True):
+    if st.sidebar.button("🧭 HOTFIX164.30 — Deployed Commit Closure Gate", key="hotfix16422_read_only_entry", use_container_width=True):
         st.session_state["_hotfix16422_read_only_requested"] = True
         st.session_state["_hotfix16422_read_only_mode"] = True
         st.session_state["last_hotfix16422_read_only_audit"] = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), [

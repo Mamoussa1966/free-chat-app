@@ -1,0 +1,94 @@
+{
+  "schema": "hotfix164.30-replacement-files-manifest/v1",
+  "package": "HOTFIX164.30_DEPLOYED_COMMIT_CLOSURE_REPLACEMENT_FILES.zip",
+  "release": "HOTFIX164.30",
+  "parent_release": "HOTFIX164.29",
+  "target_repository": "Mamoussa1966/free-chat-app",
+  "target_branch": "gitops-v0.4-final",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "version_txt_changed": false,
+  "replacement_file_count": 14,
+  "replacement_files": [
+    {
+      "path": ".github/workflows/hotfix164-29-independent-closure.yml",
+      "sha256": "efdd384714509d5fefae58d3dcf7afef96fb17ef6a83b0fde2c653080b73a80e",
+      "bytes": 4958
+    },
+    {
+      "path": ".github/workflows/hotfix164-30-deployment-commit-closure.yml",
+      "sha256": "7a13b78024ca74197604d9493dbcda3be57e333a90273630ed3a93c7c785ebad",
+      "bytes": 6965
+    },
+    {
+      "path": "HOTFIX164.29_REPLACEMENT_FILES_MANIFEST.json",
+      "sha256": "cd9c32eea922acc212c29df0a93618d3d558ec85c2b51a32eddd2153fc93cdf7",
+      "bytes": 2774
+    },
+    {
+      "path": "HOTFIX164.30_DEPLOYMENT_COMMIT_GATE.py",
+      "sha256": "8669d5af9784d537f939b83d8e9adcb5e5ed8103ad9c58b8b99a4bf730b5f2cb",
+      "bytes": 27094
+    },
+    {
+      "path": "HOTFIX164.30_FINAL_CLOSURE_STATUS.md",
+      "sha256": "5fd8bd2c87bd85be7a35351f0293e38e78ecfe2673d614d17823e34d202310f1",
+      "bytes": 1032
+    },
+    {
+      "path": "HOTFIX164.30_RELEASE_MANIFEST.json",
+      "sha256": "aafbf474801e7d218bdd2b1a0653ab72c33d66c9db6c0d58647d44e3aec2279d",
+      "bytes": 5131
+    },
+    {
+      "path": "HOTFIX164.30_RELEASE_NOTES.md",
+      "sha256": "27d5f789a1d499a0961159249bc3ab7f695b94470dd7d00ba3995629eced75ea",
+      "bytes": 2148
+    },
+    {
+      "path": "build_release.py",
+      "sha256": "dcbe6e7190268e2e1e91d1a4df113b6bec068cde47593d89930806185f54a0d1",
+      "bytes": 14778
+    },
+    {
+      "path": "hotfix16430_deployment_attestation.py",
+      "sha256": "7bee90c0e1f484fa95866fe5841da94d9245da0314559e00a63d7de0a4070bd5",
+      "bytes": 4502
+    },
+    {
+      "path": "main.py",
+      "sha256": "6dd89fbb52d280f26aa57a6b63537e6dd4130230f006e1fd66474dcffb91e5dd",
+      "bytes": 294787
+    },
+    {
+      "path": "providers.py",
+      "sha256": "f854e1f09ed2727c6f7c69f5933a3aca58573eff402db643f9e6a87fe9d132b9",
+      "bytes": 84132
+    },
+    {
+      "path": "tests/test_hotfix16425_release_contract.py",
+      "sha256": "c60fb1d6f5fd4828fa8442a38b536118af9e6b574d049cc9d47fc61e91379762",
+      "bytes": 5703
+    },
+    {
+      "path": "tests/test_hotfix16430_deployment_attestation.py",
+      "sha256": "3fde538fe12f08d8a4b3013c397608ac07447bb2bc36a14da019c137f76acbab",
+      "bytes": 3407
+    },
+    {
+      "path": "tests/test_provider_runtime.py",
+      "sha256": "79873de4ac5892a4496434afe058bdf2df782652f3575761d1a4fc0cbed66f62",
+      "bytes": 4269
+    }
+  ],
+  "deleted_from_new_full_archive_but_not_silently_deleted_by_overlay": [
+    "HOTFIX164.26_PACKAGE_VALIDATION.json"
+  ],
+  "verified_contracts": {
+    "runtime_report_includes_deployment_commit_attestation": true,
+    "runtime_report_includes_source_file_sha256_map": true,
+    "independent_gate_requires_fresh_deployment_evidence": true,
+    "source_bundle_fingerprint_required_for_live_pass": true,
+    "frozen_provider_core_identity_preserved": true,
+    "live_final_closure_proven": false
+  }
+}
