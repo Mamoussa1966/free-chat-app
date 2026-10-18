@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       evidence_path:
-        description: "Repository path to the freshly exported HOTFIX164.29_BRIDGE_EVIDENCE_FORENSICS.json"
+        description: "Repository path to the fresh HOTFIX164.29 bridge evidence JSON"
         required: true
-        default: evidence/HOTFIX164.29_BRIDGE_EVIDENCE_FORENSICS.json
+        default: "evidence/HOTFIX164.29_BRIDGE_EVIDENCE_FORENSICS (1).json"
         type: string
 
 permissions:
@@ -21,6 +21,7 @@ jobs:
     name: Full regression, package identity, and independent live evidence gate
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
     steps:
       - name: Checkout selected release candidate
         uses: actions/checkout@v4
@@ -42,15 +43,24 @@ jobs:
           import json
           from pathlib import Path
           import main, providers
+
           expected_core = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
-          manifest = json.loads(Path("HOTFIX164.29_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+
+          manifest = json.loads(
+              Path("HOTFIX164.29_RELEASE_MANIFEST.json").read_text(encoding="utf-8")
+          )
+
           assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == expected_core
           assert providers.VERSION == expected_core
           assert providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith("HOTFIX164.29 ")
           assert main.DISPLAY_VERSION == providers.CURRENT_HOTFIX_RELEASE_VERSION
           assert manifest.get("release") == "HOTFIX164.29"
           assert manifest.get("provider_core_identity") == expected_core
-          assert manifest.get("bridge_closure_contract", {}).get("live_final_closure_proven") is False
+          assert (
+              manifest.get("bridge_closure_contract", {}).get("live_final_closure_proven")
+              is False
+          )
+
           print("FROZEN_PROVIDER_IDENTITY=PASS")
           print("HOTFIX164.29_RELEASE_IDENTITY=PASS")
           print("LIVE_CLOSURE_NOT_PRECLAIMED=PASS")
@@ -59,7 +69,6 @@ jobs:
       - name: Run full offline regression suite
         run: pytest -q
 
-      - 
       - name: Build and verify the exact root-level release archive
         run: |
           python build_release.py --output dist/HOTFIX164.29_FULL_RELEASE_CANDIDATE.zip
@@ -72,6 +81,7 @@ jobs:
           EVIDENCE_PATH: ${{ inputs.evidence_path }}
         run: |
           test -f "$EVIDENCE_PATH"
+
           python HOTFIX164.29_INDEPENDENT_CLOSURE_GATE.py \
             --evidence "$EVIDENCE_PATH" \
             --manifest HOTFIX164.29_RELEASE_MANIFEST.json \
@@ -109,8 +119,17 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          report = json.loads(Path("dist/HOTFIX164.29_INDEPENDENT_CLOSURE_RESULT.json").read_text(encoding="utf-8"))
-          if report.get("status") != "PASS" or report.get("live_final_closure_proven") is not True:
+
+          report = json.loads(
+              Path("dist/HOTFIX164.29_INDEPENDENT_CLOSURE_RESULT.json")
+              .read_text(encoding="utf-8")
+          )
+
+          if (
+              report.get("status") != "PASS"
+              or report.get("live_final_closure_proven") is not True
+          ):
               raise SystemExit("HOTFIX164.29_INDEPENDENT_FINAL_CLOSURE_NOT_PROVEN")
+
           print("HOTFIX164.29_INDEPENDENT_FINAL_CLOSURE=PASS")
           PY
