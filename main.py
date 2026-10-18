@@ -3445,6 +3445,36 @@ def _active_chat_without_initialization() -> dict:
 HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS = ("", "")
 
 
+def _hotfix16426_canonical_request_ids(chat: dict | None) -> list[str]:
+    """Return existing canonical Request IDs for display/copy only; never select targets."""
+    live = chat if isinstance(chat, dict) else {}
+    canonical = live.get("conversation_record") if isinstance(live.get("conversation_record"), dict) else None
+    if canonical is None and isinstance(live.get("canonical_record"), dict):
+        canonical = live.get("canonical_record")
+    if not isinstance(canonical, dict) or not isinstance(canonical.get("requests"), list):
+        return []
+    result = []
+    for row in canonical["requests"]:
+        if isinstance(row, dict):
+            rid = str(row.get("request_id") or "").strip()
+            if rid and rid not in result:
+                result.append(rid)
+    return result
+
+
+def _hotfix16426_clear_stale_target_ids(chat: dict | None, target_ids) -> list[str]:
+    """Blank stale IDs while preserving valid explicit IDs; do not auto-select candidates."""
+    valid = set(_hotfix16426_canonical_request_ids(chat))
+    values = list(target_ids) if isinstance(target_ids, (list, tuple)) else []
+    cleaned = []
+    for value in values[:2]:
+        rid = str(value or "").strip()
+        cleaned.append(rid if rid and rid in valid else "")
+    while len(cleaned) < 2:
+        cleaned.append("")
+    return cleaned
+
+
 def _hotfix16420_fingerprint(value: object) -> str:
     """Stable, read-only fingerprint for verifying that an audit changed no state."""
     try:
@@ -3932,13 +3962,20 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
 
 def _render_hotfix16419_read_only_page() -> None:
     """Render the explicit-target forensics report in the sidebar only."""
+    chat = _active_chat_without_initialization()
+    canonical_ids = _hotfix16426_canonical_request_ids(chat)
+    # HOTFIX164.27: a previous report may contain IDs from another conversation/run.
+    # Clear those stale values before creating the widgets, but never auto-select a candidate.
+    session_targets = _hotfix16426_clear_stale_target_ids(chat, [
+        st.session_state.get("hotfix16422_target_request_1", ""),
+        st.session_state.get("hotfix16422_target_request_2", ""),
+    ])
+    st.session_state["hotfix16422_target_request_1"] = session_targets[0]
+    st.session_state["hotfix16422_target_request_2"] = session_targets[1]
+
     report = st.session_state.get("last_hotfix16422_read_only_audit")
     if not isinstance(report, dict):
-        current_targets = [
-            str(st.session_state.get("hotfix16422_target_request_1") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[0]).strip(),
-            str(st.session_state.get("hotfix16422_target_request_2") or HOTFIX16420_DEFAULT_TARGET_REQUEST_IDS[1]).strip(),
-        ]
-        report = _hotfix16420_read_only_target_audit(_active_chat_without_initialization(), current_targets)
+        report = _hotfix16420_read_only_target_audit(chat, session_targets)
         st.session_state["last_hotfix16422_read_only_audit"] = report
 
     with st.sidebar:
@@ -3949,9 +3986,16 @@ def _render_hotfix16419_read_only_page() -> None:
             "إذا تُرك الحقلان فارغين فستظهر NO_TARGETS / NOT_PROVEN، دون اختيار تلقائي. "
             "لا يحذف السجلات التاريخية ولا يعيد كتابتها."
         )
-        display_targets = list(report.get("target_request_ids") or [])
-        while len(display_targets) < 2:
-            display_targets.append("")
+        report_targets = list(report.get("target_request_ids") or [])
+        # Do not repopulate form fields from a stale report. Only retain IDs that still
+        # belong to this chat's existing canonical Request records.
+        display_targets = _hotfix16426_clear_stale_target_ids(chat, report_targets)
+        if canonical_ids:
+            st.caption("معرّفات Request القانونية الموجودة في هذه المحادثة (للاختيار اليدوي فقط؛ لا يتم تحديد أي هدف تلقائيًا):")
+            for candidate_id in canonical_ids:
+                st.code(candidate_id)
+        else:
+            st.caption("لا توجد معرّفات Request قانونية حالية قابلة للعرض؛ سيظل التدقيق NOT_PROVEN حتى تتوفر سجلات حقيقية.")
         with st.form("hotfix16422_explicit_target_form", clear_on_submit=False):
             target_1 = st.text_input(
                 "Request ID المستهدف الأول",

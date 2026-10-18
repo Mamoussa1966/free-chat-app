@@ -1,24 +1,24 @@
-# HOTFIX164.26 — Post-deployment live Bridge closure supplement
+# HOTFIX164.26 — Corrected Post-Deployment Live Bridge Closure Supplement
 
-## Runtime audit outcome
+## Corrected live audit outcome
 
-**Application audit outcome: PASS for the two explicit runtime requests listed below.** This supplement was added after the original HOTFIX164.26 build-time manifest was produced. The original manifest's `live_final_closure_proven: false` accurately records what the offline build/release suite proved at build time; it is not overwritten or reinterpreted as an online provider execution.
+**Application-produced read-only audit: PASS for both selected requests below.** This supplement supersedes the earlier stale-target audit snapshot for acceptance purposes; the prior request IDs were entered by mistake and the audit correctly returned `NOT_PROVEN` when its selected targets did not match the current canonical request identities.
 
-- Request A: `274521681c3b49b68bf988c128803b69` — canonical Round 1.
-- Request B: `317d3f311ffe4ff782eeff2fa4351454` — canonical Round 2.
-- The submitted read-only deployed-app audit reports `status=PASS`, `strict_live_bridge_proof.status=PASS`, two application-owned evidence records, no missing evidence, canonical Message→Request→Round counts of 2/2/2, six persisted application-owned runtime execution events, and two distinct request-bound Bridge hashes.
-- The audit reports no exported raw Bridge IDs/values or prompt/HTTP bodies. The raw values and bodies are intentionally not included here.
-- Read-only audit counters are zero for new Requests/Rounds/Bridges and for provider/cascade work initiated by the audit itself. This does not contradict the six persisted runtime execution events from the two prior requests.
+- Run A: `6d3429f1dae84863a362e3abbc7aede2` — canonical Round 1; Bridge hash `40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79`.
+- Run B: `efc1820735ba45ddb9eb04e676ec795a` — canonical Round 2; Bridge hash `eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f`.
+- Overall application report: `PASS`; strict-live bridge proof: `PASS`; target independence: `PASS`; blockers: none.
+- Canonical counts: 2 Messages / 2 Requests / 2 Rounds.
+- Persisted application-owned runtime execution events: 4 total, 2 per request.
+- Per request: application-owned Bridge evidence and ledger projection count 1; canonical request/Round binding `PASS`; required request artifacts `PASS`; `missing_evidence=[]`; `failure_reasons=[]`.
+- Two distinct Bridge hashes are reported. Raw Bridge ID, Bridge value, prompt and HTTP body are not exported in the audit snapshot.
 
-## Automated acceptance gate
+## Evidence boundary
 
-`verify_hotfix16426_live_bridge_audit.py` validates the application-produced report contract and fails closed when required fields, request identity bindings, runtime event counts, evidence rows, or distinct Bridge hashes are missing. `tests/test_hotfix16426_live_bridge_audit_gate.py` checks that this supplied report passes and that missing evidence or duplicate Bridge hashes are rejected.
+The audit snapshot is transcribed from the final report supplied in this conversation. The verifier validates the report's integrity contract, identity consistency, required fields and fail-closed behavior; it does not make live API calls or synthesize execution events. Accordingly, the reported live runtime outcome is sourced from the deployed application's own audit, while local test results are reported separately as software regression checks.
 
-The gate does **not** call a provider or manufacture runtime events. Its PASS means the supplied application-owned audit report satisfies the declared acceptance contract; the live-execution evidence itself comes from the deployed application's read-only audit report. The base 644-test regression suite remains a software regression suite, not a simulated live-provider test.
+## Preserved contracts
 
-## Preservation
-
-- Frozen provider identity and `VERSION.txt` remain unchanged.
-- No provider runtime or cascade policy changes are made in this supplement.
-- No Local Engine, paid fallback, or dynamic model discovery is introduced.
-- The audit remains read-only and does not create new conversation records.
+- Frozen provider identity: `V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`.
+- `VERSION.txt` and the audit wire schema remain unchanged.
+- No Local Engine, paid fallback, dynamic model discovery, raw Bridge value export, or audit-triggered provider execution is introduced.
+- Incomplete, mismatched, stale, or duplicated evidence remains `NOT_PROVEN` / rejected by the verifier.

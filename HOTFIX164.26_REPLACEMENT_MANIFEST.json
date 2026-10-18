@@ -1,9 +1,9 @@
 {
   "schema": "hotfix164.26-replacement-files-manifest/v1",
-  "package": "HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION_REPLACEMENT_FILES",
+  "package": "HOTFIX164.26_CORRECTED_RUNTIME_BRIDGE_CLOSURE_REPLACEMENT_FILES",
   "target_repository": "Mamoussa1966/free-chat-app",
   "target_branch": "gitops-v0.4-final",
-  "base_commit": "fcce29c9142767c29d7cc3562a38302725aa0f4f",
+  "base_commit": "8d4dc1233ce40118b95cc41c81fc7ec0f1d1ba97",
   "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
   "version_txt_unchanged": true,
   "replacement_paths": [
@@ -21,16 +21,58 @@
     "HOTFIX164.26_RELEASE_NOTES.md",
     "HOTFIX164.26_RELEASE_MANIFEST.json",
     "HOTFIX164.26_REPLACEMENT_MANIFEST.json",
-    "HOTFIX164.26_FINAL_CLOSURE_STATUS.md"
+    "HOTFIX164.26_FINAL_CLOSURE_STATUS.md",
+    "verify_hotfix16426_live_bridge_audit.py",
+    "tests/test_hotfix16426_live_bridge_audit_gate.py",
+    "evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json",
+    "HOTFIX164.26_LIVE_BRIDGE_CLOSURE_SUPPLEMENT.md",
+    "HOTFIX164.26_RUNTIME_CLOSURE_REPLACEMENT_MANIFEST.json"
   ],
-  "fix_summary": "For STRICT_LIVE, read Bridge evidence from the canonical V26.3 RequestRecord field bridge_runtime_evidence; verify Request ID and canonical Round ID; reject sidecar-only evidence; fail closed on sidecar/canonical conflicts; export canonical evidence after runtime-cache loss.",
+  "fix_summary": "For STRICT_LIVE, read Bridge evidence from the canonical V26.3 RequestRecord field bridge_runtime_evidence; verify Request ID and canonical Round ID; reject sidecar-only evidence; fail closed on sidecar/canonical conflicts; export canonical evidence after runtime-cache loss. Also clear stale explicit audit targets when they are absent from the current canonical conversation, show existing canonical Request IDs for manual selection only, and reject mismatched target/request/evidence identity sets.",
   "validation": {
-    "targeted_bridge_regressions": "PASS (17 passed across 4 test modules; includes 4 new persistence regressions)",
-    "full_regression_suite": "PASS, 644 passed, 0 failed, 0 errors across 170 test files",
-    "fresh_zip_extraction_suite": "PASS, 644 passed, 0 failed, 0 errors across 170 test files",
+    "runtime_audit_acceptance_gate": "PASS for corrected report; stale/missing/inconsistent targets fail closed",
+    "new_target_selection_regression": "PASS",
+    "full_regression_suite": "PASS (649 passed, 0 failed, 0 errors across 171 test files)",
+    "fresh_zip_extraction_suite": "PASS (649 passed, 0 failed, 0 errors across 171 test files)",
     "production_core_gate": "PASS",
-    "live_final_bridge_closure": "NOT_PROVEN until the deployed application stores complete evidence from actual DeepSeek Seat 7 and Gemini Seat 2 provider executions for the explicit target requests",
-    "github_write_performed": false
+    "zip_roundtrip": "PASS (20 replacement files directly at ZIP root; no nested ZIP)",
+    "live_provider_calls_made_by_gate": false,
+    "provider_core_identity_changed": false,
+    "version_txt_unchanged": true,
+    "github_write_performed": false,
+    "automatic_target_selection": false,
+    "scope": "Application-reported live runtime PASS is sourced from the supplied deployed audit; offline tests validate code/report contracts only."
   },
-  "instructions": "Extract this ZIP at the repository root and preserve the directory paths shown. Do not replace VERSION.txt. Commit the listed files together, then let the release workflow run on gitops-v0.4-final."
+  "instructions": "Extract at repository root preserving paths. Do not replace VERSION.txt. The accepted user-supplied deployed audit targets the two IDs listed in runtime_evidence. Run python verify_hotfix16426_live_bridge_audit.py and the complete pytest suite. The verifier itself is read-only and does not call providers.",
+  "purpose": "Retain canonical STRICT_LIVE evidence rehydration and stale-target guards; record the final corrected application audit with identity-consistent explicit targets and verify fail-closed behavior.",
+  "runtime_evidence": {
+    "accepted_request_ids": [
+      "6d3429f1dae84863a362e3abbc7aede2",
+      "efc1820735ba45ddb9eb04e676ec795a"
+    ],
+    "canonical_round_ids": [
+      "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
+      "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2"
+    ],
+    "bridge_id_hashes": [
+      "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
+      "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f"
+    ],
+    "latest_application_report_status": "PASS",
+    "strict_live_bridge_proof_status": "PASS",
+    "target_bridge_independence_status": "PASS",
+    "blockers": [],
+    "canonical_counts": {
+      "canonical_message_count": 2,
+      "canonical_request_count": 2,
+      "canonical_round_count": 2
+    },
+    "runtime_execution_event_count": 4,
+    "previous_mistyped_target_request_ids": [
+      "274521681c3b49b68bf988c128803b69",
+      "317d3f311ffe4ff782eeff2fa4351454"
+    ],
+    "previous_mistyped_target_audit_status": "NOT_PROVEN",
+    "source": "Final corrected user-provided deployed-application audit report; snapshot preserves reported fields and does not synthesize runtime events."
+  }
 }

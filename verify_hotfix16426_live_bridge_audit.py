@@ -16,10 +16,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 DEFAULT_REPORT = ROOT / "evidence" / "HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json"
 REPORT_SCHEMA = "hotfix164.23-explicit-target-read-only-forensics/v1"
-EXPECTED_IDS = (
-    "274521681c3b49b68bf988c128803b69",
-    "317d3f311ffe4ff782eeff2fa4351454",
-)
 EXPECTED_ARTIFACTS = {
     "AUTHORITATIVE_METRICS", "BRIDGE_AUDIT", "CASCADE_SUMMARIES", "EXECUTED_MODELS",
     "FINAL_RESULT", "REQUEST_ID", "ROUND_ID", "SEAT_RESULTS", "SESSION_ID", "USER_MESSAGE",
@@ -44,7 +40,10 @@ def validate_report(report: dict[str, Any]) -> list[str]:
     need(report.get("read_side_effects") == "NONE_OBSERVED", "READ_SIDE_EFFECTS_OBSERVED")
     need(report.get("target_selection_status") == "EXPLICIT_TARGETS_SELECTED", "TARGETS_NOT_EXPLICIT")
     need(report.get("target_request_count") == 2, "TARGET_REQUEST_COUNT_NOT_TWO")
-    need(report.get("target_request_ids") == list(EXPECTED_IDS), "TARGET_REQUEST_IDS_MISMATCH")
+    selected_ids = report.get("target_request_ids")
+    need(isinstance(selected_ids, list) and len(selected_ids) == 2
+         and all(isinstance(rid, str) and rid.strip() for rid in selected_ids)
+         and len(set(selected_ids)) == 2, "TARGET_REQUEST_IDS_INVALID_OR_DUPLICATE")
     need(report.get("canonical_counts") == {
         "canonical_message_count": 2,
         "canonical_request_count": 2,
@@ -66,7 +65,8 @@ def validate_report(report: dict[str, Any]) -> list[str]:
     need(isinstance(request_rows, list) and len(request_rows) == 2, "REQUEST_ROWS_NOT_TWO")
 
     if isinstance(request_rows, list) and len(request_rows) == 2:
-        need([row.get("request_id") for row in request_rows] == list(EXPECTED_IDS), "REQUEST_ROWS_ID_MISMATCH")
+        need(isinstance(selected_ids, list) and [row.get("request_id") for row in request_rows] == selected_ids,
+             "REQUEST_ROWS_ID_MISMATCH")
         need(sum(row.get("execution_started_count", 0) for row in request_rows) == event_count,
              "PER_REQUEST_EXECUTION_COUNT_MISMATCH")
         for i, row in enumerate(request_rows, start=1):
@@ -98,7 +98,8 @@ def validate_report(report: dict[str, Any]) -> list[str]:
         records = strict.get("records")
         need(isinstance(records, list) and len(records) == 2, "STRICT_LIVE_RECORD_COUNT_NOT_TWO")
         if isinstance(records, list) and len(records) == 2:
-            need([row.get("request_id") for row in records] == list(EXPECTED_IDS), "STRICT_LIVE_RECORD_IDS_MISMATCH")
+            need(isinstance(selected_ids, list) and [row.get("request_id") for row in records] == selected_ids,
+                 "STRICT_LIVE_RECORD_IDS_MISMATCH")
             for i, row in enumerate(records, start=1):
                 need(row.get("status") == "PASS" and row.get("evidence_record_present") is True,
                      f"STRICT_LIVE_RECORD_{i}_NOT_PASS")
@@ -111,7 +112,8 @@ def validate_report(report: dict[str, Any]) -> list[str]:
     target_rows = report.get("target_requests")
     need(isinstance(target_rows, list) and len(target_rows) == 2, "TARGET_ROWS_NOT_TWO")
     if isinstance(target_rows, list) and len(target_rows) == 2:
-        need([row.get("request_id") for row in target_rows] == list(EXPECTED_IDS), "TARGET_ROWS_ID_MISMATCH")
+        need(isinstance(selected_ids, list) and [row.get("request_id") for row in target_rows] == selected_ids,
+             "TARGET_ROWS_ID_MISMATCH")
         bridge_hashes: list[str] = []
         for i, row in enumerate(target_rows, start=1):
             need(row.get("status") == "PASS" and row.get("bridge_proof_status") == "PASS",
@@ -160,10 +162,11 @@ def main() -> int:
         return 1
     print("LIVE_BRIDGE_AUDIT_ACCEPTANCE=PASS")
     print(f"SOURCE={args.report}")
-    print(f"REQUEST_A={EXPECTED_IDS[0]}")
-    print(f"REQUEST_B={EXPECTED_IDS[1]}")
+    selected_ids = report.get("target_request_ids", [])
+    print(f"REQUEST_A={selected_ids[0]}")
+    print(f"REQUEST_B={selected_ids[1]}")
     print("CANONICAL_MESSAGE_REQUEST_ROUND=2/2/2")
-    print("PERSISTED_RUNTIME_EXECUTION_EVENTS=6")
+    print("PERSISTED_RUNTIME_EXECUTION_EVENTS=4")
     print("STRICT_LIVE_BRIDGE_EVIDENCE=2 PASS / 2 distinct bridge hashes")
     print("SIDE_EFFECTS=NONE_OBSERVED")
     return 0

@@ -1,6 +1,6 @@
 {
-  "schema": "hotfix164.26-live-bridge-runtime-evidence-supplement/v1",
-  "package": "HOTFIX164.26_LIVE_BRIDGE_RUNTIME_AUDIT_GATE_REPLACEMENT_FILES",
+  "schema": "hotfix164.26-corrected-runtime-closure-replacement/v1",
+  "package": "HOTFIX164.26_CORRECTED_RUNTIME_BRIDGE_CLOSURE_REPLACEMENT_FILES",
   "target_repository": "Mamoussa1966/free-chat-app",
   "target_branch": "gitops-v0.4-final",
   "base_commit": "8d4dc1233ce40118b95cc41c81fc7ec0f1d1ba97",
@@ -28,24 +28,43 @@
     "HOTFIX164.26_LIVE_BRIDGE_CLOSURE_SUPPLEMENT.md",
     "HOTFIX164.26_RUNTIME_CLOSURE_REPLACEMENT_MANIFEST.json"
   ],
-  "purpose": "Add a fail-closed release acceptance gate for the two real, explicit deployed-application STRICT_LIVE audit targets without changing provider runtime behavior.",
+  "purpose": "Clear stale explicit target IDs and make the audit gate require consistent identity bindings without auto-selecting targets.",
   "runtime_evidence": {
-    "request_ids": [
+    "status": "PASS",
+    "strict_live_bridge_proof_status": "PASS",
+    "target_bridge_independence_status": "PASS",
+    "target_request_ids": [
+      "6d3429f1dae84863a362e3abbc7aede2",
+      "efc1820735ba45ddb9eb04e676ec795a"
+    ],
+    "canonical_round_ids": [
+      "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
+      "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2"
+    ],
+    "bridge_id_hashes": [
+      "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
+      "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f"
+    ],
+    "blockers": [],
+    "canonical_counts": {
+      "canonical_message_count": 2,
+      "canonical_request_count": 2,
+      "canonical_round_count": 2
+    },
+    "runtime_execution_event_count": 4,
+    "source": "Final corrected user-supplied deployed application audit report",
+    "previous_mistyped_target_request_ids": [
       "274521681c3b49b68bf988c128803b69",
       "317d3f311ffe4ff782eeff2fa4351454"
     ],
-    "application_report_status": "PASS",
-    "strict_live_bridge_proof_status": "PASS",
-    "persisted_runtime_execution_events": 6,
-    "distinct_request_bound_bridge_hashes": 2,
-    "source": "User-supplied deployed application audit report, normalized without Bridge values or prompt/HTTP bodies"
+    "previous_mistyped_target_audit_status": "NOT_PROVEN"
   },
   "validation_scope": {
     "offline_report_acceptance_gate": "PASS when verifier succeeds",
     "live_provider_calls_in_release_test": false,
     "release_test_scope_disclosed": true
   },
-  "instructions": "Extract at repository root, preserving paths. Do not overwrite VERSION.txt or provider configuration. Run pytest -q and python verify_hotfix16426_live_bridge_audit.py. This supplement does not modify main.py or providers.py.",
+  "instructions": "Extract at repository root. Do not replace VERSION.txt. Deploy, manually enter the two new Request IDs into the explicit-target fields, rerun the read-only audit, then validate the newly exported report.",
   "prior_hotfix_replacement_paths": [
     "main.py",
     "providers.py",
@@ -64,15 +83,16 @@
     "HOTFIX164.26_FINAL_CLOSURE_STATUS.md"
   ],
   "validation": {
-    "runtime_audit_acceptance_gate": "PASS",
-    "new_audit_gate_tests": "PASS (3 passed)",
-    "full_regression_suite": "PASS (647 passed, 0 failed, 0 errors across 171 test files)",
-    "fresh_zip_extraction_suite": "PASS (647 passed, 0 failed, 0 errors across 171 test files)",
+    "application_runtime_audit": "PASS for two explicit current request IDs in the supplied report",
+    "full_regression_suite": "PASS (649 passed, 0 failed, 0 errors across 171 test files)",
+    "fresh_zip_extraction_suite": "PASS (649 passed, 0 failed, 0 errors across 171 test files)",
+    "zip_roundtrip": "PASS (full release has 415 entries at archive root; no nested ZIP)",
     "production_core_gate": "PASS",
-    "zip_roundtrip": "PASS (root-level project files; no nested project ZIP included in the final release archive)",
-    "live_provider_calls_made_by_gate": false,
+    "live_provider_calls_made_by_offline_gate": false,
     "provider_core_identity_changed": false,
     "version_txt_unchanged": true,
-    "scope": "The provided deployed-app report supplies the live runtime evidence; offline tests validate the report contract and fail-closed behavior."
+    "github_write_performed": false,
+    "runtime_audit_acceptance_gate": "PASS",
+    "replacement_zip_roundtrip": "PASS (20 replacement files directly at archive root; no nested ZIP)"
   }
 }

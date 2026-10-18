@@ -1,7 +1,7 @@
 {
   "schema": "hotfix-release-manifest/v1",
   "release": "HOTFIX164.26",
-  "title": "Canonical Bridge Evidence Rehydration",
+  "title": "Canonical Bridge Evidence Rehydration — corrected live runtime closure report",
   "parent_release": "HOTFIX164.25",
   "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
   "changed_files": [
@@ -19,7 +19,12 @@
     "HOTFIX164.26_RELEASE_NOTES.md",
     "HOTFIX164.26_RELEASE_MANIFEST.json",
     "HOTFIX164.26_REPLACEMENT_MANIFEST.json",
-    "HOTFIX164.26_FINAL_CLOSURE_STATUS.md"
+    "HOTFIX164.26_FINAL_CLOSURE_STATUS.md",
+    "verify_hotfix16426_live_bridge_audit.py",
+    "tests/test_hotfix16426_live_bridge_audit_gate.py",
+    "evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json",
+    "HOTFIX164.26_LIVE_BRIDGE_CLOSURE_SUPPLEMENT.md",
+    "HOTFIX164.26_RUNTIME_CLOSURE_REPLACEMENT_MANIFEST.json"
   ],
   "release_contract": {
     "runtime_label_matches_main_display_version": true,
@@ -48,7 +53,9 @@
     "status": "NOT_PROVEN until real DeepSeek source execution, Gemini target execution, application-owned Bridge lifecycle, prepared HTTP payload attestation, and canonical Message→Request→Round binding are found in the deployed application's existing canonical records",
     "new_or_incomplete_live_evidence_status": "NOT_PROVEN",
     "closure_blocker_addressed": "Strict-live audit previously depended on a volatile bridge_runtime_evidence_store cache even though the completed evidence was persisted on the canonical RequestRecord; audit and sanitized export now recover strict-live evidence from that canonical RequestRecord and reject sidecar-only proof",
-    "prior_explicit_two_request_audit_status": "PASS previously reported for two explicit targets only; not revalidated or broadened by this package"
+    "prior_explicit_two_request_audit_status": "PASS previously reported for two explicit targets only; not revalidated or broadened by this package",
+    "build_time_offline_test_scope": "The original offline suite alone does not perform live provider calls; see post_deployment_runtime_evidence for the later user-supplied deployed audit status.",
+    "post_deployment_audit_status": "PASS for the two explicit request IDs in post_deployment_runtime_evidence"
   },
   "guardrails": {
     "provider_core_identity_changed": false,
@@ -67,7 +74,7 @@
     "read_only_forensics_mutates_state": false
   },
   "validation_results": {
-    "status": "PASS_WITH_LIVE_BRIDGE_CLOSURE_NOT_PROVEN",
+    "status": "PASS_WITH_CORRECTED_DEPLOYED_APPLICATION_AUDIT_AND_OFFLINE_REGRESSION_PASS",
     "python_compile": "PASS",
     "canonical_bridge_evidence_persistence_regression": {
       "status": "PASS",
@@ -84,49 +91,85 @@
     },
     "full_regression_suite": {
       "status": "PASS",
-      "passed": 644,
+      "passed": 649,
       "failed": 0,
       "errors": 0,
-      "test_files": 170,
-      "scope": "Full project regression suite run by build_release.py from a clean temporary source tree"
+      "test_files": 171,
+      "scope": "Offline regression suite; does not execute live provider calls"
     },
     "fresh_zip_extraction_regression_suite": {
       "status": "PASS",
-      "passed": 644,
+      "passed": 649,
       "failed": 0,
       "errors": 0,
-      "test_files": 170,
-      "scope": "The exact full release ZIP was freshly extracted and the entire suite passed from the extracted project tree"
+      "test_files": 171,
+      "scope": "Verified by build_release.py after clean ZIP extraction"
     },
     "production_core_gate": "PASS",
     "zip_roundtrip": {
       "status": "PASS",
-      "archive_entry_count": 409,
+      "archive_entry_count": 415,
       "all_project_files_at_archive_root": true,
-      "nested_zips": 0
+      "nested_zips": 0,
+      "version_txt_preserved": true
     },
     "github_push_or_release": "NOT_PUBLISHED",
-    "live_final_closure_proven": false
+    "live_final_closure_proven": false,
+    "application_runtime_audit": {
+      "status": "PASS",
+      "target_request_ids": [
+        "6d3429f1dae84863a362e3abbc7aede2",
+        "efc1820735ba45ddb9eb04e676ec795a"
+      ],
+      "bridge_id_hashes": [
+        "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
+        "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f"
+      ],
+      "canonical_round_ids": [
+        "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
+        "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2"
+      ],
+      "persisted_runtime_execution_events": 4,
+      "source": "Final corrected deployed-application audit report supplied by the user",
+      "offline_tests_are_provider_calls": false
+    }
   },
   "post_deployment_runtime_evidence": {
-    "source": "evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json",
-    "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
     "audit_status": "PASS",
     "strict_live_bridge_proof_status": "PASS",
+    "target_bridge_independence_status": "PASS",
+    "target_selection_status": "EXPLICIT_TARGETS_SELECTED",
+    "blockers": [],
     "target_request_ids": [
+      "6d3429f1dae84863a362e3abbc7aede2",
+      "efc1820735ba45ddb9eb04e676ec795a"
+    ],
+    "canonical_round_ids": [
+      "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
+      "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2"
+    ],
+    "target_bridge_id_hashes": [
+      "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
+      "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f"
+    ],
+    "runtime_execution_event_count": 4,
+    "canonical_counts": {
+      "canonical_message_count": 2,
+      "canonical_request_count": 2,
+      "canonical_round_count": 2
+    },
+    "source": "Final corrected deployed-application audit report supplied by the user on 2026-10-18",
+    "scope": "The application report declares PASS for these two explicit targets. Offline tests validate the report contract and do not independently call providers or create runtime events.",
+    "previous_mistyped_target_request_ids": [
       "274521681c3b49b68bf988c128803b69",
       "317d3f311ffe4ff782eeff2fa4351454"
     ],
-    "canonical_message_request_round_counts": [
-      2,
-      2,
-      2
-    ],
-    "persisted_application_owned_runtime_execution_events": 6,
-    "distinct_request_bound_bridge_hashes": 2,
-    "read_only_audit_side_effects": "NONE_OBSERVED",
-    "scope": "The deployed-app report supports runtime acceptance for these two requests. Offline unit tests do not perform live provider calls.",
-    "automated_gate": "verify_hotfix16426_live_bridge_audit.py",
-    "note": "Original bridge_closure_contract.live_final_closure_proven=false remains the build-time boundary of the base offline package, not the status of this separately supplied runtime audit."
+    "previous_mistyped_target_audit_status": "NOT_PROVEN"
+  },
+  "corrective_change": {
+    "stale_target_ids_cleared": true,
+    "canonical_request_ids_shown_for_manual_copy": true,
+    "automatic_target_selection": false,
+    "identity_consistency_gate": true
   }
 }

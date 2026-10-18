@@ -1,27 +1,24 @@
-# HOTFIX164.26 — Canonical Bridge Evidence Rehydration
+# HOTFIX164.26 — Canonical Bridge Evidence Rehydration + Corrected Runtime Closure Report
 
-## Purpose
+## Core fix retained
 
-The outstanding failure was not that the regression suite established a live Bridge transaction. It was that strict-live closure auditing depended on the volatile `chat["bridge_runtime_evidence_store"]` cache after the completed request had already committed its Bridge evidence to the V26.3 canonical RequestRecord. On a Streamlit rerun, that cache can be absent even while the canonical request row remains persisted.
+For `STRICT_LIVE`, the canonical V26.3 RequestRecord remains the authority for application-owned Bridge evidence. Audit and sanitized export recover evidence from the canonical request record, bind it to its exact Request ID and Round ID, reject sidecar-only evidence and fail closed on conflicts. Auditing remains read-only and does not allocate requests, rounds, bridges, or provider work.
 
-This change makes the canonical RequestRecord the authority for `STRICT_LIVE` Bridge evidence. The audit and sanitized export recover the evidence stored as `request_record["bridge_runtime_evidence"]`, verify its Request ID and canonical Round ID, and reject sidecar-only evidence. If the sidecar conflicts with the canonical copy, proof fails closed. This does not allocate requests, rounds, bridges, or provider work during an audit.
+## Corrected deployed runtime report
 
-## Preserved contracts
+The final user-provided read-only application audit selects the correct Request IDs:
 
-- Frozen provider identity remains `V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`; `VERSION.txt` is unchanged.
-- Provider policy remains official API only, explicit free-model allowlists, no Local Engine, no paid fallback, and no dynamic model discovery.
-- The audit report remains `hotfix164.23-explicit-target-read-only-forensics/v1`; this release does not change its wire schema.
-- Provider-result prose is not used as Bridge runtime authority; the raw bridge value and HTTP body are not exported.
-- Missing/incomplete canonical evidence remains `NOT_PROVEN`.
+- Run A: `6d3429f1dae84863a362e3abbc7aede2` — Round 1 — Bridge hash `40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79` — `PASS`.
+- Run B: `efc1820735ba45ddb9eb04e676ec795a` — Round 2 — Bridge hash `eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f` — `PASS`.
 
-## Validation boundary
+The aggregate application report, strict-live proof, target bindings and target independence are all `PASS`, with no blockers. It reports 2 canonical Messages / 2 Requests / 2 Rounds, four persisted application-owned runtime execution events, one Bridge evidence record and one ledger projection per target, and two distinct request-bound Bridge hashes. The earlier report using `274521681c3b49b68bf988c128803b69` and `317d3f311ffe4ff782eeff2fa4351454` was a stale-target attempt and returned `NOT_PROVEN`; it is not the report accepted by this package.
 
-Regression tests for canonical evidence recovery, sidecar loss, sidecar-only rejection, and sidecar/canonical conflict are software regression tests. They are not provider executions. The release package does **not** claim live final closure. Live closure remains `NOT_PROVEN` until the deployed application records two real, request-bound DeepSeek Seat 7 → Gemini Seat 2 transactions with complete application-owned WRITE → VALIDATE → COMMIT → BARRIER → TARGET_DISPATCH → TARGET_RESPONSE → READ → MATCH evidence, prepared HTTP payload attestation, prompt/payload isolation, and canonical Message→Request→Round bindings.
+## Regression and proof boundary
 
-## Deployment note
+The complete test suite validates software regressions and the supplied report acceptance gate. It does not invoke DeepSeek or Gemini, and it does not manufacture runtime events. Live execution is asserted only as reported by the deployed application's final application-owned audit output, recorded in `evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json`. Missing or contradictory evidence must continue to fail closed.
 
-This is a local release candidate only until its files are committed and the matching CI workflow succeeds on the deployment branch. After deployment, send the two Bridge test messages in the same canonical conversation and run the read-only explicit-target audit against those exact Request IDs. Do not use synthetic fixtures or a blank-target audit as proof of live closure.
+## Preserved provider contracts
 
-## Post-deployment runtime evidence supplement
-
-A subsequent read-only explicit-target audit was supplied for two actual deployed application requests. The audit reports `STRICT_LIVE` PASS for both Request IDs, 2 canonical messages / 2 requests / 2 rounds, six persisted application-owned runtime execution events, no missing evidence, and two distinct request-bound Bridge hashes. See `HOTFIX164.26_FINAL_CLOSURE_STATUS.md` and `evidence/HOTFIX164.26_RUNTIME_BRIDGE_AUDIT.json` for the bounded evidence record and acceptance gate. This external runtime evidence is distinct from the offline regression suite; the verifier does not issue provider calls.
+- Frozen provider identity: `V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE`.
+- Official API only; explicit `*_FREE_MODELS`; no Local Engine; no paid fallback; no dynamic model discovery.
+- `VERSION.txt` unchanged; read-only report schema remains `hotfix164.23-explicit-target-read-only-forensics/v1`.
