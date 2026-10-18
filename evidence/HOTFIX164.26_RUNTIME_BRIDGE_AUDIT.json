@@ -1,5 +1,5 @@
 {
-  "source_note": "Normalized acceptance snapshot transcribed from the final corrected user-provided HOTFIX164.26 deployed-application audit report on 2026-10-18. The report is application-produced; this snapshot is not a synthetic provider execution.",
+  "source_note": "Normalized acceptance snapshot transcribed from the latest user-provided HOTFIX164.26 deployed-application read-only audit report on 2026-10-18. The report is application-produced; this snapshot is not a synthetic provider execution.",
   "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
   "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE_AND_APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE",
   "status": "PASS",
@@ -18,7 +18,7 @@
   "canonical_vs_persisted_request_counter_status": "PASS",
   "cascade_execution": 0,
   "duplicate_canonical_request_ids": [],
-  "execution_started_count": 4,
+  "execution_started_count": 5,
   "execution_started_source": "PERSISTED_APPLICATION_OWNED_RUNTIME_EXECUTION_EVENTS_ONLY",
   "fail_closed_rule": "FAIL_OR_NOT_PROVEN_IF_ANY_COUNTER_CONFLICTS_OR_REQUIRED_TARGET_OR_BRIDGE_EVIDENCE_IS_MISSING",
   "historical_canonical_counts_unchanged": {
@@ -56,11 +56,11 @@
       "cascade_summary_present": true,
       "direct_request_projection_present": true,
       "execution_identity_status": "PASS",
-      "execution_started_count": 2,
+      "execution_started_count": 3,
       "message_identity_status": "PASS",
       "missing_required_artifacts": [],
       "request_execution_status": "PASS",
-      "request_id": "6d3429f1dae84863a362e3abbc7aede2",
+      "request_id": "5acf12d46319424082fce5db5a1be9f2",
       "required_artifacts": {
         "AUTHORITATIVE_METRICS": "PASS",
         "BRIDGE_AUDIT": "PASS",
@@ -97,7 +97,7 @@
       "message_identity_status": "PASS",
       "missing_required_artifacts": [],
       "request_execution_status": "PASS",
-      "request_id": "efc1820735ba45ddb9eb04e676ec795a",
+      "request_id": "018889aa696f4be0a1ddf107e6c2ceec",
       "required_artifacts": {
         "AUTHORITATIVE_METRICS": "PASS",
         "BRIDGE_AUDIT": "PASS",
@@ -117,7 +117,7 @@
       "synthesis_record_present": true
     }
   ],
-  "runtime_execution_event_count": 4,
+  "runtime_execution_event_count": 5,
   "strict_live_bridge_proof": {
     "authoritative_source": "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE",
     "fail_closed_rule": "MISSING_OR_INCOMPLETE_EVIDENCE_NEVER_PASSES",
@@ -130,7 +130,7 @@
         "evidence_record_present": true,
         "failure_reasons": [],
         "missing_evidence": [],
-        "request_id": "6d3429f1dae84863a362e3abbc7aede2",
+        "request_id": "5acf12d46319424082fce5db5a1be9f2",
         "request_identity_status": "PASS",
         "status": "PASS"
       },
@@ -139,7 +139,7 @@
         "evidence_record_present": true,
         "failure_reasons": [],
         "missing_evidence": [],
-        "request_id": "efc1820735ba45ddb9eb04e676ec795a",
+        "request_id": "018889aa696f4be0a1ddf107e6c2ceec",
         "request_identity_status": "PASS",
         "status": "PASS"
       }
@@ -151,12 +151,12 @@
   "target_bridge_independence_status": "PASS",
   "target_request_count": 2,
   "target_request_ids": [
-    "6d3429f1dae84863a362e3abbc7aede2",
-    "efc1820735ba45ddb9eb04e676ec795a"
+    "5acf12d46319424082fce5db5a1be9f2",
+    "018889aa696f4be0a1ddf107e6c2ceec"
   ],
   "target_requests": [
     {
-      "bridge_id_hash": "40a81e4d2578d195657866ab9262e85df878a418769ed0bf42aa0d48e8feed79",
+      "bridge_id_hash": "5e90ff8b7d09cc925cc40eff93f069ac1ced368d0782e01c40d31e99c81a8537",
       "bridge_projection_binding_status": "PASS",
       "bridge_projection_record_count_for_request": 1,
       "bridge_proof_status": "PASS",
@@ -164,18 +164,18 @@
       "bridge_runtime_evidence_record_count_for_request": 1,
       "canonical_request_status": "PASS",
       "canonical_round_binding_status": "PASS",
-      "canonical_round_id": "60581a8f2e534501aacaf2a555e23046:6d3429f1dae84863a362e3abbc7aede2:r1",
+      "canonical_round_id": "feed1d2f115b4dbc83fe3461cd840647:5acf12d46319424082fce5db5a1be9f2:r1",
       "canonical_round_ordinal": "1",
       "failure_reasons": [],
       "message_request_binding_status": "PASS",
       "missing_evidence": [],
-      "request_id": "6d3429f1dae84863a362e3abbc7aede2",
+      "request_id": "5acf12d46319424082fce5db5a1be9f2",
       "required_request_artifacts_status": "PASS",
       "status": "PASS",
       "target_slot": 1
     },
     {
-      "bridge_id_hash": "eeb14331b7f73edfae50b0ee4d71a6fcd7a1c18424b83c102091f674ab76f74f",
+      "bridge_id_hash": "b0696582ebb77b961ec91dd7a00e9d37270d238f7a77e1d915ae45632e28a658",
       "bridge_projection_binding_status": "PASS",
       "bridge_projection_record_count_for_request": 1,
       "bridge_proof_status": "PASS",
@@ -183,12 +183,12 @@
       "bridge_runtime_evidence_record_count_for_request": 1,
       "canonical_request_status": "PASS",
       "canonical_round_binding_status": "PASS",
-      "canonical_round_id": "60581a8f2e534501aacaf2a555e23046:efc1820735ba45ddb9eb04e676ec795a:r2",
+      "canonical_round_id": "feed1d2f115b4dbc83fe3461cd840647:018889aa696f4be0a1ddf107e6c2ceec:r2",
       "canonical_round_ordinal": "2",
       "failure_reasons": [],
       "message_request_binding_status": "PASS",
       "missing_evidence": [],
-      "request_id": "efc1820735ba45ddb9eb04e676ec795a",
+      "request_id": "018889aa696f4be0a1ddf107e6c2ceec",
       "required_request_artifacts_status": "PASS",
       "status": "PASS",
       "target_slot": 2
