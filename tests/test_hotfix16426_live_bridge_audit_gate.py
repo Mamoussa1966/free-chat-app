@@ -11,8 +11,8 @@ OLD_IDS = [
     "317d3f311ffe4ff782eeff2fa4351454",
 ]
 CURRENT_IDS = [
-    "6d3429f1dae84863a362e3abbc7aede2",
-    "efc1820735ba45ddb9eb04e676ec795a",
+    "5acf12d46319424082fce5db5a1be9f2",
+    "018889aa696f4be0a1ddf107e6c2ceec",
 ]
 
 
@@ -25,7 +25,8 @@ def test_hotfix16426_accepts_final_corrected_deployed_audit():
     assert report["status"] == "PASS"
     assert report["blockers"] == []
     assert report["target_request_ids"] == CURRENT_IDS
-    assert report["runtime_execution_event_count"] == 4
+    assert report["runtime_execution_event_count"] == 5
+    assert [row["execution_started_count"] for row in report["requests"]] == [3, 2]
     assert validate_report(report) == []
 
 
@@ -60,3 +61,15 @@ def test_hotfix16426_target_form_does_not_reuse_ids_from_another_run():
     ]}}
     assert main._hotfix16426_clear_stale_target_ids(chat, OLD_IDS) == ["", ""]
     assert main._hotfix16426_clear_stale_target_ids(chat, CURRENT_IDS) == CURRENT_IDS
+
+
+def test_hotfix16426_rejects_superseded_prior_corrected_run_ids():
+    report = deepcopy(_report())
+    report["target_request_ids"] = [
+        "6d3429f1dae84863a362e3abbc7aede2",
+        "efc1820735ba45ddb9eb04e676ec795a",
+    ]
+    errors = validate_report(report)
+    assert "REQUEST_ROWS_ID_MISMATCH" in errors
+    assert "STRICT_LIVE_RECORD_IDS_MISMATCH" in errors
+    assert "TARGET_ROWS_ID_MISMATCH" in errors
