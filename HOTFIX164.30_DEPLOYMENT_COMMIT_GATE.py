@@ -22,7 +22,9 @@ from hotfix16430_deployment_attestation import compute_source_bundle
 EXPECTED_RELEASE = "HOTFIX164.30"
 EXPECTED_CORE = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 EXPECTED_REPORT_SCHEMA = "hotfix164.23-explicit-target-read-only-forensics/v1"
-EXPECTED_ATTESTATION_SCHEMA = "hotfix164.30-runtime-http-attestation/v1"
+# The runtime HTTP attestation wire schema remains independently versioned from the app release.
+# HOTFIX164.30 adds the deployment/source attestation alongside it; it does not rewrite this wire schema.
+EXPECTED_ATTESTATION_SCHEMA = "hotfix164.29-runtime-http-attestation/v1"
 EXPECTED_BOUNDARY = "requests.PreparedRequest.body"
 EXPECTED_PHASES = ["SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER", "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH"]
 EXPECTED_EVENT_STATUSES = ["SUCCESS", "RECORDED", "PASS", "PASS", "PASS", "ACCEPTED", "SUCCESS", "PASS", "PASS"]

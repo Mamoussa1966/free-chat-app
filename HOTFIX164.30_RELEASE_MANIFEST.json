@@ -17,7 +17,8 @@
     "build_release.py",
     "tests/test_hotfix16425_release_contract.py",
     "tests/test_provider_runtime.py",
-    "tests/test_hotfix16430_deployment_attestation.py"
+    "tests/test_hotfix16430_deployment_attestation.py",
+    "tests/test_hotfix16430_http_schema_alignment.py"
   ],
   "release_contract": {
     "runtime_label_matches_manifest_release": true,
@@ -37,7 +38,8 @@
     "source_bundle_fingerprint_required_for_live_pass": true,
     "runtime_attestation_freshness_window_minutes": 30,
     "exact_deployed_source_commit_checked_out_by_workflow": true,
-    "runtime_evidence_excluded_from_release_archive": true
+    "runtime_evidence_excluded_from_release_archive": true,
+    "http_attestation_schema_pinned_to_runtime_exporter": true
   },
   "independent_gate_contract": {
     "schema": "hotfix164.30-independent-closure-result/v1",
@@ -61,7 +63,9 @@
     "observed_deployment_commit_required_when_host_exposes_sha": true,
     "target_commit_checked_out_before_verification": true,
     "runtime_attestation_must_be_fresh_within_minutes": 30,
-    "evidence_commit_may_be_separate_from_deployed_source_commit": true
+    "evidence_commit_may_be_separate_from_deployed_source_commit": true,
+    "runtime_http_attestation_schema": "hotfix164.29-runtime-http-attestation/v1",
+    "wire_schema_remains_independent_of_release_identity": true
   },
   "bridge_closure_contract": {
     "authoritative_v26_3_store_required": true,
@@ -73,7 +77,7 @@
     "missing_or_incomplete_evidence_passes": false,
     "synthetic_request_or_bridge_evidence_allowed": false,
     "live_final_closure_proven": false,
-    "status": "NOT_PROVEN until the deployed HOTFIX164.30 app exports a fresh bridge report with source-bundle attestation, and the independent verifier checks the exact runtime-reported commit or exact source-bundle match."
+    "status": "NOT_PROVEN until a fresh deployed HOTFIX164.30 report matches the exact deployed commit and source-bundle hash and passes the independent gate."
   },
   "guardrails": {
     "provider_core_identity_changed": false,
@@ -89,15 +93,15 @@
     "live_final_closure_proven": false
   },
   "offline_validation": {
-    "scope": "Full regression and root-level ZIP round-trip for HOTFIX164.30",
+    "scope": "Full pytest regression run after HTTP attestation schema-alignment patch; independent release build ZIP round-trip remains unverified",
     "full_regression_status": "PASS",
-    "passed": 664,
+    "passed": 666,
     "failed": 0,
     "errors": 0,
-    "test_files": 174,
+    "test_files": 175,
     "live_provider_calls_made": false,
     "live_final_closure_proven": false,
-    "stale_evidence_exports_embedded_in_release_archive": false
+    "zip_roundtrip_status": "NOT_PROVEN"
   },
   "report_schema_contract": {
     "read_only_audit_schema": "hotfix164.23-explicit-target-read-only-forensics/v1",

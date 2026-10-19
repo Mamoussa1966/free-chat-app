@@ -16,3 +16,9 @@
 4. Run **HOTFIX164.30 Deployed Commit-Bound Live Closure**. If the app host provides a Git SHA, the workflow checks out exactly that commit. Otherwise, enter the exact deployed commit SHA obtained from the Streamlit deployment details.
 
 **Live final closure remains NOT_PROVEN until a fresh exported report passes this new independent gate.** Creating this source package or passing offline tests alone does not prove the deployed app is closed.
+
+## HOTFIX164.30 schema-alignment correction
+
+- Corrected the independent gate to require the existing `hotfix164.29-runtime-http-attestation/v1` wire schema actually emitted by the runtime exporter. The HTTP wire schema is independently versioned from the application release.
+- Added a regression test ensuring the validator and runtime exporter use the same schema.
+- This is a fail-closed compatibility correction only: it does not turn the submitted evidence into PASS, change Bridge evidence, or claim deployed closure. A fresh report from the redeployed source must still pass the commit/source-bundle gate.
