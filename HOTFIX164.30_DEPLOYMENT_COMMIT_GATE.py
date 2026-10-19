@@ -138,6 +138,7 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
 
     _eq(manifest, "release", EXPECTED_RELEASE, "MANIFEST", errors)
     _eq(manifest, "provider_core_identity", EXPECTED_CORE, "MANIFEST", errors)
+    _eq(manifest, "deployed_release_label", EXPECTED_APP_IDENTITY, "MANIFEST", errors)
     if (manifest.get("bridge_closure_contract") or {}).get("live_final_closure_proven") is not False:
         errors.append("MANIFEST_MUST_NOT_PRECLAIM_LIVE_CLOSURE")
     if (manifest.get("guardrails") or {}).get("version_txt_contract_preserved") is not True:
@@ -175,7 +176,11 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
                     if core != EXPECTED_CORE:
                         errors.append("ARCHIVE_FROZEN_PROVIDER_IDENTITY_MISMATCH")
                     provider_source = zf.read("providers.py").decode("utf-8")
-                    if not re.search(r'CURRENT_HOTFIX_RELEASE_VERSION\s*=\s*[\"\']HOTFIX164\.29\s', provider_source):
+                    release_match = re.search(
+                        r'CURRENT_HOTFIX_RELEASE_VERSION\s*=\s*([\"\'])(.*?)\1',
+                        provider_source,
+                    )
+                    if not release_match or release_match.group(2) != EXPECTED_APP_IDENTITY:
                         errors.append("ARCHIVE_APP_RELEASE_LABEL_MISMATCH")
                     embedded_manifest = zf.read("HOTFIX164.30_RELEASE_MANIFEST.json")
                     if embedded_manifest != manifest_path.read_bytes():

@@ -287,7 +287,8 @@ def main() -> int:
     verify_extracted_release(out)
     (ROOT / "RELEASE_MANIFEST.json").write_text(json.dumps({**manifest, "zip": out.name}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     digest = manifest["sha256"]
-    (ROOT / f"{out.name}.sha256").write_text(f"{digest}  {out.name}\n", encoding="utf-8")
+    checksum_path = out.with_name(f"{out.name}.sha256")
+    checksum_path.write_text(f"{digest}  {out.name}\n", encoding="utf-8")
     print(json.dumps({**manifest, "zip": out.name}, ensure_ascii=False, indent=2))
     return 0
 
