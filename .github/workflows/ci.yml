@@ -1,0 +1,112 @@
+name: AI Council CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - gitops-v0.4-final
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-council-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  regression-and-package:
+    name: CI / regression-and-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Verify frozen HOTFIX164.30 identity contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import main
+          import providers
+
+          expected_core = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+          expected_release = "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE"
+          manifest = json.loads(Path("HOTFIX164.30_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+
+          assert Path("VERSION.txt").read_text(encoding="utf-8").strip() == expected_core
+          assert providers.VERSION == expected_core
+          assert providers.CURRENT_HOTFIX_RELEASE_VERSION == expected_release
+          assert main.DISPLAY_VERSION == expected_release
+          assert manifest["release"] == "HOTFIX164.30"
+          assert manifest["provider_core_identity"] == expected_core
+          assert manifest["deployed_release_label"] == expected_release
+          assert manifest["bridge_closure_contract"]["live_final_closure_proven"] is False
+          print("FROZEN_PROVIDER_IDENTITY=PASS")
+          print("HOTFIX164.30_RELEASE_IDENTITY=PASS")
+          print("BASELINE_MANIFEST_NOT_PRECLAIMING_LIVE_CLOSURE=PASS")
+          PY
+
+      - name: Build and verify isolated release candidate (includes full regression suite)
+        run: |
+          mkdir -p dist
+          python build_release.py --output dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip
+
+      - name: Verify release ZIP and SHA-256 sidecar
+        run: |
+          sha256sum -c dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip.sha256
+          unzip -t dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          zip_path = Path("dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip")
+          sidecar = Path(str(zip_path) + ".sha256")
+          digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+          assert sidecar.read_text(encoding="utf-8").strip() == f"{digest}  {zip_path.name}"
+          report = {
+              "schema": "ai-council-automation-foundation-ci-attestation/v1",
+              "release_baseline": "HOTFIX164.30",
+              "commit_sha": __import__("subprocess").check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "branch": __import__("os").environ.get("GITHUB_REF_NAME", "unknown"),
+              "candidate_zip": zip_path.name,
+              "candidate_sha256": digest,
+              "sidecar_verified": True,
+              "full_release_roundtrip": True,
+              "live_deployment_closure_proven": False
+          }
+          Path("dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CI_ATTESTATION.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload CI candidate and checksums
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: HOTFIX164.30-automation-foundation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip
+            dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip.sha256
+            dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CI_ATTESTATION.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
