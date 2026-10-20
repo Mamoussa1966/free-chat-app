@@ -57,7 +57,7 @@ jobs:
 
       - name: Upload verified ZIP and manifests
         if: ${{ success() && hashFiles('HOTFIX164.16_BRIDGE_RUNTIME_EVIDENCE_CLOSURE.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.16-bridge-runtime-evidence-closure
           path: |

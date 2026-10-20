@@ -57,7 +57,7 @@ jobs:
 
       - name: Upload generated ZIP and SHA-256
         if: ${{ success() && hashFiles('HOTFIX164.17_PER_REQUEST_BRIDGE_RUNTIME_PROOF_CLOSURE.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.17-per-request-bridge-runtime-proof
           path: |

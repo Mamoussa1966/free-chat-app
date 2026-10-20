@@ -55,7 +55,7 @@ jobs:
         run: python build_release.py --output HOTFIX164.28_RUNTIME_BRIDGE_FINAL_CLOSURE.zip
       - name: Upload candidate artifacts (not a live API proof)
         if: ${{ success() && hashFiles('HOTFIX164.28_RUNTIME_BRIDGE_FINAL_CLOSURE.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.28-runtime-bridge-final-closure-candidate
           path: |

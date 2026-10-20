@@ -51,7 +51,7 @@ jobs:
 
       - name: Upload diagnostics and verified release candidate
         if: ${{ always() && hashFiles('HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.15-regression-artifacts
           path: |
