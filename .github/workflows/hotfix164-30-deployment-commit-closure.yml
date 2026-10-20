@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout evidence-bearing revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -71,7 +71,7 @@ jobs:
           echo "CHECKED_OUT_DEPLOYED_COMMIT=$TARGET_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -121,7 +121,7 @@ jobs:
 
       - name: Upload diagnostic result even when the closure gate blocks
         if: ${{ always() && hashFiles('dist/HOTFIX164.30_INDEPENDENT_CLOSURE_RESULT.json') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.30-deployed-commit-closure-diagnostics
           path: dist/HOTFIX164.30_INDEPENDENT_CLOSURE_RESULT.json
@@ -130,7 +130,7 @@ jobs:
 
       - name: Publish candidate artifact only after independently verified deployed closure
         if: ${{ success() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.30-deployed-commit-closure-verified-candidate
           path: |

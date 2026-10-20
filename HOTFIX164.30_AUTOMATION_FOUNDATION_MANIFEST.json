@@ -1,0 +1,20 @@
+{
+  "schema": "hotfix164.30-automation-foundation-candidate/v1",
+  "baseline_release": "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE",
+  "baseline_commit_sha": "c171c1ef4f85160a939d28f1aff505c62fa7f9a7",
+  "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
+  "version_txt_preserved": true,
+  "application_runtime_changed": false,
+  "canonical_v26_3_logic_changed": false,
+  "bridge_runtime_logic_changed": false,
+  "tests_modified": false,
+  "files_added": [
+    ".github/workflows/ci.yml",
+    ".github/dependabot.yml",
+    ".github/rulesets/gitops-v0.4-final.ruleset.json",
+    "docs/AUTOMATION_FOUNDATION_HOTFIX164.30.md"
+  ],
+  "candidate_state": "NOT_YET_COMMITTED_OR_DEPLOYED",
+  "live_final_closure_proven": false,
+  "note": "Automation-foundation candidate based on the verified HOTFIX164.30 source snapshot. The new commit must pass CI and the existing deployed-commit-bound live closure gate with fresh app-exported evidence before it is considered deployed or finally closed. The branch ruleset JSON must be applied in GitHub repository settings; storing it in the repository does not enforce it."
+}
