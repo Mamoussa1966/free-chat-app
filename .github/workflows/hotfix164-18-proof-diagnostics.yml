@@ -1,9 +1,11 @@
-name: HOTFIX164.26 Canonical Bridge Evidence Rehydration
+name: HOTFIX164.26 Historical Canonical Bridge Evidence Rehydration
 
+# HOTFIX164.26 is a historical release workflow. Keep its strict release checks
+# intact, but never run them automatically against the current HOTFIX164.30 line.
 on:
   push:
-    branches:
-      - gitops-v0.4-final
+    tags:
+      - 'HOTFIX164.26*'
   workflow_dispatch:
 
 permissions:
@@ -15,12 +17,17 @@ concurrency:
 
 jobs:
   regression:
+    # Manual dispatch is also restricted to a matching historical release tag.
+    # A dispatch from gitops-v0.4-final is skipped instead of failing on stale identity.
+    if: startsWith(github.ref, 'refs/tags/HOTFIX164.26')
     name: Full regression, production core, and ZIP round-trip
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - name: Checkout target branch
+      - name: Checkout target release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
