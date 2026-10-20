@@ -24,10 +24,10 @@ jobs:
 
     steps:
       - name: Checkout selected release candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload independent diagnostics (including NOT_PROVEN on failure)
         if: ${{ always() && hashFiles('dist/HOTFIX164.29_INDEPENDENT_CLOSURE_RESULT.json') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.29-independent-closure-diagnostics
           path: dist/HOTFIX164.29_INDEPENDENT_CLOSURE_RESULT.json
@@ -101,7 +101,7 @@ jobs:
 
       - name: Upload final candidate only after independent closure PASS
         if: ${{ success() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.29-final-closure-verified-candidate
           path: |

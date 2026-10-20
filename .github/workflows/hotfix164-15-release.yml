@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout target branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -51,7 +51,7 @@ jobs:
 
       - name: Upload diagnostics and verified release candidate
         if: ${{ always() && hashFiles('HOTFIX164.15_FINAL_REGRESSION_CLOSURE.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.15-regression-artifacts
           path: |
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the selected target ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download the exact tested ZIP and its generated manifest
         uses: actions/download-artifact@v4

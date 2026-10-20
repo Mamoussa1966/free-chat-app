@@ -1,18 +1,10 @@
 name: HOTFIX164.28 Request-Bound Bridge Closure Candidate
 
 on:
+  push:
+    tags:
+      - 'HOTFIX164.28*'
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'main.py'
-      - 'providers.py'
-      - 'conversation_store.py'
-      - 'conversation_v25_runtime.py'
-      - 'production_platform.py'
-      - 'tests/**'
-      - 'HOTFIX164.28_RELEASE_MANIFEST.json'
-      - '.github/workflows/hotfix164-28-closure.yml'
-
 permissions:
   contents: read
 
@@ -25,8 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: pip
@@ -63,7 +55,7 @@ jobs:
         run: python build_release.py --output HOTFIX164.28_RUNTIME_BRIDGE_FINAL_CLOSURE.zip
       - name: Upload candidate artifacts (not a live API proof)
         if: ${{ success() && hashFiles('HOTFIX164.28_RUNTIME_BRIDGE_FINAL_CLOSURE.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.28-runtime-bridge-final-closure-candidate
           path: |

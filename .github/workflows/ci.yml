@@ -71,7 +71,9 @@ jobs:
 
       - name: Verify release ZIP and SHA-256 sidecar
         run: |
-          sha256sum -c dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip.sha256
+          # build_release.py writes only the archive basename into the .sha256 sidecar.
+          # Run sha256sum from dist so the relative archive path resolves correctly.
+          (cd dist && sha256sum -c HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip.sha256)
           unzip -t dist/HOTFIX164.30_AUTOMATION_FOUNDATION_CANDIDATE.zip
           python - <<'PY'
           import hashlib
