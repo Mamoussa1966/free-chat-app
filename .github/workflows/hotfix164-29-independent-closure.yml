@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload independent diagnostics (including NOT_PROVEN on failure)
         if: ${{ always() && hashFiles('dist/HOTFIX164.29_INDEPENDENT_CLOSURE_RESULT.json') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.29-independent-closure-diagnostics
           path: dist/HOTFIX164.29_INDEPENDENT_CLOSURE_RESULT.json
@@ -101,7 +101,7 @@ jobs:
 
       - name: Upload final candidate only after independent closure PASS
         if: ${{ success() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.29-final-closure-verified-candidate
           path: |

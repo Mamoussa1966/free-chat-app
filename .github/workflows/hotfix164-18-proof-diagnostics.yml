@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload generated ZIP and SHA-256
         if: ${{ success() && hashFiles('HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.26-canonical-bridge-evidence-rehydration
           path: |

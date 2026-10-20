@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload candidate ZIP and validation metadata (never publish automatically)
         if: ${{ success() && hashFiles('HOTFIX164.25_HISTORICAL_HOTFIX16419_COMPATIBILITY_AUDIT.zip') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HOTFIX164.25-historical-HOTFIX16419-compatibility-audit
           path: |
