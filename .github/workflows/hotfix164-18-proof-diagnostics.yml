@@ -1,105 +1,129 @@
 name: HOTFIX164.26 Historical Canonical Bridge Evidence Rehydration
 
-# HOTFIX164.26 is a historical release workflow. Keep its strict release checks
-# intact, but never run them automatically against the current HOTFIX164.30 line.
+HOTFIX164.26 is a historical release workflow. Keep its strict release checks
+
+intact, but never run them automatically against the current HOTFIX164.30 line.
+
 on:
-  push:
-    tags:
-      - 'HOTFIX164.26*'
-  workflow_dispatch:
+push:
+tags:
+- 'HOTFIX164.26*'
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 concurrency:
-  group: hotfix164-26-canonical-bridge-evidence-${{ github.ref }}
-  cancel-in-progress: false
+group: hotfix164-26-canonical-bridge-evidence-${{ github.ref }}
+cancel-in-progress: false
 
 jobs:
-  regression:
-    # Manual dispatch is also restricted to a matching historical release tag.
-    # A dispatch from gitops-v0.4-final is skipped instead of failing on stale identity.
-    if: startsWith(github.ref, 'refs/tags/HOTFIX164.26')
-    name: Full regression, production core, and ZIP round-trip
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - name: Checkout target release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
+regression:
+# Manual dispatch is also restricted to a matching historical release tag.
+# A dispatch from gitops-v0.4-final is skipped instead of failing on stale identity.
+if: startsWith(github.ref, 'refs/tags/HOTFIX164.26')
+name: Full regression, production core, and ZIP round-trip
+runs-on: ubuntu-latest
+timeout-minutes: 40
+steps:
+- name: Checkout target release tag
+uses: actions/checkout@v4
+with:
+ref: ${{ github.ref }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.11"
+      cache: pip
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      python -m pip install -r requirements.txt pytest
 
-      - name: Validate sources, run full regression, build ZIP, and retest extracted ZIP
-        run: |
-          python build_release.py --output HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip
+  - name: Validate sources, run full regression, build ZIP, and retest extracted ZIP
+    run: |
+      python build_release.py --output HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip
 
-      - name: Verify frozen provider identity and release scope
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          import providers
-          import main
-          expected = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
-          if Path("VERSION.txt").read_text(encoding="utf-8").strip() != expected:
-              raise SystemExit("VERSION_CONTRACT_FAILED")
-          manifest = json.loads(Path("HOTFIX164.26_RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
-          if manifest.get("release") != "HOTFIX164.26" or manifest.get("provider_core_identity") != expected:
-              raise SystemExit("HOTFIX164.26_MANIFEST_IDENTITY_FAILED")
-          if not providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith("HOTFIX164.26 "):
-              raise SystemExit("HOTFIX164.26_RUNTIME_LABEL_FAILED")
-          if main.DISPLAY_VERSION != providers.CURRENT_HOTFIX_RELEASE_VERSION:
-              raise SystemExit("DISPLAY_PROVIDER_RELEASE_IDENTITY_FAILED")
-          if main.PLATFORM_RELEASE_VERSION != providers.PLATFORM_RELEASE_VERSION:
-              raise SystemExit("PLATFORM_RELEASE_IDENTITY_FAILED")
-          schema_contract = manifest.get("report_schema_contract", {})
-          if schema_contract.get("read_only_audit_schema") != "hotfix164.23-explicit-target-read-only-forensics/v1":
-              raise SystemExit("REPORT_SCHEMA_CONTRACT_FAILED")
-          if schema_contract.get("wire_contract_changed") is not False:
-              raise SystemExit("REPORT_SCHEMA_COMPATIBILITY_FAILED")
-          contract = manifest.get("release_contract", {})
-          if contract.get("runtime_label_matches_main_display_version") is not True:
-              raise SystemExit("DISPLAY_VERSION_MANIFEST_CONTRACT_FAILED")
-          if contract.get("provider_core_identity_frozen") is not True or contract.get("version_txt_contract_preserved") is not True:
-              raise SystemExit("FROZEN_PROVIDER_CONTRACT_FAILED")
-          bridge_contract = manifest.get("bridge_closure_contract", {})
-          if bridge_contract.get("live_final_closure_proven") is not False or bridge_contract.get("missing_or_incomplete_evidence_passes") is not False:
-              raise SystemExit("BRIDGE_FAIL_CLOSED_CONTRACT_FAILED")
-          if bridge_contract.get("canonical_request_record_is_evidence_authority") is not True:
-              raise SystemExit("CANONICAL_BRIDGE_EVIDENCE_AUTHORITY_FAILED")
-          if bridge_contract.get("sidecar_only_evidence_satisfies_strict_live") is not False:
-              raise SystemExit("STRICT_LIVE_SIDECAR_FALLBACK_FAILED")
-          guards = manifest.get("guardrails", {})
-          if guards.get("v26_3_identity_logic_changed") is not False or guards.get("canonical_counter_logic_changed") is not False:
-              raise SystemExit("CANONICAL_SCOPE_GUARD_FAILED")
-          print("VERSION_CONTRACT=PASS")
-          print("HOTFIX164.26_RELEASE_CONTRACT=PASS")
-          print("PLATFORM_RELEASE_IDENTITY=PASS")
-          print("REPORT_SCHEMA_COMPATIBILITY=PASS")
-          print("BRIDGE_FAIL_CLOSED_CONTRACT=PASS")
-          PY
+  - name: Verify frozen provider identity and release scope
+    run: |
+      python - <<'PY'
+      import json
+      from pathlib import Path
+      import providers
+      import main
 
-      - name: Upload generated ZIP and SHA-256
-        if: ${{ success() && hashFiles('HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: HOTFIX164.26-canonical-bridge-evidence-rehydration
-          path: |
-            HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip
-            HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip.sha256
-            RELEASE_MANIFEST.json
-            HOTFIX164.26_RELEASE_MANIFEST.json
-            HOTFIX164.26_RELEASE_NOTES.md
-          if-no-files-found: error
-          retention-days: 14
+      expected = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
+
+      if Path("VERSION.txt").read_text(encoding="utf-8").strip() != expected:
+          raise SystemExit("VERSION_CONTRACT_FAILED")
+
+      manifest = json.loads(
+          Path("HOTFIX164.26_RELEASE_MANIFEST.json").read_text(encoding="utf-8")
+      )
+
+      if manifest.get("release") != "HOTFIX164.26" or manifest.get("provider_core_identity") != expected:
+          raise SystemExit("HOTFIX164.26_MANIFEST_IDENTITY_FAILED")
+
+      if not providers.CURRENT_HOTFIX_RELEASE_VERSION.startswith("HOTFIX164.26 "):
+          raise SystemExit("HOTFIX164.26_RUNTIME_LABEL_FAILED")
+
+      if main.DISPLAY_VERSION != providers.CURRENT_HOTFIX_RELEASE_VERSION:
+          raise SystemExit("DISPLAY_PROVIDER_RELEASE_IDENTITY_FAILED")
+
+      if main.PLATFORM_RELEASE_VERSION != providers.PLATFORM_RELEASE_VERSION:
+          raise SystemExit("PLATFORM_RELEASE_IDENTITY_FAILED")
+
+      schema_contract = manifest.get("report_schema_contract", {})
+
+      if schema_contract.get("read_only_audit_schema") != "hotfix164.23-explicit-target-read-only-forensics/v1":
+          raise SystemExit("REPORT_SCHEMA_CONTRACT_FAILED")
+
+      if schema_contract.get("wire_contract_changed") is not False:
+          raise SystemExit("REPORT_SCHEMA_COMPATIBILITY_FAILED")
+
+      contract = manifest.get("release_contract", {})
+
+      if contract.get("runtime_label_matches_main_display_version") is not True:
+          raise SystemExit("DISPLAY_VERSION_MANIFEST_CONTRACT_FAILED")
+
+      if contract.get("provider_core_identity_frozen") is not True or contract.get("version_txt_contract_preserved") is not True:
+          raise SystemExit("FROZEN_PROVIDER_CONTRACT_FAILED")
+
+      bridge_contract = manifest.get("bridge_closure_contract", {})
+
+      if bridge_contract.get("live_final_closure_proven") is not False or bridge_contract.get("missing_or_incomplete_evidence_passes") is not False:
+          raise SystemExit("BRIDGE_FAIL_CLOSED_CONTRACT_FAILED")
+
+      if bridge_contract.get("canonical_request_record_is_evidence_authority") is not True:
+          raise SystemExit("CANONICAL_BRIDGE_EVIDENCE_AUTHORITY_FAILED")
+
+      if bridge_contract.get("sidecar_only_evidence_satisfies_strict_live") is not False:
+          raise SystemExit("STRICT_LIVE_SIDECAR_FALLBACK_FAILED")
+
+      guards = manifest.get("guardrails", {})
+
+      if guards.get("v26_3_identity_logic_changed") is not False or guards.get("canonical_counter_logic_changed") is not False:
+          raise SystemExit("CANONICAL_SCOPE_GUARD_FAILED")
+
+      print("VERSION_CONTRACT=PASS")
+      print("HOTFIX164.26_RELEASE_CONTRACT=PASS")
+      print("PLATFORM_RELEASE_IDENTITY=PASS")
+      print("REPORT_SCHEMA_COMPATIBILITY=PASS")
+      print("BRIDGE_FAIL_CLOSED_CONTRACT=PASS")
+      PY
+
+  - name: Upload generated ZIP and SHA-256
+    if: ${{ success() && hashFiles('HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip') != '' }}
+    uses: actions/upload-artifact@v4
+    with:
+      name: HOTFIX164.26-canonical-bridge-evidence-rehydration
+      path: |
+        HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip
+        HOTFIX164.26_CANONICAL_BRIDGE_EVIDENCE_REHYDRATION.zip.sha256
+        RELEASE_MANIFEST.json
+        HOTFIX164.26_RELEASE_MANIFEST.json
+        HOTFIX164.26_RELEASE_NOTES.md
+      if-no-files-found: error
+      retention-days: 14
