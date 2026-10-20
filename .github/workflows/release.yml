@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out the exact tagged commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0

@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout requested source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source_ref }}
           fetch-depth: 0
