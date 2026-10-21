@@ -3009,13 +3009,28 @@ def _render_agent_rooms(chat: dict, model_candidates: dict, credentials: dict):
         cols = st.columns(2, gap="medium")
         left = rooms[index]
         right = rooms[index + 1] if index + 1 < len(rooms) else None
-    with cols[0]:
-    if left is None:
-        voice_submission = _render_user_room(
-            chat, credentials, model_candidates
-        )
-    else:
-        _render_ai_room(chat, left, model_candidates)
+        with cols[0]:
+            # Preserve the user's voice submission. Previously the result was
+            # overwritten with None on every later row while rendering AI seats.
+            if left is None:
+                voice_submission = _render_user_room(chat, credentials, model_candidates)
+            else:
+                _render_ai_room(chat, left, model_candidates)
+        with cols[1]:
+            if right is not None:
+                _render_ai_room(chat, right, model_candidates)
+    return voice_submission
+
+
+def _result_error_classification(result: dict) -> str:
+    details = result.get("attempt_diagnostics", []) or []
+    for detail in reversed(details):
+        value = str(detail.get("classification") or "").strip().upper()
+        if value in {
+            "MODEL_UNAVAILABLE", "QUOTA_EXCEEDED", "RATE_LIMITED",
+            "AUTHENTICATION_ERROR", "API_ERROR", "TRANSIENT_PROVIDER_ERROR", "INVALID_REQUEST", "NETWORK_ERROR",
+            "TIMEOUT", "UNKNOWN",
+        }:
             return PUBLIC_NO_RESPONSE if value == "TIMEOUT" else value
     # Public/history results intentionally no longer retain raw diagnostics.
     # Resolve the already-sanitized attempt summaries as a second source.
