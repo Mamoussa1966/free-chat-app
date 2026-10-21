@@ -37,7 +37,7 @@
     "gitops_layer.py": "d62caa4708b80e701dc40e5484ce33f66f5d61a82fb40a34aa59a40867fa5353",
     "main.py": "6089137840cfeb690ff296d3ed2a51ba4549bae2b3e9e7ba84f0df04381bf75a",
     "providers.py": "212dcdd69216420dfed6abed69ca8a39b178bba9a9b20c37733fce3f327c8b17",
-    "requirements.txt": "f4ef1e44db2c8d0433405729684aff050c10331de98d450dcf87bc8b74d311e0",
+    "requirements.txt": "9781acf7a7f67eb2c6897615faaa9fd90fbd6a9f6c08dbf4d52583d93dec3a41",
     "tests/__init__.py": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "tests/conftest.py": "cb83862689693e33ef1d510780af0d5bd7286ebcf063b714b75ccd72f867a175",
     "tests/test_attachments.py": "80d85cf66c20c14b04aa54c1ab90f652eb09a2a5e8c5c4656b88fce1562b030f",
