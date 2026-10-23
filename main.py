@@ -2936,16 +2936,35 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                     if transcription.get("status") == "SUCCESS" and transcription.get("text", "").strip():
                         st.session_state.last_voice_error = ""
                         transcript_text = str(transcription.get("text") or "").strip()
-                        st.success("✅ تم تحويل التسجيل إلى نص بنجاح.")
-                        st.markdown("**📝 النص المستخرج من التسجيل الصوتي**")
-                        st.write(transcript_text)
                         transcription_model = str(transcription.get("model") or "").strip()
-                        model_suffix = f" · النموذج: {transcription_model}" if transcription_model else ""
-                        st.caption(f"مدة تحويل الصوت عبر Gemini: {transcription_seconds:.2f} ثانية{model_suffix}")
+                        # Preserve the latest successful voice transcript across the
+                        # post-submission st.rerun() and voice-input key rotation.
+                        st.session_state.last_voice_transcription = {
+                            "chat_id": str(chat.get("id") or ""),
+                            "text": transcript_text,
+                            "seconds": float(transcription_seconds),
+                            "model": transcription_model,
+                        }
                         voice_submission = (transcript_text, audio_bytes, mime, fingerprint)
                     else:
+                        # Do not leave a prior successful transcript looking like the
+                        # result of a recording whose transcription has just failed.
+                        st.session_state.last_voice_transcription = {}
                         st.session_state.last_voice_error = str(transcription.get("error", "unknown error"))
                         st.error(f"تعذر تحويل الصوت: {st.session_state.last_voice_error}")
+        voice_diagnostic = st.session_state.get("last_voice_transcription")
+        if (
+            isinstance(voice_diagnostic, dict)
+            and str(voice_diagnostic.get("chat_id") or "") == str(chat.get("id") or "")
+            and str(voice_diagnostic.get("text") or "").strip()
+        ):
+            st.success("✅ تم تحويل التسجيل إلى نص بنجاح.")
+            st.markdown("**📝 النص المستخرج من التسجيل الصوتي**")
+            st.write(str(voice_diagnostic["text"]).strip())
+            diagnostic_seconds = max(0.0, float(voice_diagnostic.get("seconds") or 0.0))
+            diagnostic_model = str(voice_diagnostic.get("model") or "").strip()
+            model_suffix = f" · النموذج: {diagnostic_model}" if diagnostic_model else ""
+            st.caption(f"مدة تحويل الصوت عبر Gemini: {diagnostic_seconds:.2f} ثانية{model_suffix}")
         if st.session_state.get("last_voice_error"):
             with st.expander("⚠️ آخر خطأ في تحويل الصوت"):
                 st.code(st.session_state.last_voice_error)
