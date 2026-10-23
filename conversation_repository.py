@@ -20,6 +20,10 @@ class ConversationRepositoryError(RuntimeError):
     """Base class for safe, expected repository failures."""
 
 
+class ConversationAuthenticationError(ConversationRepositoryError):
+    """Raised when the configured Supabase access token is not authenticated."""
+
+
 class ConversationOwnershipError(ConversationRepositoryError):
     """Raised when a write would cross an established conversation owner."""
 
