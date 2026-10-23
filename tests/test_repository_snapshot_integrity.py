@@ -93,7 +93,14 @@ def test_snapshot_rejects_round_with_dangling_identity_reference(field, value, m
 
 def test_snapshot_rejects_contradictory_request_and_user_message_binding():
     record = canonical_record()
-    record["requests"][0]["message_id"] = "a-different-message"
+    record["messages"].append({
+        "message_id": "message-2",
+        "conversation_id": "integrity-conversation",
+        "session_id": "session-1",
+        "role": "assistant",
+        "created_at": "2026-10-23T00:00:03Z",
+    })
+    record["requests"][0]["message_id"] = "message-2"
     with pytest.raises(ValueError, match="message/request binding mismatch"):
         OwnedConversationSnapshot(OWNER, record)
 
