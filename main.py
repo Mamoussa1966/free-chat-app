@@ -2929,11 +2929,20 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                 elif fingerprint in seen:
                     st.warning("هذه الرسالة الصوتية تم إرسالها بالفعل.")
                 else:
-                    with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
+                with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
+                        transcription_started = time.perf_counter()
                         transcription = transcribe_audio_gemini(audio_bytes, mime, credentials.get("gemini"), model_candidates.get("gemini"))
+                    transcription_seconds = max(0.0, time.perf_counter() - transcription_started)
                     if transcription.get("status") == "SUCCESS" and transcription.get("text", "").strip():
                         st.session_state.last_voice_error = ""
-                        voice_submission = (transcription["text"].strip(), audio_bytes, mime, fingerprint)
+                        transcript_text = str(transcription.get("text") or "").strip()
+                        st.success("✅ تم تحويل التسجيل إلى نص بنجاح.")
+                        st.markdown("**📝 النص المستخرج من التسجيل الصوتي**")
+                        st.write(transcript_text)
+                        transcription_model = str(transcription.get("model") or "").strip()
+                        model_suffix = f" · النموذج: {transcription_model}" if transcription_model else ""
+                        st.caption(f"مدة تحويل الصوت عبر Gemini: {transcription_seconds:.2f} ثانية{model_suffix}")
+                        voice_submission = (transcript_text, audio_bytes, mime, fingerprint)
                     else:
                         st.session_state.last_voice_error = str(transcription.get("error", "unknown error"))
                         st.error(f"تعذر تحويل الصوت: {st.session_state.last_voice_error}")
@@ -4539,7 +4548,7 @@ def run_app() -> None:
             fingerprints.add(voice_fingerprint)
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
-        with st.spinner("المجلس ينفذ Free API Cascade بالتوازي…"):
+                with st.spinner("المجلس ينفذ Free API Cascade…"):
             if harness_abc:
                 # The outer request is only the user submission envelope. The harness
                 # mints three independent runtime Request IDs and executes them
