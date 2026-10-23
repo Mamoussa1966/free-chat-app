@@ -7,6 +7,8 @@ Never pass a Supabase secret/service-role key to this adapter.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -45,6 +47,50 @@ _IMMUTABLE_FIELDS = {
         ),
     ),
 }
+
+
+def _decode_unverified_jwt_claims(token: str) -> dict[str, Any]:
+    """Decode claims for a local preflight only; Supabase still verifies the signature."""
+    parts = str(token or "").split(".")
+    if len(parts) != 3 or not parts[1]:
+        raise ValueError("expected a JWT-formatted Supabase token")
+    try:
+        encoded = parts[1]
+        payload = base64.urlsafe_b64decode(encoded + ("=" * (-len(encoded) % 4)))
+        claims = json.loads(payload.decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("Supabase token claims are malformed") from exc
+    if not isinstance(claims, dict):
+        raise ValueError("Supabase token claims are malformed")
+    return claims
+
+
+def _validate_publishable_key(value: str) -> str:
+    key = value.strip()
+    if key.startswith("sb_publishable_") and len(key) > len("sb_publishable_"):
+        return key
+    if key.startswith("sb_secret_"):
+        raise ValueError("Supabase secret keys are forbidden; use a publishable key")
+    # Backwards compatibility for legacy Supabase anon JWT API keys, while
+    # explicitly rejecting a legacy service_role JWT in this parameter.
+    claims = _decode_unverified_jwt_claims(key)
+    if claims.get("role") == "anon":
+        return key
+    if claims.get("role") in {"service_role", "supabase_admin"}:
+        raise ValueError("Supabase service-role/admin keys are forbidden")
+    raise ValueError("publishable_key must be a Supabase publishable key or legacy anon key")
+
+
+def _validate_user_access_token(token: str, identity: AccountIdentity) -> None:
+    # These unverified claims are only a mismatch/privilege preflight. A forged
+    # JWT still fails at Supabase; PostgreSQL RLS remains the authorization gate.
+    claims = _decode_unverified_jwt_claims(token)
+    if claims.get("role") in {"service_role", "supabase_admin"}:
+        raise ValueError("service-role/admin tokens cannot be used as a user session")
+    if claims.get("role") != "authenticated":
+        raise ValueError("access_token must be a signed-in user's authenticated JWT")
+    if claims.get("iss") != identity.issuer or claims.get("sub") != identity.subject:
+        raise ValueError("access token issuer/subject do not match authenticated_identity")
 
 
 def _canonical_json(value: object) -> str:
@@ -140,8 +186,11 @@ class SupabaseConversationRepository:
             normalized_subject = str(uuid.UUID(authenticated_identity.subject))
         except (ValueError, AttributeError, TypeError) as exc:
             raise ValueError("Supabase subject must be a UUID") from exc
-        if normalized_subject != authenticated_identity.subject.lower():
-            raise ValueError("Supabase subject UUID is not normalized")
+        if normalized_subject != authenticated_identity.subject:
+            raise ValueError("Supabase subject UUID must use normalized lowercase form")
+
+        safe_publishable_key = _validate_publishable_key(publishable_key)
+        _validate_user_access_token(access_token, authenticated_identity)
 
         try:
             timeout = float(timeout_seconds)
@@ -151,7 +200,7 @@ class SupabaseConversationRepository:
             raise ValueError("timeout_seconds must be between 0 and 60")
 
         self._base_url = normalized_url
-        self._publishable_key = publishable_key.strip()
+        self._publishable_key = safe_publishable_key
         self._access_token = access_token.strip()
         self._identity = authenticated_identity
         self._owner_id = normalized_subject
