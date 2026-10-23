@@ -4548,7 +4548,7 @@ def run_app() -> None:
             fingerprints.add(voice_fingerprint)
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
-                with st.spinner("المجلس ينفذ Free API Cascade…"):
+  with st.spinner("المجلس ينفذ Free API Cascade…"):
             if harness_abc:
                 # The outer request is only the user submission envelope. The harness
                 # mints three independent runtime Request IDs and executes them
