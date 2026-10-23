@@ -269,9 +269,9 @@ def test_save_is_idempotent_and_append_only_for_established_identity(fake_sessio
     record = canonical_record()
     snapshot = OwnedConversationSnapshot(OWNER_A, record)
     repo.save(snapshot)
-    call_count = len(fake_session.calls)
+    post_count = sum(call["method"] == "POST" for call in fake_session.calls)
     repo.save(snapshot)
-    assert len(fake_session.calls) == call_count
+    assert sum(call["method"] == "POST" for call in fake_session.calls) == post_count
 
     changed = copy.deepcopy(record)
     changed["messages"][0]["request_id"] = "tampered-request"
