@@ -1,14 +1,6 @@
 name: Supabase RLS database tests
 
 on:
-  push:
-    branches:
-      - "**"
-    paths:
-      - "supabase/**"
-      - "supabase_conversation_repository.py"
-      - "tests/test_supabase_conversation_repository.py"
-      - ".github/workflows/supabase-rls-tests.yml"
   pull_request:
     branches:
       - gitops-v0.4-final
