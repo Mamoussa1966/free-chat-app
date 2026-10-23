@@ -263,7 +263,7 @@ class SupabaseConversationRepository:
 
     def _row_params(self, conversation_id: str, owner_id: str) -> dict[str, str]:
         return {
-            "select": "conversation_id,owner_id,canonical_record,snapshot_sha256,created_at,updated_at",
+            "select": "conversation_id,owner_id,canonical_record_json,snapshot_sha256,created_at,updated_at",
             "conversation_id": _eq_filter(conversation_id),
             "owner_id": _eq_filter(owner_id),
             "limit": "1",
@@ -294,21 +294,19 @@ class SupabaseConversationRepository:
     def _decode_row(
         self, owner: AccountIdentity, owner_id: str, row: dict[str, Any]
     ) -> OwnedConversationSnapshot:
-        record = row.get("canonical_record")
-        if isinstance(record, str):
-            try:
-                record = json.loads(record)
-            except (ValueError, TypeError):
-                raise ConversationRepositoryError("stored conversation snapshot is invalid") from None
-        if not isinstance(record, dict):
+        record_json = row.get("canonical_record_json")
+        if not isinstance(record_json, str):
             raise ConversationRepositoryError("stored conversation snapshot is invalid")
         stored_checksum = row.get("snapshot_sha256")
-        expected_checksum = _snapshot_checksum(record)
+        expected_checksum = hashlib.sha256(record_json.encode("utf-8")).hexdigest()
         if not isinstance(stored_checksum, str) or not hmac.compare_digest(
             expected_checksum, stored_checksum
         ):
             raise ConversationRepositoryError("stored conversation snapshot failed integrity validation")
         try:
+            record = json.loads(record_json)
+            if not isinstance(record, dict) or _canonical_json(record) != record_json:
+                raise ValueError("snapshot encoding is not canonical")
             snapshot = OwnedConversationSnapshot(owner, record)
         except (TypeError, ValueError):
             raise ConversationRepositoryError("stored canonical conversation failed validation") from None
@@ -359,8 +357,8 @@ class SupabaseConversationRepository:
         return {
             "conversation_id": snapshot.conversation_id,
             "owner_id": owner_id,
-            "canonical_record": record,
-            "snapshot_sha256": _snapshot_checksum(record),
+            "canonical_record_json": _canonical_json(record),
+            "snapshot_sha256": hashlib.sha256(_canonical_json(record).encode("utf-8")).hexdigest(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -386,8 +384,8 @@ class SupabaseConversationRepository:
                 "owner_id": _eq_filter(owner_id),
             },
             payload={
-                "canonical_record": candidate_record,
-                "snapshot_sha256": _snapshot_checksum(candidate_record),
+                "canonical_record_json": _canonical_json(candidate_record),
+                "snapshot_sha256": hashlib.sha256(_canonical_json(candidate_record).encode("utf-8")).hexdigest(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             prefer="return=representation",
