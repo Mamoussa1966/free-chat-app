@@ -324,13 +324,20 @@ def test_migration_defines_rls_grants_and_no_service_role_shortcut():
     assert "owner_id = (select auth.uid())" in migration
     assert "security definer" not in migration
     assert "grant select, insert, update, delete on table public.council_conversations to authenticated" in migration
-    assert "from public, anon, authenticated" in migration
+    assert "from public, anon, authenticated, service_role" in migration
     assert "service_role" not in migration
 
 
 def test_rows_use_a_canonical_record_checksum_not_a_client_supplied_owner_id():
     record = canonical_record()
+    repo = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
+    snapshot = OwnedConversationSnapshot(OWNER_A, record)
+    repo.save(snapshot)
+    stored = fake_session.rows[snapshot.conversation_id]
     encoded = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    assert hashlib.sha256(encoded.encode("utf-8")).hexdigest() == hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    expected_checksum = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    assert stored["checksum"] == expected_checksum
+    assert len(stored["checksum"]) == 64
+    assert stored["owner_id"] == OWNER_A.subject
     assert str(uuid.UUID(OWNER_A.subject)) == OWNER_A.subject
     assert SUPABASE_CONVERSATION_SCHEMA == "ai-council-supabase-conversation/v1"
