@@ -2930,13 +2930,41 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                     st.warning("هذه الرسالة الصوتية تم إرسالها بالفعل.")
                 else:
                     with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
+                        transcription_started = time.perf_counter()
                         transcription = transcribe_audio_gemini(audio_bytes, mime, credentials.get("gemini"), model_candidates.get("gemini"))
+                    transcription_seconds = max(0.0, time.perf_counter() - transcription_started)
                     if transcription.get("status") == "SUCCESS" and transcription.get("text", "").strip():
                         st.session_state.last_voice_error = ""
-                        voice_submission = (transcription["text"].strip(), audio_bytes, mime, fingerprint)
+                        transcript_text = str(transcription.get("text") or "").strip()
+                        transcription_model = str(transcription.get("model") or "").strip()
+                        # Preserve the latest successful voice transcript across the
+                        # post-submission st.rerun() and voice-input key rotation.
+                        st.session_state.last_voice_transcription = {
+                            "chat_id": str(chat.get("id") or ""),
+                            "text": transcript_text,
+                            "seconds": float(transcription_seconds),
+                            "model": transcription_model,
+                        }
+                        voice_submission = (transcript_text, audio_bytes, mime, fingerprint)
                     else:
+                        # Do not leave a prior successful transcript looking like the
+                        # result of a recording whose transcription has just failed.
+                        st.session_state.last_voice_transcription = {}
                         st.session_state.last_voice_error = str(transcription.get("error", "unknown error"))
                         st.error(f"تعذر تحويل الصوت: {st.session_state.last_voice_error}")
+        voice_diagnostic = st.session_state.get("last_voice_transcription")
+        if (
+            isinstance(voice_diagnostic, dict)
+            and str(voice_diagnostic.get("chat_id") or "") == str(chat.get("id") or "")
+            and str(voice_diagnostic.get("text") or "").strip()
+        ):
+            st.success("✅ تم تحويل التسجيل إلى نص بنجاح.")
+            st.markdown("**📝 النص المستخرج من التسجيل الصوتي**")
+            st.write(str(voice_diagnostic["text"]).strip())
+            diagnostic_seconds = max(0.0, float(voice_diagnostic.get("seconds") or 0.0))
+            diagnostic_model = str(voice_diagnostic.get("model") or "").strip()
+            model_suffix = f" · النموذج: {diagnostic_model}" if diagnostic_model else ""
+            st.caption(f"مدة تحويل الصوت عبر Gemini: {diagnostic_seconds:.2f} ثانية{model_suffix}")
         if st.session_state.get("last_voice_error"):
             with st.expander("⚠️ آخر خطأ في تحويل الصوت"):
                 st.code(st.session_state.last_voice_error)
@@ -4539,7 +4567,7 @@ def run_app() -> None:
             fingerprints.add(voice_fingerprint)
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
         st.session_state.last_diagnostics = []
-        with st.spinner("المجلس ينفذ Free API Cascade بالتوازي…"):
+        with st.spinner("المجلس ينفذ Free API Cascade…"):
             if harness_abc:
                 # The outer request is only the user submission envelope. The harness
                 # mints three independent runtime Request IDs and executes them
