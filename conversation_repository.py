@@ -82,6 +82,13 @@ def _validate_canonical_references(
     requests = rows_by_collection["requests"]
     rounds = rows_by_collection["rounds"]
 
+    # Check direct request-to-message references first so a dangling edge is
+    # reported as such, rather than as a secondary reverse-link mismatch.
+    for request in requests.values():
+        message_id = str(request.get("message_id") or "").strip()
+        if not message_id or message_id not in messages:
+            raise ValueError("canonical request references a missing message")
+
     for message_id, message in messages.items():
         request_id = str(message.get("request_id") or "").strip()
         is_user_message = str(message.get("role") or "").strip().lower() == "user"
@@ -96,8 +103,6 @@ def _validate_canonical_references(
 
     for request_id, request in requests.items():
         message_id = str(request.get("message_id") or "").strip()
-        if not message_id or message_id not in messages:
-            raise ValueError("canonical request references a missing message")
         message = messages[message_id]
         if str(message.get("role") or "").strip().lower() == "user":
             if str(message.get("request_id") or "").strip() != request_id:
