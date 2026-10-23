@@ -34,9 +34,18 @@ from conversation_repository import (
 
 FILE_REPOSITORY_SCHEMA = "ai-council-file-conversation-repository/v1"
 _ID_FIELDS = {
+    # Fields that define identity rather than mutable response/status content.
     "messages": ("message_id", ("conversation_id", "session_id", "role", "request_id", "created_at")),
-    "requests": ("request_id", ("conversation_id", "session_id", "message_id")),
-    "rounds": ("round_id", ("conversation_id", "session_id", "message_id", "request_id", "round")),
+    "requests": ("request_id", ("conversation_id", "session_id", "message_id", "created_at")),
+    "rounds": (
+        "round_id",
+        (
+            "conversation_id", "session_id", "message_id", "request_id",
+            "round", "round_number", "round_no", "ordinal", "round_ordinal",
+            "canonical_round_base", "canonical_round_record_id",
+            "canonical_identity_key", "created_at",
+        ),
+    ),
 }
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[str, threading.RLock] = {}
@@ -58,14 +67,23 @@ def _canonical_json(value: object) -> str:
     )
 
 
-def _identity_rows(record: dict, collection: str, id_field: str, fields: tuple[str, ...]) -> dict[str, tuple]:
-    rows: dict[str, tuple] = {}
+def _identity_rows(
+    record: dict, collection: str, id_field: str, fields: tuple[str, ...]
+) -> dict[str, dict[str, object]]:
+    rows: dict[str, dict[str, object]] = {}
     for row in record.get(collection, []):
         if not isinstance(row, dict):
             raise ConversationRepositoryError("canonical identity record is malformed")
         identity = str(row.get(id_field) or "").strip()
         if identity:
-            rows[identity] = tuple(row.get(field) for field in fields)
+            # Freeze only fields already present with values in historical data.
+            # A later migration may enrich a legacy row with an additional alias,
+            # but it may never rewrite an established identity binding.
+            rows[identity] = {
+                field: row.get(field)
+                for field in fields
+                if row.get(field) not in (None, "")
+            }
     return rows
 
 
@@ -79,10 +97,12 @@ def _assert_identity_history_preserved(
             raise ConversationIdentityConflict(
                 f"canonical {collection} history cannot be silently removed"
             )
-        if any(new_rows[identity] != values for identity, values in old_rows.items()):
-            raise ConversationIdentityConflict(
-                f"canonical {collection} identity binding cannot be rewritten"
-            )
+        for identity, old_values in old_rows.items():
+            new_values = new_rows[identity]
+            if any(new_values.get(field) != value for field, value in old_values.items()):
+                raise ConversationIdentityConflict(
+                    f"canonical {collection} identity binding cannot be rewritten"
+                )
 
 
 def _owner_payload(owner: AccountIdentity) -> dict[str, str]:
