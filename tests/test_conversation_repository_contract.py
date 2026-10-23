@@ -208,6 +208,8 @@ def test_reference_repository_refuses_canonical_identity_rewrite_or_history_loss
 
     shortened = canonical_record()
     shortened["messages"] = []
+    shortened["requests"] = []
+    shortened["rounds"] = []
     with pytest.raises(ConversationIdentityConflict):
         repo.save(OwnedConversationSnapshot(OWNER_A, shortened))
 
