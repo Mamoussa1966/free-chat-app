@@ -1,0 +1,56 @@
+name: Supabase RLS database tests
+
+on:
+  pull_request:
+    branches:
+      - gitops-v0.4-final
+    paths:
+      - "supabase/**"
+      - "supabase_conversation_repository.py"
+      - "tests/test_supabase_conversation_repository.py"
+      - ".github/workflows/supabase-rls-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-rls-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  database-isolation:
+    name: Supabase RLS / two-account isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3
+        with:
+          version: 2.122.0
+
+      - name: Start isolated local Supabase stack
+        shell: bash
+        run: |
+          if ! supabase start > /tmp/supabase-start.log 2>&1; then
+            # Do not echo generated local access keys into Actions logs.
+            sed -E '/(anon key|service_role key|publishable key|secret key)/Id' /tmp/supabase-start.log
+            exit 1
+          fi
+          echo "SUPABASE_LOCAL_START=PASS"
+
+      - name: Reset local database and apply versioned migrations
+        run: supabase db reset --local
+
+      - name: Run PostgreSQL Row Level Security tests
+        run: supabase test db --local
+
+      - name: Stop local Supabase stack
+        if: always()
+        continue-on-error: true
+        run: supabase stop --no-backup

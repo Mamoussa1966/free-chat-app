@@ -1,0 +1,32 @@
+# Local-only Supabase stack configuration for reproducible migration/RLS tests.
+# No project secrets or hosted project identifiers are stored here.
+project_id = "free-chat-app"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[db.seed]
+enabled = false
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = ["http://127.0.0.1:3000"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
