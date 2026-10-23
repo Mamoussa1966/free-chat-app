@@ -242,7 +242,7 @@ create trigger council_conversations_guard_row
     before insert or update on public.council_conversations
     for each row execute function public.guard_council_conversation_row();
 
--- This is a trigger function, not a callable RPC or SECURITY DEFINER function.
+-- This is an internal trigger, not a callable RPC or privilege-elevating function.
 revoke all on function public.guard_council_conversation_row() from public, anon, authenticated;
 
 commit;
