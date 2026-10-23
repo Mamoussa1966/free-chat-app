@@ -60,6 +60,66 @@ class AccountIdentity:
         return (self.issuer, self.subject)
 
 
+def _validate_canonical_references(
+    canonical_record: dict[str, Any],
+    conversation_id: str,
+    rows_by_collection: dict[str, dict[str, dict[str, Any]]],
+) -> None:
+    """Reject cross-conversation rows and dangling or contradictory identity edges.
+
+    A durable snapshot may contain a partial lifecycle (for example before the
+    first Round exists), but every identity edge that is present must resolve.
+    User Messages, Requests, and Rounds must retain their canonical bindings.
+    """
+    for collection in _CANONICAL_COLLECTIONS:
+        for row in rows_by_collection[collection].values():
+            row_conversation_id = row.get("conversation_id")
+            if row_conversation_id not in (None, ""):
+                if not isinstance(row_conversation_id, str) or row_conversation_id.strip() != conversation_id:
+                    raise ValueError(f"canonical {collection} row belongs to another conversation")
+
+    messages = rows_by_collection["messages"]
+    requests = rows_by_collection["requests"]
+    rounds = rows_by_collection["rounds"]
+
+    # Check direct request-to-message references first so a dangling edge is
+    # reported as such, rather than as a secondary reverse-link mismatch.
+    for request in requests.values():
+        message_id = str(request.get("message_id") or "").strip()
+        if not message_id or message_id not in messages:
+            raise ValueError("canonical request references a missing message")
+
+    for message_id, message in messages.items():
+        request_id = str(message.get("request_id") or "").strip()
+        is_user_message = str(message.get("role") or "").strip().lower() == "user"
+        if is_user_message and not request_id:
+            raise ValueError("canonical user message is missing its request binding")
+        if request_id and request_id not in requests:
+            raise ValueError("canonical message references a missing request")
+        if is_user_message:
+            request = requests[request_id]
+            if str(request.get("message_id") or "").strip() != message_id:
+                raise ValueError("canonical user message/request binding mismatch")
+
+    for request_id, request in requests.items():
+        message_id = str(request.get("message_id") or "").strip()
+        message = messages[message_id]
+        if str(message.get("role") or "").strip().lower() == "user":
+            if str(message.get("request_id") or "").strip() != request_id:
+                raise ValueError("canonical request/message binding mismatch")
+
+    for round_id, round_row in rounds.items():
+        request_id = str(round_row.get("request_id") or "").strip()
+        message_id = str(round_row.get("message_id") or "").strip()
+        if not request_id or request_id not in requests:
+            raise ValueError("canonical round references a missing request")
+        if not message_id or message_id not in messages:
+            raise ValueError("canonical round references a missing message")
+        request = requests[request_id]
+        if str(request.get("message_id") or "").strip() != message_id:
+            raise ValueError("canonical round/request message binding mismatch")
+
+
 @dataclass(frozen=True, init=False)
 class OwnedConversationSnapshot:
     """Defensive JSON-compatible envelope around one canonical snapshot.
@@ -79,26 +139,44 @@ class OwnedConversationSnapshot:
         if not isinstance(canonical_record, dict):
             raise ValueError("canonical_record must be a dictionary")
 
-        conversation_id = str(canonical_record.get("conversation_id") or "").strip()
-        if not conversation_id:
-            raise ValueError("canonical snapshot has no conversation_id")
+        raw_conversation_id = canonical_record.get("conversation_id")
+        if not isinstance(raw_conversation_id, str):
+            raise ValueError("canonical snapshot has no valid conversation_id")
+        conversation_id = raw_conversation_id.strip()
+        if (
+            not conversation_id
+            or conversation_id != raw_conversation_id
+            or len(conversation_id) > 1024
+            or any(ord(char) < 32 or ord(char) == 127 for char in conversation_id)
+        ):
+            raise ValueError("canonical snapshot has no valid conversation_id")
         if canonical_record.get("canonical_store_contract") != CANONICAL_STORE_CONTRACT:
             raise ValueError("snapshot is not from the canonical conversation store")
 
+        rows_by_collection: dict[str, dict[str, dict[str, Any]]] = {}
         for collection in _CANONICAL_COLLECTIONS:
             rows = canonical_record.get(collection)
             if not isinstance(rows, list):
                 raise ValueError(f"canonical {collection} must be a list")
             identity_field = _ID_FIELDS[collection]
-            seen: set[str] = set()
+            by_id: dict[str, dict[str, Any]] = {}
             for row in rows:
                 if not isinstance(row, dict):
                     raise ValueError(f"canonical {collection} entries must be dictionaries")
-                identity = str(row.get(identity_field) or "").strip()
-                if identity and identity in seen:
+                raw_identity = row.get(identity_field)
+                if not isinstance(raw_identity, str):
+                    raise ValueError(f"canonical {collection} entry has no {identity_field}")
+                identity = raw_identity.strip()
+                if not identity or identity != raw_identity:
+                    raise ValueError(f"canonical {collection} entry has no valid {identity_field}")
+                if any(ord(char) < 32 or ord(char) == 127 for char in identity):
+                    raise ValueError(f"canonical {collection} entry has an invalid {identity_field}")
+                if identity in by_id:
                     raise ValueError(f"duplicate canonical {identity_field}")
-                if identity:
-                    seen.add(identity)
+                by_id[identity] = row
+            rows_by_collection[collection] = by_id
+
+        _validate_canonical_references(canonical_record, conversation_id, rows_by_collection)
 
         try:
             frozen_json = json.dumps(
