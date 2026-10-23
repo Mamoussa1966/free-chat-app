@@ -202,7 +202,7 @@ def test_reference_repository_refuses_canonical_identity_rewrite_or_history_loss
     repo.save(OwnedConversationSnapshot(OWNER_A, canonical_record()))
 
     changed = canonical_record()
-    changed["messages"][0]["request_id"] = "another-request"
+    changed["messages"][0]["role"] = "assistant"
     with pytest.raises(ConversationIdentityConflict):
         repo.save(OwnedConversationSnapshot(OWNER_A, changed))
 
