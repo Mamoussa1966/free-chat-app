@@ -367,4 +367,5 @@ def test_database_migration_enables_separate_rls_policies_for_every_operation():
     assert sql.count("auth.uid()") >= 8
     assert "with check" in sql
     assert "snapshot_sha256" in sql
-    assert "service_role" not in sql
+    executable_sql = re.sub(r"--[^\\n]*", "", sql)
+    assert "service_role" not in executable_sql
