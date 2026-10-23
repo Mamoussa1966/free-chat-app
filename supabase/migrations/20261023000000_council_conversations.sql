@@ -21,7 +21,7 @@ alter table public.council_conversations enable row level security;
 alter table public.council_conversations force row level security;
 
 -- Grants and RLS are separate controls. Signed-out visitors get no table privileges.
-revoke all on table public.council_conversations from public, anon, authenticated;
+revoke all on table public.council_conversations from public, anon, authenticated, service_role;
 grant select, insert, update, delete on table public.council_conversations to authenticated;
 
 drop policy if exists council_conversations_select_own on public.council_conversations;
