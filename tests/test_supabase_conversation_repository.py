@@ -7,6 +7,7 @@ test database before the adapter is enabled in the deployed app.
 """
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -34,9 +35,25 @@ ISSUER = PROJECT_URL + "/auth/v1"
 PUBLISHABLE_KEY = "sb_publishable_test_key"
 OWNER_A = AccountIdentity(ISSUER, "00000000-0000-0000-0000-00000000000a")
 OWNER_B = AccountIdentity(ISSUER, "00000000-0000-0000-0000-00000000000b")
+
+
+def _b64url(value):
+    encoded = base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode("utf-8"))
+    return encoded.decode("ascii").rstrip("=")
+
+
+def make_jwt(owner=None, *, role="authenticated", nonce=None):
+    claims = {"role": role, "iss": ISSUER, "sub": owner.subject if owner else None, "exp": 4102444800}
+    if nonce:
+        claims["nonce"] = nonce
+    return f"{_b64url({'alg': 'none', 'typ': 'JWT'})}.{_b64url(claims)}.test-signature"
+
+
+TOKEN_A = make_jwt(OWNER_A)
+TOKEN_B = make_jwt(OWNER_B)
 TOKEN_OWNERS = {
-    "test-user-jwt-A": OWNER_A.subject,
-    "test-user-jwt-B": OWNER_B.subject,
+    TOKEN_A: OWNER_A.subject,
+    TOKEN_B: OWNER_B.subject,
 }
 
 
@@ -195,7 +212,7 @@ def make_repository(owner, token, session):
 
 
 def test_adapter_satisfies_protocol_and_uses_user_jwt_plus_publishable_key(fake_session):
-    repo = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
     assert isinstance(repo, ConversationRepository)
     repo.save(OwnedConversationSnapshot(OWNER_A, canonical_record()))
     call = next(call for call in fake_session.calls if call["method"] == "POST")
@@ -206,8 +223,8 @@ def test_adapter_satisfies_protocol_and_uses_user_jwt_plus_publishable_key(fake_
 
 
 def test_two_users_are_isolated_for_load_list_save_and_delete(fake_session):
-    repo_a = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
-    repo_b = make_repository(OWNER_B, "test-user-jwt-B", fake_session)
+    repo_a = make_repository(OWNER_A, TOKEN_A, fake_session)
+    repo_b = make_repository(OWNER_B, TOKEN_B, fake_session)
     snapshot_a = OwnedConversationSnapshot(OWNER_A, canonical_record())
     repo_a.save(snapshot_a)
 
@@ -227,7 +244,7 @@ def test_two_users_are_isolated_for_load_list_save_and_delete(fake_session):
 
 
 def test_repository_refuses_an_identity_other_than_its_bound_session(fake_session):
-    repo_a = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
+    repo_a = make_repository(OWNER_A, TOKEN_A, fake_session)
     with pytest.raises(ConversationOwnershipError):
         repo_a.load(OWNER_B, "conversation-1")
     with pytest.raises(ConversationOwnershipError):
@@ -238,12 +255,57 @@ def test_repository_refuses_an_identity_other_than_its_bound_session(fake_sessio
         repo_a.save(OwnedConversationSnapshot(OWNER_B, canonical_record()))
 
 
+def test_repository_refuses_service_role_and_unbound_session_tokens():
+    with pytest.raises(ValueError, match="secret keys are forbidden"):
+        SupabaseConversationRepository(
+            supabase_url=PROJECT_URL,
+            publishable_key="sb_secret_test_key",
+            access_token=TOKEN_A,
+            authenticated_identity=OWNER_A,
+        )
+
+    legacy_service_role_key = make_jwt(OWNER_A, role="service_role")
+    with pytest.raises(ValueError, match="service-role/admin keys are forbidden"):
+        SupabaseConversationRepository(
+            supabase_url=PROJECT_URL,
+            publishable_key=legacy_service_role_key,
+            access_token=TOKEN_A,
+            authenticated_identity=OWNER_A,
+        )
+
+    service_role_access_token = make_jwt(OWNER_A, role="service_role")
+    with pytest.raises(ValueError, match="service-role/admin tokens"):
+        SupabaseConversationRepository(
+            supabase_url=PROJECT_URL,
+            publishable_key=PUBLISHABLE_KEY,
+            access_token=service_role_access_token,
+            authenticated_identity=OWNER_A,
+        )
+
+    with pytest.raises(ValueError, match="issuer/subject"):
+        SupabaseConversationRepository(
+            supabase_url=PROJECT_URL,
+            publishable_key=PUBLISHABLE_KEY,
+            access_token=TOKEN_B,
+            authenticated_identity=OWNER_A,
+        )
+
+    legacy_anon_key = make_jwt(role="anon")
+    legacy_compatible = SupabaseConversationRepository(
+        supabase_url=PROJECT_URL,
+        publishable_key=legacy_anon_key,
+        access_token=TOKEN_A,
+        authenticated_identity=OWNER_A,
+    )
+    assert legacy_compatible._publishable_key == legacy_anon_key
+
+
 def test_adapter_requires_https_project_and_matching_issuer():
     with pytest.raises(ValueError, match="HTTPS"):
         SupabaseConversationRepository(
             supabase_url="http://council-test.supabase.co",
             publishable_key=PUBLISHABLE_KEY,
-            access_token="test-user-jwt-A",
+            access_token=TOKEN_A,
             authenticated_identity=OWNER_A,
         )
     wrong_issuer = AccountIdentity("https://other.supabase.co/auth/v1", OWNER_A.subject)
@@ -251,7 +313,7 @@ def test_adapter_requires_https_project_and_matching_issuer():
         SupabaseConversationRepository(
             supabase_url=PROJECT_URL,
             publishable_key=PUBLISHABLE_KEY,
-            access_token="test-user-jwt-A",
+            access_token=TOKEN_A,
             authenticated_identity=wrong_issuer,
         )
     non_uuid = AccountIdentity(ISSUER, "subject-A")
@@ -259,13 +321,13 @@ def test_adapter_requires_https_project_and_matching_issuer():
         SupabaseConversationRepository(
             supabase_url=PROJECT_URL,
             publishable_key=PUBLISHABLE_KEY,
-            access_token="test-user-jwt-A",
+            access_token=TOKEN_A,
             authenticated_identity=non_uuid,
         )
 
 
 def test_save_is_idempotent_and_append_only_for_established_identity(fake_session):
-    repo = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
     record = canonical_record()
     snapshot = OwnedConversationSnapshot(OWNER_A, record)
     repo.save(snapshot)
@@ -287,7 +349,7 @@ def test_save_is_idempotent_and_append_only_for_established_identity(fake_sessio
 
 
 def test_checksum_corruption_fails_closed(fake_session):
-    repo = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
     snapshot = OwnedConversationSnapshot(OWNER_A, canonical_record())
     repo.save(snapshot)
     fake_session.rows[snapshot.conversation_id]["canonical_record"]["messages"][0]["content"] = "tampered"
@@ -296,13 +358,13 @@ def test_checksum_corruption_fails_closed(fake_session):
 
 
 def test_unknown_or_expired_access_token_fails_closed(fake_session):
-    repo = make_repository(OWNER_A, "expired-or-invalid-token", fake_session)
+    repo = make_repository(OWNER_A, make_jwt(OWNER_A, nonce="unknown-token"), fake_session)
     with pytest.raises(ConversationRepositoryError, match="session may have expired"):
         repo.load(OWNER_A, "conversation-1")
 
 
 def test_list_limit_is_bounded_and_rejects_bool(fake_session):
-    repo = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
     for limit in (0, -1, True, "10", 501):
         with pytest.raises(ValueError, match="between 1 and 500"):
             repo.list_ids(OWNER_A, limit=limit)
@@ -330,7 +392,7 @@ def test_migration_defines_rls_grants_and_no_service_role_shortcut():
 
 def test_rows_use_a_canonical_record_checksum_not_a_client_supplied_owner_id(fake_session):
     record = canonical_record()
-    repo = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
     snapshot = OwnedConversationSnapshot(OWNER_A, record)
     repo.save(snapshot)
     stored = fake_session.rows[snapshot.conversation_id]
