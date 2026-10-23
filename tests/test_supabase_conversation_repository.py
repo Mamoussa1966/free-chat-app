@@ -217,7 +217,7 @@ def test_adapter_satisfies_protocol_and_uses_user_jwt_plus_publishable_key(fake_
     repo.save(OwnedConversationSnapshot(OWNER_A, canonical_record()))
     call = next(call for call in fake_session.calls if call["method"] == "POST")
     assert call["headers"]["apikey"] == PUBLISHABLE_KEY
-    assert call["headers"]["Authorization"] == "Bearer test-user-jwt-A"
+    assert call["headers"]["Authorization"] == f"Bearer {TOKEN_A}"
     assert "service_role" not in repr(call["headers"])
     assert "sb_secret_" not in repr(call["headers"])
 
