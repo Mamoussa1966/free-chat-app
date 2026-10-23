@@ -325,7 +325,7 @@ def test_migration_defines_rls_grants_and_no_service_role_shortcut():
     assert "security definer" not in migration
     assert "grant select, insert, update, delete on table public.council_conversations to authenticated" in migration
     assert "from public, anon, authenticated, service_role" in migration
-    assert "service_role" not in migration
+    assert "grant select, insert, update, delete on table public.council_conversations to service_role" not in migration
 
 
 def test_rows_use_a_canonical_record_checksum_not_a_client_supplied_owner_id():
