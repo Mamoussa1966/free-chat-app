@@ -134,6 +134,8 @@ def test_adapter_preserves_immutable_identity_and_rejects_history_loss(repositor
 
     shortened = copy.deepcopy(original)
     shortened["messages"] = []
+    shortened["requests"] = []
+    shortened["rounds"] = []
     with pytest.raises(ConversationIdentityConflict):
         repository.save(snapshot(record=shortened))
     assert path.read_bytes() == before
