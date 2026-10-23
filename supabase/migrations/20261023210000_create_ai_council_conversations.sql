@@ -5,7 +5,7 @@
 create table public.ai_council_conversations (
     conversation_id text primary key,
     owner_id uuid not null references auth.users (id) on delete cascade,
-    canonical_record jsonb not null,
+    canonical_record_json text not null,
     snapshot_sha256 text not null,
     created_at timestamptz not null default pg_catalog.now(),
     updated_at timestamptz not null default pg_catalog.now(),
@@ -15,17 +15,17 @@ create table public.ai_council_conversations (
     constraint ai_council_conversations_checksum_format
         check (snapshot_sha256 ~ '^[0-9a-f]{64}$'),
     constraint ai_council_conversations_record_object
-        check (pg_catalog.jsonb_typeof(canonical_record) = 'object'),
+        check (pg_catalog.jsonb_typeof(canonical_record_json::jsonb) = 'object'),
     constraint ai_council_conversations_record_id_match
-        check (canonical_record ->> 'conversation_id' = conversation_id),
+        check (canonical_record_json::jsonb ->> 'conversation_id' = conversation_id),
     constraint ai_council_conversations_canonical_contract
-        check (canonical_record ->> 'canonical_store_contract' = 'V26_3_CANONICAL_CONVERSATION_STORE'),
+        check (canonical_record_json::jsonb ->> 'canonical_store_contract' = 'V26_3_CANONICAL_CONVERSATION_STORE'),
     constraint ai_council_conversations_messages_array
-        check (pg_catalog.jsonb_typeof(canonical_record -> 'messages') = 'array'),
+        check (pg_catalog.jsonb_typeof(canonical_record_json::jsonb -> 'messages') = 'array'),
     constraint ai_council_conversations_requests_array
-        check (pg_catalog.jsonb_typeof(canonical_record -> 'requests') = 'array'),
+        check (pg_catalog.jsonb_typeof(canonical_record_json::jsonb -> 'requests') = 'array'),
     constraint ai_council_conversations_rounds_array
-        check (pg_catalog.jsonb_typeof(canonical_record -> 'rounds') = 'array')
+        check (pg_catalog.jsonb_typeof(canonical_record_json::jsonb -> 'rounds') = 'array')
 );
 
 create index ai_council_conversations_owner_updated_idx
