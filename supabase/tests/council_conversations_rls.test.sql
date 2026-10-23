@@ -3,7 +3,7 @@
 -- These tests are not run by the Python-only GitHub workflow yet; do not enable
 -- application integration until this suite has been run against the target migration.
 begin;
-select plan(7);
+select plan(9);
 
 insert into auth.users (
     id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at
@@ -42,7 +42,8 @@ select lives_ok(
             "session_id":"session-a",
             "role":"user",
             "request_id":"request-a",
-            "created_at":"2026-10-23T00:00:00Z"
+            "created_at":"2026-10-23T00:00:00Z",
+            "content":"original"
           }],
           "requests":[{
             "request_id":"request-a",
@@ -94,31 +95,21 @@ select is(
     'Account B cannot read Account A conversation'
 );
 
-select is(
-    (
-      with changed as (
-        update public.council_conversations
-        set canonical_record = jsonb_set(canonical_record, '{messages,0,content}', '"tampered"'::jsonb)
-        where conversation_id = 'rls-conversation-a'
-        returning conversation_id
-      )
-      select count(*)::integer from changed
-    ),
-    0,
-    'Account B cannot update Account A conversation'
+select lives_ok(
+    $
+    update public.council_conversations
+    set canonical_record = jsonb_set(canonical_record, '{messages,0,content}', '"tampered"'::jsonb)
+    where conversation_id = 'rls-conversation-a'
+    $,
+    'Account B update of an unowned row is rejected by RLS'
 );
 
-select is(
-    (
-      with removed as (
-        delete from public.council_conversations
-        where conversation_id = 'rls-conversation-a'
-        returning conversation_id
-      )
-      select count(*)::integer from removed
-    ),
-    0,
-    'Account B cannot delete Account A conversation'
+select lives_ok(
+    $
+    delete from public.council_conversations
+    where conversation_id = 'rls-conversation-a'
+    $,
+    'Account B delete of an unowned row is rejected by RLS'
 );
 
 select throws_ok(
@@ -141,6 +132,27 @@ select throws_ok(
 select ok(
     not has_table_privilege('anon', 'public.council_conversations', 'SELECT'),
     'Signed-out anon role has no table SELECT privilege'
+);
+
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config(
+    'request.jwt.claims',
+    '{"sub":"00000000-0000-0000-0000-00000000000a","role":"authenticated"}',
+    true
+);
+
+select is(
+    (select count(*)::integer from public.council_conversations where conversation_id = 'rls-conversation-a'),
+    1,
+    'Account A still owns its row after Account B attempted writes'
+);
+
+select is(
+    (select canonical_record #>> '{messages,0,content}' from public.council_conversations where conversation_id = 'rls-conversation-a'),
+    'original',
+    'Account A content remains unchanged after Account B attempted writes'
 );
 
 select * from finish();
