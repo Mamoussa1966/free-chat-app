@@ -127,7 +127,7 @@ def test_adapter_preserves_immutable_identity_and_rejects_history_loss(repositor
     before = path.read_bytes()
 
     rewritten = copy.deepcopy(original)
-    rewritten["messages"][0]["request_id"] = "request-tampered"
+    rewritten["messages"][0]["role"] = "assistant"
     with pytest.raises(ConversationIdentityConflict):
         repository.save(snapshot(record=rewritten))
     assert path.read_bytes() == before
