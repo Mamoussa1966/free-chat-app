@@ -328,7 +328,7 @@ def test_migration_defines_rls_grants_and_no_service_role_shortcut():
     assert "grant select, insert, update, delete on table public.council_conversations to service_role" not in migration
 
 
-def test_rows_use_a_canonical_record_checksum_not_a_client_supplied_owner_id():
+def test_rows_use_a_canonical_record_checksum_not_a_client_supplied_owner_id(fake_session):
     record = canonical_record()
     repo = make_repository(OWNER_A, "test-user-jwt-A", fake_session)
     snapshot = OwnedConversationSnapshot(OWNER_A, record)
