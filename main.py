@@ -2929,7 +2929,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                 elif fingerprint in seen:
                     st.warning("هذه الرسالة الصوتية تم إرسالها بالفعل.")
                 else:
-                with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
+                    with st.spinner("تحويل الصوت إلى نص عبر Gemini…"):
                         transcription_started = time.perf_counter()
                         transcription = transcribe_audio_gemini(audio_bytes, mime, credentials.get("gemini"), model_candidates.get("gemini"))
                     transcription_seconds = max(0.0, time.perf_counter() - transcription_started)
