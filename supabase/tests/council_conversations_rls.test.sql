@@ -96,19 +96,19 @@ select is(
 );
 
 select lives_ok(
-    $
+    $rls$
     update public.council_conversations
     set canonical_record = jsonb_set(canonical_record, '{messages,0,content}', '"tampered"'::jsonb)
     where conversation_id = 'rls-conversation-a'
-    $,
+    $rls$,
     'Account B update of an unowned row is rejected by RLS'
 );
 
 select lives_ok(
-    $
+    $rls$
     delete from public.council_conversations
     where conversation_id = 'rls-conversation-a'
-    $,
+    $rls$,
     'Account B delete of an unowned row is rejected by RLS'
 );
 
