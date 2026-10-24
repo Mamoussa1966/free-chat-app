@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Live Supabase Auth + PostgREST ownership test.
 
-Run only against a dedicated test Supabase project with two confirmed,
-disposable email/password accounts. The test logs in and refreshes both users,
-creates one temporary canonical snapshot for A, proves B cannot read/update/
-delete it, verifies the original is unchanged, and deletes the probe row.
+Run only against a dedicated Supabase project with no customer data and two
+confirmed, disposable email/password accounts. A newly provisioned production
+project may use this probe before application rollout only through the separate
+production-gated workflow, which pins the exact project URL. Never run this
+probe against a production project that already contains customer data.
+The test logs in and refreshes both users, creates one temporary canonical
+snapshot for A, proves B cannot read/update/delete it, verifies the original
+is unchanged, and deletes the probe row.
 
 Required environment variables (never commit these):
   SUPABASE_URL
