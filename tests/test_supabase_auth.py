@@ -31,9 +31,9 @@ class FakeAuthTransport:
     def __init__(self):
         self.calls = []
         self.users = {
-            ACCESS_A: {"id": USER_ID, "email": "a@example.test"},
-            ACCESS_B: {"id": "bbbbbbbb-cccc-4ddd-8eee-ffffffff0002", "email": "b@example.test"},
-            "new-access": {"id": USER_ID, "email": "a@example.test"},
+            ACCESS_A: {"id": USER_ID, "email": "a@gmail.com"},
+            ACCESS_B: {"id": "bbbbbbbb-cccc-4ddd-8eee-ffffffff0002", "email": "b@gmail.com"},
+            "new-access": {"id": USER_ID, "email": "a@gmail.com"},
         }
 
     def request(self, method, url, *, json=None, headers=None, timeout=None):
@@ -86,7 +86,7 @@ def make_client(fake=None):
 
 def test_signup_returns_identity_from_verified_auth_user_response():
     client, transport = make_client()
-    session = client.sign_up("a@example.test", "Long-Password-123")
+    session = client.sign_up("a@gmail.com", "Long-Password-123")
     assert session.user_id == USER_ID
     assert session.issuer == PROJECT_URL + "/auth/v1"
     assert session.access_token == ACCESS_A
@@ -106,10 +106,13 @@ def test_signup_returns_identity_from_verified_auth_user_response():
     "person@@example.com",
     "person name@example.com",
     "person..name@example.com",
+    "person@example.test",
+    "person@example.com",
+    "person@localhost",
 ])
 def test_email_validation_rejects_malformed_addresses_before_network(email):
     client, transport = make_client()
-    with pytest.raises(ValueError, match="name@example.com"):
+    with pytest.raises(ValueError, match="صيغة البريد|النطاق|نطاق تجريبي"):
         client.sign_up(email, "Long-Password-123")
     assert transport.calls == []
 
@@ -126,23 +129,23 @@ def test_supabase_email_format_error_is_mapped_without_echoing_response():
 
     client, _ = make_client(InvalidEmailTransport())
     with pytest.raises(SupabaseAuthError, match="صيغة البريد الإلكتروني غير صالحة"):
-        client.sign_up("a@example.test", "Long-Password-123")
+        client.sign_up("a@gmail.com", "Long-Password-123")
 
 
 def test_signup_without_immediate_session_returns_pending_confirmation():
     class PendingTransport(FakeAuthTransport):
         def request(self, method, url, **kwargs):
             if url.endswith("/auth/v1/signup"):
-                return FakeResponse(200, {"user": {"id": USER_ID, "email": "a@example.test"}})
+                return FakeResponse(200, {"user": {"id": USER_ID, "email": "a@gmail.com"}})
             return super().request(method, url, **kwargs)
 
     client, _ = make_client(PendingTransport())
-    assert client.sign_up("a@example.test", "Long-Password-123") is None
+    assert client.sign_up("a@gmail.com", "Long-Password-123") is None
 
 
 def test_login_verifies_user_with_auth_endpoint_and_uses_publishable_key():
     client, transport = make_client()
-    session = client.sign_in("a@example.test", "Long-Password-123")
+    session = client.sign_in("a@gmail.com", "Long-Password-123")
     assert session.user_id == USER_ID
     login = next(c for c in transport.calls if "grant_type=password" in c["url"])
     assert login["headers"]["apikey"] == PUBLISHABLE_KEY
@@ -169,7 +172,7 @@ def test_restore_refreshes_near_expiry_and_rejects_subject_change():
         "refresh_token": REFRESH_A,
         "expires_at": 1,
         "user_id": USER_ID,
-        "email": "a@example.test",
+        "email": "a@gmail.com",
         "issuer": PROJECT_URL + "/auth/v1",
     })
     assert session.access_token == "new-access"
@@ -207,7 +210,7 @@ def test_auth_errors_do_not_echo_response_body_or_tokens():
 
     client, _ = make_client(BadLogin())
     with pytest.raises(SupabaseAuthError) as caught:
-        client.sign_in("a@example.test", "Long-Password-123")
+        client.sign_in("a@gmail.com", "Long-Password-123")
     assert "SECRET_VALUE" not in str(caught.value)
     assert "PRIVATE_VALUE" not in str(caught.value)
 
