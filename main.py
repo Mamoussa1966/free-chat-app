@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 import threading
+import os
 
 import streamlit as st
 from streamlit.components.v1 import html as components_html
@@ -32,6 +33,13 @@ from memory_layers import update_memory
 from export_engine import export_conversation
 from conversation_v25_runtime import ensure_v25_store, reconcile_request, authoritative_audit, sync_v26_message_record
 from hotfix16430_deployment_attestation import build_runtime_deployment_attestation
+from conversation_repository import AccountIdentity, OwnedConversationSnapshot, ConversationRepositoryError
+from supabase_auth import SupabaseAuthError
+from supabase_conversation_repository import SupabaseConversationRepository
+from supabase_streamlit_auth import (
+    AUTH_SESSION_KEY, ensure_supabase_auth, get_supabase_config,
+    is_supabase_auth_active, logout_supabase_user,
+)
 
 
 # HOTFIX123: process-local idempotency gate for duplicate Streamlit submissions.
@@ -2764,6 +2772,14 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
     seats = get_seats()
     with st.sidebar:
         st.header("⚙️ إعدادات المجلس")
+        if is_supabase_auth_active(st):
+            auth_state = st.session_state.get(AUTH_SESSION_KEY) or {}
+            st.caption(f"🔐 الحساب: {str(auth_state.get('email') or auth_state.get('user_id') or 'مستخدم مصادق عليه')}")
+            if st.button("تسجيل الخروج من التخزين السحابي", key="supabase_auth_logout", use_container_width=True):
+                logout_supabase_user(st)
+                st.rerun()
+        if st.session_state.get("_supabase_last_storage_error"):
+            st.warning(str(st.session_state.get("_supabase_last_storage_error")))
         st.caption("المقاعد: ChatGPT 1 · Gemini 2 · Claude 3 · Grok 4 · Kimi 5 · أنت 6 · DeepSeek 7 · وكلاء إضافيون من 8")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
         st.session_state.rounds = rounds
@@ -2847,23 +2863,29 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         c3, c4 = st.columns(2)
         with c3:
             if st.button("🗑️ حذف الحالية", use_container_width=True):
-                if len(st.session_state.chats) == 1:
+                if not _supabase_delete_remote_chat(chat):
+                    st.error("لم يتأكد حذف المحادثة من التخزين الدائم؛ احتفظنا بها في الواجهة.")
+                else:
+                    if len(st.session_state.chats) == 1:
+                        fresh = _new_chat()
+                        st.session_state.chats = [fresh]
+                        st.session_state.active_chat_id = fresh["id"]
+                    else:
+                        st.session_state.chats = [x for x in st.session_state.chats if x.get("id") != chat["id"]]
+                        st.session_state.active_chat_id = st.session_state.chats[0]["id"]
+                    st.session_state.last_results = []
+                    st.rerun()
+        with c4:
+            if st.button("🧹 مسح الكل", use_container_width=True):
+                if not _supabase_delete_all_remote_chats(list(st.session_state.chats)):
+                    st.error("لم يتأكد حذف كل المحادثات من التخزين الدائم؛ لم نمسح سجل الواجهة.")
+                else:
                     fresh = _new_chat()
                     st.session_state.chats = [fresh]
                     st.session_state.active_chat_id = fresh["id"]
-                else:
-                    st.session_state.chats = [x for x in st.session_state.chats if x.get("id") != chat["id"]]
-                    st.session_state.active_chat_id = st.session_state.chats[0]["id"]
-                st.session_state.last_results = []
-                st.rerun()
-        with c4:
-            if st.button("🧹 مسح الكل", use_container_width=True):
-                fresh = _new_chat()
-                st.session_state.chats = [fresh]
-                st.session_state.active_chat_id = fresh["id"]
-                st.session_state.last_results = []
-                st.session_state.last_diagnostics = []
-                st.rerun()
+                    st.session_state.last_results = []
+                    st.session_state.last_diagnostics = []
+                    st.rerun()
         st.divider()
         st.divider()
         st.subheader("🧭 V24 Conversation Platform")
@@ -4339,7 +4361,160 @@ def _render_hotfix16419_read_only_page() -> None:
     st.stop()
 
 
+
+def _supabase_identity_and_repository():
+    """Build an owner-bound repository from the current verified Auth session."""
+    url, publishable_key, enabled = get_supabase_config(st)
+    auth_state = st.session_state.get(AUTH_SESSION_KEY)
+    if not (enabled and url and publishable_key and isinstance(auth_state, dict)):
+        return None, None
+    try:
+        owner = AccountIdentity(
+            issuer=str(auth_state.get("issuer") or ""),
+            subject=str(auth_state.get("user_id") or ""),
+        )
+        repository = SupabaseConversationRepository(
+            supabase_url=url,
+            publishable_key=publishable_key,
+            access_token=str(auth_state.get("access_token") or ""),
+            authenticated_identity=owner,
+        )
+    except (ValueError, SupabaseAuthError):
+        return None, None
+    return owner, repository
+
+
+def _supabase_presentation_state(chat: dict) -> dict:
+    """Keep display/history content alongside, but separate from, canonical IDs."""
+    return {
+        "title": str(chat.get("title") or "محادثة جديدة")[:80],
+        "created_at": str(chat.get("created_at") or _now()),
+        "messages": copy.deepcopy((chat.get("messages") or [])[-MAX_CHAT_MESSAGES:]),
+        "request_records": copy.deepcopy((chat.get("request_records") or [])[-MAX_REQUEST_IDS:]),
+        "request_ids": copy.deepcopy((chat.get("request_ids") or [])[-MAX_REQUEST_IDS:]),
+        "history_identity_ledger": copy.deepcopy((chat.get("history_identity_ledger") or [])[-2000:]),
+        "result_keys": copy.deepcopy((chat.get("result_keys") or [])[-2000:]),
+    }
+
+
+def _supabase_persist_completed_chat(chat: dict) -> bool:
+    """Persist a completed canonical snapshot under the verified Auth subject."""
+    owner, repository = _supabase_identity_and_repository()
+    if owner is None or repository is None:
+        return True  # Auth/storage integration is explicitly disabled.
+    try:
+        record = copy.deepcopy(chat.get("conversation_record") or {})
+        if not isinstance(record, dict) or not str(record.get("conversation_id") or "").strip():
+            raise ConversationRepositoryError("canonical conversation identity is missing")
+        record["_streamlit_state"] = _supabase_presentation_state(chat)
+        # Reject non-JSON objects before transmitting them to the remote database.
+        json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        snapshot = OwnedConversationSnapshot(owner, record)
+        repository.save(snapshot)
+    except Exception:
+        # Do not surface exception payloads, access tokens, or provider/database bodies.
+        st.session_state["_supabase_last_storage_error"] = (
+            "لم يتم تأكيد حفظ المحادثة في Supabase. بقيت المحادثة في الجلسة الحالية؛ "
+            "لا يُعرض الحفظ الدائم كأنه نجح."
+        )
+        return False
+    st.session_state.pop("_supabase_last_storage_error", None)
+    st.session_state["_supabase_history_loaded_subject"] = owner.subject
+    return True
+
+
+def _supabase_load_saved_chats() -> None:
+    """Hydrate only snapshots visible to the current authenticated owner."""
+    if not is_supabase_auth_active(st):
+        return
+    owner, repository = _supabase_identity_and_repository()
+    if owner is None or repository is None:
+        st.session_state["_supabase_last_storage_error"] = (
+            "تعذر إعداد جلسة التخزين المصادق عليها؛ لم تُحمّل محادثات سحابية."
+        )
+        return
+    if st.session_state.get("_supabase_history_loaded_subject") == owner.subject:
+        return
+    try:
+        conversation_ids = repository.list_ids(owner, limit=30)
+        restored = []
+        for conversation_id in conversation_ids:
+            snapshot = repository.load(owner, conversation_id)
+            if snapshot is None or snapshot.owner != owner:
+                continue
+            record = snapshot.canonical_record
+            view = record.pop("_streamlit_state", {})
+            if not isinstance(view, dict):
+                view = {}
+            chat = _new_chat()
+            chat["id"] = conversation_id
+            chat["conversation_id"] = conversation_id
+            chat["session_id"] = str(record.get("session_id") or chat.get("session_id") or "")
+            chat["title"] = str(view.get("title") or "محادثة محفوظة")[:80]
+            chat["created_at"] = str(view.get("created_at") or record.get("created_at") or _now())
+            chat["messages"] = view.get("messages") if isinstance(view.get("messages"), list) else []
+            chat["request_records"] = view.get("request_records") if isinstance(view.get("request_records"), list) else []
+            chat["request_ids"] = view.get("request_ids") if isinstance(view.get("request_ids"), list) else []
+            chat["history_identity_ledger"] = view.get("history_identity_ledger") if isinstance(view.get("history_identity_ledger"), list) else []
+            chat["result_keys"] = view.get("result_keys") if isinstance(view.get("result_keys"), list) else []
+            chat["conversation_record"] = record
+            _ensure_chat_identity_state(chat)
+            commit_canonical_record(chat, st.session_state)
+            hydrate_canonical_record(chat, st.session_state)
+            rebuild_runtime_indexes_from_canonical(chat, st.session_state)
+            hydrate_chat_identity(chat, st.session_state)
+            snapshot_chat_identity(chat, st.session_state)
+            restored.append(chat)
+    except Exception:
+        st.session_state["_supabase_last_storage_error"] = (
+            "تعذر تحميل بعض المحادثات المحفوظة من Supabase. لم تُعرض بيانات غير مؤكدة."
+        )
+        st.session_state["_supabase_history_loaded_subject"] = owner.subject
+        return
+
+    local_chats = st.session_state.get("chats", [])
+    remote_ids = {str(chat.get("conversation_id") or "") for chat in restored}
+    blank_local = [
+        chat for chat in local_chats
+        if isinstance(chat, dict)
+        and not chat.get("messages")
+        and str(chat.get("conversation_id") or "") not in remote_ids
+    ]
+    st.session_state.chats = restored + blank_local[:1] if restored else local_chats
+    if restored:
+        st.session_state.active_chat_id = restored[0]["id"]
+    st.session_state["_supabase_history_loaded_subject"] = owner.subject
+    st.session_state.pop("_supabase_last_storage_error", None)
+
+
+def _supabase_delete_remote_chat(chat: dict) -> bool:
+    """Delete remotely first; fail closed when a durable delete cannot be confirmed."""
+    owner, repository = _supabase_identity_and_repository()
+    if owner is None or repository is None:
+        return True
+    conversation_id = str(chat.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return True
+    try:
+        repository.delete(owner, conversation_id)
+    except Exception:
+        return False
+    st.session_state["_supabase_history_loaded_subject"] = ""
+    return True
+
+
+def _supabase_delete_all_remote_chats(chats: list) -> bool:
+    for item in chats:
+        if isinstance(item, dict) and not _supabase_delete_remote_chat(item):
+            return False
+    return True
+
+
 def run_app() -> None:
+    # Supabase Auth is opt-in until the real Auth/PostgREST acceptance gate passes.
+    auth_gate = ensure_supabase_auth(st)
+    if auth_gate is False:
+        return
     # HOTFIX164.19: intercept the forensic page before normal state hydration,
     # health checks, provider configuration, context rebuilding, or audit tests.
     if st.session_state.get("_hotfix16422_read_only_mode"):
@@ -4365,6 +4540,7 @@ def run_app() -> None:
         _render_hotfix16419_read_only_page()
         return
     _init_state()
+    _supabase_load_saved_chats()
     # HOTFIX123: the Bridge/Security claim is only shown as deployable after the
     # frozen multi-layer release identity matches the runtime modules. A mismatch
     # is surfaced; the app never silently rewrites the identity.
@@ -4640,6 +4816,8 @@ def run_app() -> None:
         hydrate_canonical_record(chat, st.session_state)
         rebuild_runtime_indexes_from_canonical(chat, st.session_state)
         commit_canonical_record(chat, st.session_state)
+        # Durable storage is attempted only after the canonical request lifecycle completes.
+        _supabase_persist_completed_chat(chat)
         authoritative_audit(chat, st.session_state)
         timeline_event(chat, request_id, user_message_id, "SYNTHESIS", status=str((st.session_state.get("last_synthesis") or {}).get("status") or "UNKNOWN"))
         touch(chat)
