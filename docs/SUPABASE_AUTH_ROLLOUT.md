@@ -40,9 +40,12 @@ Run `scripts/test_supabase_auth_postgrest_live.py` in a trusted runner with the 
 - `SUPABASE_TEST_USER_B_EMAIL`
 - `SUPABASE_TEST_USER_B_PASSWORD`
 
-The script performs real password login and token refresh for both users, verifies distinct subjects using Auth's `/user` endpoint, and exercises the actual Data API. It creates a temporary conversation row owned by A, verifies B cannot read/list/update/delete it, checks that A's content remains unchanged, and removes the temporary row in a cleanup block.
+Use the manual workflow in two phases:
 
-The live script requires existing confirmed test accounts; it intentionally does not create permanent users or bypass email confirmation. The unit tests separately cover the app's sign-up request and the pending-confirmation branch.
+1. Choose `signup` using two **fresh disposable email addresses** controlled by the project owner. The workflow calls the real Auth sign-up endpoint and verifies the session identity if Supabase issues a session immediately. If confirmation is required, it reports that no session was issued; open both confirmation emails before the next phase.
+2. Choose `auth-postgrest` after both accounts are confirmed. This performs real password login and refresh for each user, verifies distinct subjects using Auth's `/user` endpoint, and exercises the actual Data API. It creates a temporary conversation row owned by A, verifies B cannot read/list/update/delete it, checks that A's content remains unchanged, and removes the temporary row in a cleanup block.
+
+The test never bypasses email confirmation and never uses a service-role key. Auth test users may remain in the dedicated test project and should be removed manually after acceptance if no longer needed. Unit tests also cover the registration response and the pending-confirmation branch.
 
 ## Exposed schemas and Data API
 
