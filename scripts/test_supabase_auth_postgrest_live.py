@@ -98,32 +98,11 @@ def main() -> int:
 
     auth = SupabaseAuthClient(supabase_url=project_url, publishable_key=publishable_key)
 
-    # Exercise the real Auth signup endpoint for each independent test account.
-    # A missing immediate session is normal when email confirmation is enabled;
-    # the user must confirm that email before the login/refresh acceptance can pass.
-    signup_outcomes = []
-    for label, email, password in (
-        ("A", email_a, password_a),
-        ("B", email_b, password_b),
-    ):
-        created_session = auth.sign_up(email, password)
-        if created_session is None:
-            signup_outcomes.append(f"{label}=no_immediate_session")
-        else:
-            signup_outcomes.append(f"{label}=session_issued")
-    print("LIVE_AUTH_SIGNUP_ENDPOINT=EXERCISED (" + ", ".join(signup_outcomes) + ")")
-
-    try:
-        session_a = auth.sign_in(email_a, password_a)
-        session_b = auth.sign_in(email_b, password_b)
-    except Exception:
-        if any("no_immediate_session" in item for item in signup_outcomes):
-            print(
-                "LIVE_AUTH_SIGNUP=CONFIRMATION_MAY_BE_REQUIRED; confirm both test email addresses "
-                "in Supabase Auth, then rerun this workflow. The test does not bypass confirmation.",
-                file=sys.stderr,
-            )
-        raise
+    # The separate signup phase creates these disposable accounts first. This
+    # phase deliberately performs password login and refresh only, so it can be
+    # rerun after email confirmation without attempting to register duplicates.
+    session_a = auth.sign_in(email_a, password_a)
+    session_b = auth.sign_in(email_b, password_b)
     assert_live(session_a.user_id != session_b.user_id, "Auth returns two distinct verified user identities")
 
     session_a = auth.refresh_session(session_a.refresh_token)
