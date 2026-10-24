@@ -4365,9 +4365,11 @@ def _render_hotfix16419_read_only_page() -> None:
 def _supabase_identity_and_repository():
     """Build an owner-bound repository from the current verified Auth session."""
     url, publishable_key, enabled = get_supabase_config(st)
-    auth_state = st.session_state.get(AUTH_SESSION_KEY)
-    if not (enabled and url and publishable_key and isinstance(auth_state, dict)):
+    if not enabled:
         return None, None
+    auth_state = st.session_state.get(AUTH_SESSION_KEY)
+    if not (url and publishable_key and isinstance(auth_state, dict)):
+        raise ConversationRepositoryError("Supabase Auth is enabled but no verified session is available")
     try:
         owner = AccountIdentity(
             issuer=str(auth_state.get("issuer") or ""),
@@ -4380,7 +4382,7 @@ def _supabase_identity_and_repository():
             authenticated_identity=owner,
         )
     except (ValueError, SupabaseAuthError):
-        return None, None
+        raise ConversationRepositoryError("Supabase session could not be bound to the authenticated owner") from None
     return owner, repository
 
 
@@ -4399,10 +4401,13 @@ def _supabase_presentation_state(chat: dict) -> dict:
 
 def _supabase_persist_completed_chat(chat: dict) -> bool:
     """Persist a completed canonical snapshot under the verified Auth subject."""
-    owner, repository = _supabase_identity_and_repository()
-    if owner is None or repository is None:
+    _, _, enabled = get_supabase_config(st)
+    if not enabled:
         return True  # Auth/storage integration is explicitly disabled.
     try:
+        owner, repository = _supabase_identity_and_repository()
+        if owner is None or repository is None:
+            raise ConversationRepositoryError("Supabase repository is not available")
         record = copy.deepcopy(chat.get("conversation_record") or {})
         if not isinstance(record, dict) or not str(record.get("conversation_id") or "").strip():
             raise ConversationRepositoryError("canonical conversation identity is missing")
@@ -4489,13 +4494,16 @@ def _supabase_load_saved_chats() -> None:
 
 def _supabase_delete_remote_chat(chat: dict) -> bool:
     """Delete remotely first; fail closed when a durable delete cannot be confirmed."""
-    owner, repository = _supabase_identity_and_repository()
-    if owner is None or repository is None:
-        return True
-    conversation_id = str(chat.get("conversation_id") or "").strip()
-    if not conversation_id:
+    _, _, enabled = get_supabase_config(st)
+    if not enabled:
         return True
     try:
+        owner, repository = _supabase_identity_and_repository()
+        if owner is None or repository is None:
+            return False
+        conversation_id = str(chat.get("conversation_id") or "").strip()
+        if not conversation_id:
+            return True
         repository.delete(owner, conversation_id)
     except Exception:
         return False
