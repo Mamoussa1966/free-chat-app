@@ -181,9 +181,14 @@ class SupabaseAuthClient:
     def _normalized_email(email: str) -> str:
         value = str(email or "").strip()
         if not value or len(value) > 254 or "\n" in value or "\r" in value:
-            raise ValueError("أدخل بريدًا إلكترونيًا صالحًا بصيغة name@example.com.")
+            raise ValueError(
+                "صيغة البريد غير صالحة؛ أدخل عنوانًا كاملًا بصيغة name@domain.com."
+            )
         if value.count("@") != 1:
-            raise ValueError("أدخل بريدًا إلكترونيًا صالحًا بصيغة name@example.com.")
+            raise ValueError(
+                "صيغة البريد غير صالحة؛ يجب أن يحتوي العنوان على علامة @ واحدة فقط، "
+                "ومن دون علامات اقتباس أو مسافات داخلية."
+            )
         local, domain = value.rsplit("@", 1)
         local_pattern = r"^[A-Za-z0-9.!#$%&'*+/=?^_{|}~-]+$"
         domain_label_pattern = re.compile(
@@ -197,7 +202,13 @@ class SupabaseAuthClient:
             or local.endswith(".")
             or ".." in local
             or re.fullmatch(local_pattern, local) is None
-            or len(labels) < 2
+        ):
+            raise ValueError(
+                "الجزء الذي يسبق @ غير صالح؛ أزل علامات الاقتباس والمسافات "
+                "واستخدم اسم صندوق بريد صحيحًا."
+            )
+        if (
+            len(labels) < 2
             or any(
                 not label
                 or len(label) > 63
@@ -205,7 +216,16 @@ class SupabaseAuthClient:
                 for label in labels
             )
         ):
-            raise ValueError("أدخل بريدًا إلكترونيًا صالحًا بصيغة name@example.com.")
+            raise ValueError(
+                "النطاق بعد @ غير صالح؛ استخدم نطاق بريد كاملًا مثل نطاق مزود بريد حقيقي."
+            )
+        if domain.lower() in {"example.com", "example.net", "example.org"} or labels[-1].lower() in {
+            "test", "example", "invalid", "localhost", "local", "internal"
+        }:
+            raise ValueError(
+                "هذا نطاق تجريبي/محجوز لا يستقبل بريد تأكيد؛ استخدم عنوانًا حقيقيًا "
+                "تستطيع فتح رسائله."
+            )
         return value
 
     @staticmethod
