@@ -6,6 +6,7 @@ are used. Never put a service-role or sb_secret key in this module.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 import time
 from typing import Any
 from urllib.parse import urlsplit
@@ -135,9 +136,28 @@ class SupabaseAuthClient:
 
         status = int(getattr(response, "status_code", 0) or 0)
         if not 200 <= status < 300:
-            # Never include provider response bodies: they can contain addresses,
-            # tokens, implementation details, or other sensitive material.
-            if status in (401, 403):
+            # Inspect only an allowlisted pattern to give actionable errors.
+            # Never return or log raw response data, which can contain user values.
+            provider_message = ""
+            try:
+                error_data = response.json()
+                if isinstance(error_data, dict):
+                    provider_message = " ".join(
+                        str(error_data.get(field) or "")
+                        for field in ("msg", "message", "error_description")
+                    ).lower()
+            except Exception:
+                pass
+
+            if (
+                "unable to validate email address" in provider_message
+                and "invalid format" in provider_message
+            ):
+                message = (
+                    "صيغة البريد الإلكتروني غير صالحة في Supabase؛ "
+                    "استخدم عنوانًا حقيقيًا بصيغة name@example.com."
+                )
+            elif status in (401, 403):
                 message = "بيانات الدخول غير صحيحة أو انتهت الجلسة."
             elif status == 429:
                 message = "طلبات تسجيل الدخول كثيرة. انتظر قليلًا ثم أعد المحاولة."
@@ -160,8 +180,32 @@ class SupabaseAuthClient:
     @staticmethod
     def _normalized_email(email: str) -> str:
         value = str(email or "").strip()
-        if not value or len(value) > 320 or "\n" in value or "\r" in value:
-            raise ValueError("أدخل بريدًا إلكترونيًا صالحًا.")
+        if not value or len(value) > 254 or "\n" in value or "\r" in value:
+            raise ValueError("أدخل بريدًا إلكترونيًا صالحًا بصيغة name@example.com.")
+        if value.count("@") != 1:
+            raise ValueError("أدخل بريدًا إلكترونيًا صالحًا بصيغة name@example.com.")
+        local, domain = value.rsplit("@", 1)
+        local_pattern = r"^[A-Za-z0-9.!#$%&'*+/=?^_{|}~-]+$"
+        domain_label_pattern = re.compile(
+            r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+        )
+        labels = domain.split(".")
+        if (
+            not local
+            or len(local) > 64
+            or local.startswith(".")
+            or local.endswith(".")
+            or ".." in local
+            or re.fullmatch(local_pattern, local) is None
+            or len(labels) < 2
+            or any(
+                not label
+                or len(label) > 63
+                or domain_label_pattern.fullmatch(label) is None
+                for label in labels
+            )
+        ):
+            raise ValueError("أدخل بريدًا إلكترونيًا صالحًا بصيغة name@example.com.")
         return value
 
     @staticmethod
