@@ -373,7 +373,7 @@ def test_list_limit_is_bounded_and_rejects_bool(fake_session):
 def test_migration_defines_rls_grants_and_no_service_role_shortcut():
     from pathlib import Path
 
-    migration = Path("supabase/migrations/20261023000000_council_conversations.sql").read_text(encoding="utf-8").lower()
+    migration = Path("supabase/migrations/20261024134655_20261023000000_council_conversations.sql").read_text(encoding="utf-8").lower()
     assert "enable row level security" in migration
     assert "force row level security" in migration
     for name in (
@@ -403,3 +403,15 @@ def test_rows_use_a_canonical_record_checksum_not_a_client_supplied_owner_id(fak
     assert stored["owner_id"] == OWNER_A.subject
     assert str(uuid.UUID(OWNER_A.subject)) == OWNER_A.subject
     assert SUPABASE_CONVERSATION_SCHEMA == "ai-council-supabase-conversation/v1"
+
+def test_project_level_rls_helper_acl_migration_is_conditional_and_restrictive():
+    from pathlib import Path
+
+    migration = Path(
+        "supabase/migrations/20261024134656_restrict_rls_auto_enable_execute.sql"
+    ).read_text(encoding="utf-8").lower()
+    assert "to_regprocedure('public.rls_auto_enable()')" in migration
+    assert "revoke all privileges on function public.rls_auto_enable()" in migration
+    for role in ("public", "anon", "authenticated", "service_role"):
+        assert role in migration
+
