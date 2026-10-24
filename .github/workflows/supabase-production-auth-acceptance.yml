@@ -1,0 +1,81 @@
+name: Supabase production Auth and RLS acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_project:
+        description: "Type I_CONFIRM_PRODUCTION_PROJECT only for ai-council-storage-prod"
+        required: true
+        type: string
+      phase:
+        description: "Run signup first; confirm both email addresses before auth-postgrest"
+        required: true
+        type: choice
+        options:
+          - signup
+          - auth-postgrest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-production-auth-acceptance
+  cancel-in-progress: false
+
+jobs:
+  production-auth-postgrest-isolation:
+    name: Production pre-rollout Auth sessions and PostgREST RLS
+    if: ${{ inputs.confirm_production_project == 'I_CONFIRM_PRODUCTION_PROJECT' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PROD_PUBLISHABLE_KEY }}
+      SUPABASE_TEST_USER_A_EMAIL: ${{ secrets.SUPABASE_PROD_TEST_USER_A_EMAIL }}
+      SUPABASE_TEST_USER_A_PASSWORD: ${{ secrets.SUPABASE_PROD_TEST_USER_A_PASSWORD }}
+      SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_PROD_TEST_USER_B_EMAIL }}
+      SUPABASE_TEST_USER_B_PASSWORD: ${{ secrets.SUPABASE_PROD_TEST_USER_B_PASSWORD }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate production target and required secret names without printing values
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          expected_url = "https://wzhsilufajemyqtednie.supabase.co"
+          actual_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+          names = (
+              "SUPABASE_URL",
+              "SUPABASE_PUBLISHABLE_KEY",
+              "SUPABASE_TEST_USER_A_EMAIL",
+              "SUPABASE_TEST_USER_A_PASSWORD",
+              "SUPABASE_TEST_USER_B_EMAIL",
+              "SUPABASE_TEST_USER_B_PASSWORD",
+          )
+          missing = [name for name in names if not os.environ.get(name, "").strip()]
+          if missing:
+              print("LIVE_PROD_AUTH_ACCEPTANCE=BLOCKED; missing production GitHub Actions secrets")
+              print("Missing values for: " + ", ".join(missing))
+              sys.exit(2)
+          if actual_url != expected_url:
+              print("LIVE_PROD_AUTH_ACCEPTANCE=BLOCKED; SUPABASE_PROD_URL does not match the allowlisted production project")
+              sys.exit(2)
+          print("LIVE_PROD_AUTH_ACCEPTANCE_TARGET=PASS")
+          PY
+
+      - name: Install minimal HTTP dependency
+        run: python -m pip install "requests>=2.31,<3"
+
+      - name: Run production Auth signup smoke test
+        if: ${{ inputs.phase == 'signup' }}
+        run: PYTHONPATH=. python scripts/test_supabase_auth_signup_live.py
+
+      - name: Run production Auth sign-in/refresh and PostgREST two-owner isolation
+        if: ${{ inputs.phase == 'auth-postgrest' }}
+        run: PYTHONPATH=. python scripts/test_supabase_auth_postgrest_live.py
