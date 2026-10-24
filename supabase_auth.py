@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import time
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 import uuid
 
 import requests
@@ -183,11 +183,12 @@ class SupabaseAuthClient:
         email = self._normalized_email(email)
         password = self._validate_password(password)
         data = self._request("POST", "signup", payload={"email": email, "password": password})
-        access = str(data.get("access_token") or "").strip()
-        refresh = str(data.get("refresh_token") or "").strip()
+        session_data = data.get("session") if isinstance(data.get("session"), dict) else data
+        access = str(session_data.get("access_token") or "").strip()
+        refresh = str(session_data.get("refresh_token") or "").strip()
         if not access or not refresh:
             return None
-        return self._session_from_tokens(data, access, refresh)
+        return self._session_from_tokens(session_data, access, refresh)
 
     def sign_in(self, email: str, password: str) -> SupabaseAuthSession:
         email = self._normalized_email(email)
