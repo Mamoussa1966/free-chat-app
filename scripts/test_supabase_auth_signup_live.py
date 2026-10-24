@@ -94,9 +94,16 @@ def main() -> int:
         try:
             session = client.sign_up(email, password)
         except SupabaseAuthError as signup_error:
-            # A previous attempt may already have created the disposable user.
-            # Try normal password login to distinguish a reusable account from
-            # a failed signup without using admin APIs or revealing credentials.
+            # Invalid email formatting is a configuration fault, not evidence
+            # that the account already exists; do not send a redundant login.
+            if "صيغة البريد الإلكتروني غير صالحة" in str(signup_error):
+                failures.append(
+                    f"{label}=SUPABASE_REJECTED_EMAIL_FORMAT; "
+                    "update the corresponding email secret to a real valid address"
+                )
+                continue
+            # A prior run may have created a valid disposable user. Try normal
+            # password login; never use admin APIs or reveal supplied credentials.
             try:
                 client.sign_in(email, password)
             except SupabaseAuthError as login_error:
