@@ -152,7 +152,7 @@ class SupabaseConversationRepository:
     for any other AccountIdentity.
 
     Required migration:
-      supabase/migrations/20261023000000_council_conversations.sql
+      supabase/migrations/20261024134655_20261023000000_council_conversations.sql
 
     This adapter has not been wired into the production UI. A real two-account
     test must be run against a dedicated Supabase project before app integration.
