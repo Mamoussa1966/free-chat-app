@@ -7,6 +7,13 @@ on:
         description: "Type I_CONFIRM_TEST_PROJECT only for the dedicated Supabase test project"
         required: true
         type: string
+      phase:
+        description: "Choose signup first; after confirming both test emails choose auth-postgrest"
+        required: true
+        type: choice
+        options:
+          - signup
+          - auth-postgrest
 
 permissions:
   contents: read
@@ -53,5 +60,10 @@ jobs:
       - name: Install minimal HTTP dependency
         run: python -m pip install "requests>=2.31,<3"
 
+      - name: Run real Auth signup smoke test
+        if: ${{ inputs.phase == 'signup' }}
+        run: python scripts/test_supabase_auth_signup_live.py
+
       - name: Run real Auth sign-in/refresh and PostgREST two-owner isolation
+        if: ${{ inputs.phase == 'auth-postgrest' }}
         run: python scripts/test_supabase_auth_postgrest_live.py
