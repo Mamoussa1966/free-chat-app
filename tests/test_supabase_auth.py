@@ -97,6 +97,38 @@ def test_signup_returns_identity_from_verified_auth_user_response():
     assert any(c["method"] == "GET" and c["url"].endswith("/auth/v1/user") for c in transport.calls)
 
 
+@pytest.mark.parametrize("email", [
+    "not-an-email",
+    "missing-domain@",
+    "@example.com",
+    "person@example",
+    '"person@example.com"',
+    "person@@example.com",
+    "person name@example.com",
+    "person..name@example.com",
+])
+def test_email_validation_rejects_malformed_addresses_before_network(email):
+    client, transport = make_client()
+    with pytest.raises(ValueError, match="name@example.com"):
+        client.sign_up(email, "Long-Password-123")
+    assert transport.calls == []
+
+
+def test_supabase_email_format_error_is_mapped_without_echoing_response():
+    class InvalidEmailTransport(FakeAuthTransport):
+        def request(self, method, url, **kwargs):
+            if url.endswith("/auth/v1/signup"):
+                return FakeResponse(400, {
+                    "msg": "Unable to validate email address: invalid format",
+                    "code": "validation_failed",
+                })
+            return super().request(method, url, **kwargs)
+
+    client, _ = make_client(InvalidEmailTransport())
+    with pytest.raises(SupabaseAuthError, match="صيغة البريد الإلكتروني غير صالحة"):
+        client.sign_up("a@example.test", "Long-Password-123")
+
+
 def test_signup_without_immediate_session_returns_pending_confirmation():
     class PendingTransport(FakeAuthTransport):
         def request(self, method, url, **kwargs):
