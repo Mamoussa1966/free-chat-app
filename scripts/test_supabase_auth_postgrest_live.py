@@ -171,7 +171,7 @@ def main() -> int:
             "DELETE",
             rest_url,
             params={"conversation_id": f"eq.{conversation_id}"},
-            headers=headers_b,
+            headers={**headers_b, "Prefer": "return=representation"},
             timeout=10,
         )
         assert_live(
