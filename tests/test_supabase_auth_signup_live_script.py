@@ -56,3 +56,16 @@ def test_signup_preflight_reports_invalid_second_password_without_echoing_values
     assert "account-a@example.test" not in output
     assert values["SUPABASE_TEST_USER_A_PASSWORD"] not in output
     assert "tiny" not in output
+
+
+def test_signup_preflight_rejects_malformed_email_without_echoing_value(monkeypatch, capsys):
+    _set_valid_environment(monkeypatch)
+    monkeypatch.setenv("SUPABASE_TEST_USER_A_EMAIL", "not-an-email")
+
+    config = preflight()
+
+    output = capsys.readouterr().out
+    assert config is None
+    assert "SUPABASE_TEST_USER_A_EMAIL_INVALID" in output
+    assert "name@example.com" in output
+    assert "not-an-email" not in output
