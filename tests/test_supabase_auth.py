@@ -112,7 +112,7 @@ def test_signup_returns_identity_from_verified_auth_user_response():
 ])
 def test_email_validation_rejects_malformed_addresses_before_network(email):
     client, transport = make_client()
-    with pytest.raises(ValueError, match="صيغة البريد|النطاق|نطاق تجريبي"):
+    with pytest.raises(ValueError, match="صيغة البريد|الجزء|النطاق|نطاق تجريبي"):
         client.sign_up(email, "Long-Password-123")
     assert transport.calls == []
 
