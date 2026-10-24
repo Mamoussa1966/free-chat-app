@@ -62,8 +62,8 @@ jobs:
 
       - name: Run real Auth signup smoke test
         if: ${{ inputs.phase == 'signup' }}
-        run: python scripts/test_supabase_auth_signup_live.py
+        run: PYTHONPATH=. python scripts/test_supabase_auth_signup_live.py
 
       - name: Run real Auth sign-in/refresh and PostgREST two-owner isolation
         if: ${{ inputs.phase == 'auth-postgrest' }}
-        run: python scripts/test_supabase_auth_postgrest_live.py
+        run: PYTHONPATH=. python scripts/test_supabase_auth_postgrest_live.py
