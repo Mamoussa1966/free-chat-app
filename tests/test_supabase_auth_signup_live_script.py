@@ -7,9 +7,9 @@ def _set_valid_environment(monkeypatch):
     values = {
         "SUPABASE_URL": "https://example-test.supabase.co",
         "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ci_test_key",
-        "SUPABASE_TEST_USER_A_EMAIL": "account-a@example.test",
+        "SUPABASE_TEST_USER_A_EMAIL": "account-a@gmail.com",
         "SUPABASE_TEST_USER_A_PASSWORD": "A-Long-Test-Password-123",
-        "SUPABASE_TEST_USER_B_EMAIL": "account-b@example.test",
+        "SUPABASE_TEST_USER_B_EMAIL": "account-b@gmail.com",
         "SUPABASE_TEST_USER_B_PASSWORD": "B-Long-Test-Password-456",
     }
     for name, value in values.items():
@@ -53,7 +53,7 @@ def test_signup_preflight_reports_invalid_second_password_without_echoing_values
     assert "LIVE_AUTH_SIGNUP=FAIL" in output
     assert "SUPABASE_TEST_USER_B_PASSWORD_INVALID" in output
     assert "8 و1024" in output
-    assert "account-a@example.test" not in output
+    assert "account-a@gmail.com" not in output
     assert values["SUPABASE_TEST_USER_A_PASSWORD"] not in output
     assert "tiny" not in output
 
@@ -67,5 +67,5 @@ def test_signup_preflight_rejects_malformed_email_without_echoing_value(monkeypa
     output = capsys.readouterr().out
     assert config is None
     assert "SUPABASE_TEST_USER_A_EMAIL_INVALID" in output
-    assert "name@example.com" in output
+    assert "علامة @ واحدة" in output
     assert "not-an-email" not in output
