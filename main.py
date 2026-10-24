@@ -4432,7 +4432,13 @@ def _supabase_load_saved_chats() -> None:
     """Hydrate only snapshots visible to the current authenticated owner."""
     if not is_supabase_auth_active(st):
         return
-    owner, repository = _supabase_identity_and_repository()
+    try:
+        owner, repository = _supabase_identity_and_repository()
+    except Exception:
+        st.session_state["_supabase_last_storage_error"] = (
+            "تعذر إعداد جلسة التخزين المصادق عليها؛ لم تُحمّل محادثات سحابية."
+        )
+        return
     if owner is None or repository is None:
         st.session_state["_supabase_last_storage_error"] = (
             "تعذر إعداد جلسة التخزين المصادق عليها؛ لم تُحمّل محادثات سحابية."
