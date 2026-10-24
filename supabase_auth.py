@@ -26,6 +26,7 @@ class SupabaseAuthSession:
     user_id: str
     email: str
     issuer: str
+    verified_at: int
 
     def to_state(self) -> dict[str, Any]:
         # Tokens are runtime session material; callers must keep this only in
@@ -37,7 +38,7 @@ class SupabaseAuthSession:
             "user_id": self.user_id,
             "email": self.email,
             "issuer": self.issuer,
-            "verified_at": int(time.time()),
+            "verified_at": int(self.verified_at),
         }
 
 
@@ -252,6 +253,7 @@ class SupabaseAuthClient:
             user_id=user_id,
             email=str(user.get("email") or ""),
             issuer=self.issuer,
+            verified_at=int(time.time()),
         )
 
     def restore_or_refresh(self, session_state: dict[str, Any]) -> SupabaseAuthSession:
@@ -273,15 +275,31 @@ class SupabaseAuthClient:
                 raise SupabaseAuthError("تغيّرت هوية الجلسة؛ سجّل الدخول من جديد.")
             return renewed
 
-        # Revalidate the session with Auth rather than trusting a decoded JWT.
-        user = self.get_verified_user(access)
-        if user["id"] != old_user_id:
-            raise SupabaseAuthError("لا تتطابق هوية الجلسة مع المستخدم المصادق عليه.")
+        try:
+            verified_at = int(session_state.get("verified_at") or 0)
+        except (TypeError, ValueError):
+            verified_at = 0
+        if now - verified_at >= 300:
+            # Revalidate periodically, not on every Streamlit keystroke/rerun.
+            # The signed access JWT is still verified by Auth/PostgREST on requests.
+            user = self.get_verified_user(access)
+            if user["id"] != old_user_id:
+                raise SupabaseAuthError("لا تتطابق هوية الجلسة مع المستخدم المصادق عليه.")
+            return SupabaseAuthSession(
+                access_token=access,
+                refresh_token=refresh,
+                expires_at=expires_at,
+                user_id=user["id"],
+                email=str(user.get("email") or session_state.get("email") or ""),
+                issuer=self.issuer,
+                verified_at=now,
+            )
         return SupabaseAuthSession(
             access_token=access,
             refresh_token=refresh,
             expires_at=expires_at,
-            user_id=user["id"],
-            email=str(user.get("email") or session_state.get("email") or ""),
+            user_id=old_user_id,
+            email=str(session_state.get("email") or ""),
             issuer=self.issuer,
+            verified_at=verified_at,
         )
