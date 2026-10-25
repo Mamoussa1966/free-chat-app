@@ -386,6 +386,23 @@ def _setting(names: Iterable[str]) -> Optional[str]:
     return None
 
 
+def _configured_provider_timeout_seconds() -> Optional[float]:
+    """Return an explicit per-attempt timeout, or None by default.
+
+    COUNCIL_PROVIDER_TIMEOUT_SECONDS is an opt-in runtime setting. Keeping
+    the absent-setting behavior as None preserves the historical no-timeout
+    contract; configured values are accepted only within 1..120 seconds.
+    """
+    raw = _setting(("COUNCIL_PROVIDER_TIMEOUT_SECONDS",))
+    if raw is None:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if 1.0 <= seconds <= 120.0 else None
+
+
 def get_secret(names: Iterable[str]) -> Optional[str]:
     return _setting(names)
 
@@ -1395,12 +1412,20 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         try:
             executed_model = str(model or "").strip()
             attempt_started = time.perf_counter()
-            effective_timeout = GEMINI_REQUEST_TIMEOUT if seat.key == "gemini" and GEMINI_REQUEST_TIMEOUT is not None else None
+            configured_timeout = (
+                GEMINI_REQUEST_TIMEOUT
+                if seat.key == "gemini" and GEMINI_REQUEST_TIMEOUT is not None
+                else _configured_provider_timeout_seconds()
+            )
+            effective_timeout = configured_timeout
             if seat_deadline is not None:
                 remaining_seat = _remaining(seat_deadline) or 0.0
                 if remaining_seat <= 0:
                     raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
-                effective_timeout = remaining_seat
+                effective_timeout = (
+                    remaining_seat if configured_timeout is None
+                    else min(float(configured_timeout), remaining_seat)
+                )
             provider_prompt = _prompt(user_prompt, shared_context, round_no, seat, executed_model)
             if deadline is None:
                 # Preserve compatibility with existing test doubles/legacy adapters
@@ -1599,7 +1624,7 @@ def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Opti
     for index, model in enumerate(candidates):
         attempted.append(model)
         try:
-            data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": [{"text": "Transcribe the attached audio exactly as spoken. Return only the transcription. Preserve Arabic, English, numbers, and names. Do not summarize."}, {"inlineData": {"mimeType": mime, "data": encoded}}]}]}, REQUEST_TIMEOUT)
+            data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": [{"text": "Transcribe the attached audio exactly as spoken. Return only the transcription. Preserve Arabic, English, numbers, and names. Do not summarize."}, {"inlineData": {"mimeType": mime, "data": encoded}}]}]}, _configured_provider_timeout_seconds())
             text = _gemini_text(data)
             if not text:
                 raise ProviderError("Gemini returned no transcription text", error_class="empty_response")
