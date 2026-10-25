@@ -386,6 +386,23 @@ def _setting(names: Iterable[str]) -> Optional[str]:
     return None
 
 
+def _configured_provider_timeout_seconds() -> Optional[float]:
+    """Return an explicit per-attempt timeout, or None by default.
+
+    COUNCIL_PROVIDER_TIMEOUT_SECONDS is an opt-in runtime setting. Keeping
+    the absent-setting behavior as None preserves the historical no-timeout
+    contract; configured values are accepted only within 1..120 seconds.
+    """
+    raw = _setting(("COUNCIL_PROVIDER_TIMEOUT_SECONDS",))
+    if raw is None:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if 1.0 <= seconds <= 120.0 else None
+
+
 def get_secret(names: Iterable[str]) -> Optional[str]:
     return _setting(names)
 
