@@ -1469,6 +1469,72 @@ def _prune_voice_store() -> None:
     st.session_state.voice_audio_store = dict(reversed(kept))
 
 
+def _clear_deleted_chat_voice_state(
+    chat: dict | None,
+    *,
+    clear_all: bool = False,
+    state=None,
+) -> None:
+    """Remove audio owned by deleted chat(s) and reset any unsubmitted recorder draft.
+
+    Audio bytes and the audio_input draft live in Streamlit session state, not in the
+    Supabase conversation row. This cleanup therefore runs only after the existing
+    remote-delete gate succeeds; it does not alter persisted message/request records.
+    The optional state argument keeps the cleanup behavior unit-testable.
+    """
+    target_state = st.session_state if state is None else state
+    chat_id = str((chat or {}).get("id") or "").strip()
+    audio_keys: set[str] = set()
+
+    if not clear_all and isinstance(chat, dict):
+        for message in chat.get("messages", []) or []:
+            if not isinstance(message, dict):
+                continue
+            audio_key = str(message.get("voice_audio_key") or "").strip()
+            message_id = str(message.get("id") or "").strip()
+            if message.get("voice") or audio_key:
+                if audio_key:
+                    audio_keys.add(audio_key)
+                if message_id:
+                    audio_keys.add(message_id)
+
+    audio_store = target_state.get("voice_audio_store")
+    if not isinstance(audio_store, dict):
+        audio_store = {}
+    if clear_all:
+        target_state["voice_audio_store"] = {}
+    else:
+        for key in audio_keys:
+            audio_store.pop(key, None)
+        target_state["voice_audio_store"] = audio_store
+
+    fingerprints = target_state.get("voice_fingerprints")
+    if clear_all:
+        target_state["voice_fingerprints"] = {}
+    elif isinstance(fingerprints, dict):
+        fingerprints.pop(chat_id, None)
+        target_state["voice_fingerprints"] = fingerprints
+
+    last_transcription = target_state.get("last_voice_transcription")
+    if clear_all or (
+        isinstance(last_transcription, dict)
+        and str(last_transcription.get("chat_id") or "").strip() == chat_id
+    ):
+        target_state["last_voice_transcription"] = {}
+    # This error is global rather than chat-keyed, so do not carry it into the next chat.
+    target_state["last_voice_error"] = ""
+
+    # st.audio_input keeps the unsubmitted recording under its widget key. Remove
+    # that old key before rendering the widget again, then rotate the key so Streamlit
+    # creates an empty recorder after the rerun. Do not try to mutate button state.
+    try:
+        old_nonce = max(0, int(target_state.get("voice_nonce", 0) or 0))
+    except (TypeError, ValueError):
+        old_nonce = 0
+    target_state.pop(f"voice_input_{old_nonce}", None)
+    target_state["voice_nonce"] = old_nonce + 1
+
+
 def _title_from_prompt(prompt: str) -> str:
     clean = re.sub(r"\s+", " ", str(prompt or "")).strip()
     return clean[:48] + ("…" if len(clean) > 48 else "") or "محادثة جديدة"
@@ -2887,6 +2953,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 if not _supabase_delete_remote_chat(chat):
                     st.error("لم يتأكد حذف المحادثة من التخزين الدائم؛ احتفظنا بها في الواجهة.")
                 else:
+                    # Clear chat-owned recordings and the unsubmitted audio_input draft
+                    # only after the existing durable-delete gate has succeeded.
+                    _clear_deleted_chat_voice_state(chat)
                     if len(st.session_state.chats) == 1:
                         fresh = _new_chat()
                         st.session_state.chats = [fresh]
@@ -2895,17 +2964,21 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                         st.session_state.chats = [x for x in st.session_state.chats if x.get("id") != chat["id"]]
                         st.session_state.active_chat_id = st.session_state.chats[0]["id"]
                     st.session_state.last_results = []
+                    st.session_state.last_diagnostics = []
+                    st.session_state.last_synthesis = {}
                     st.rerun()
         with c4:
             if st.button("🧹 مسح الكل", use_container_width=True):
                 if not _supabase_delete_all_remote_chats(list(st.session_state.chats)):
                     st.error("لم يتأكد حذف كل المحادثات من التخزين الدائم؛ لم نمسح سجل الواجهة.")
                 else:
+                    _clear_deleted_chat_voice_state(None, clear_all=True)
                     fresh = _new_chat()
                     st.session_state.chats = [fresh]
                     st.session_state.active_chat_id = fresh["id"]
                     st.session_state.last_results = []
                     st.session_state.last_diagnostics = []
+                    st.session_state.last_synthesis = {}
                     st.rerun()
         st.divider()
         st.divider()
