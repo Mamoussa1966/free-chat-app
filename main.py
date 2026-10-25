@@ -2573,6 +2573,9 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         "created_at": record.get("created_at") or _now(),
     }, st.session_state)
     deadline = None
+    configured_execution_timeout = _configured_execution_timeout_seconds()
+    if configured_execution_timeout is not None:
+        deadline = time.monotonic() + configured_execution_timeout
     lifecycle = RequestLifecycle.begin(request_id)
     round_registry = RequestRoundExecutionRegistry(request_id)
     chat.setdefault("audit_events", [])
