@@ -1412,12 +1412,20 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
         try:
             executed_model = str(model or "").strip()
             attempt_started = time.perf_counter()
-            effective_timeout = GEMINI_REQUEST_TIMEOUT if seat.key == "gemini" and GEMINI_REQUEST_TIMEOUT is not None else None
+            configured_timeout = (
+                GEMINI_REQUEST_TIMEOUT
+                if seat.key == "gemini" and GEMINI_REQUEST_TIMEOUT is not None
+                else _configured_provider_timeout_seconds()
+            )
+            effective_timeout = configured_timeout
             if seat_deadline is not None:
                 remaining_seat = _remaining(seat_deadline) or 0.0
                 if remaining_seat <= 0:
                     raise ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
-                effective_timeout = remaining_seat
+                effective_timeout = (
+                    remaining_seat if configured_timeout is None
+                    else min(float(configured_timeout), remaining_seat)
+                )
             provider_prompt = _prompt(user_prompt, shared_context, round_no, seat, executed_model)
             if deadline is None:
                 # Preserve compatibility with existing test doubles/legacy adapters
