@@ -1624,7 +1624,7 @@ def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Opti
     for index, model in enumerate(candidates):
         attempted.append(model)
         try:
-            data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": [{"text": "Transcribe the attached audio exactly as spoken. Return only the transcription. Preserve Arabic, English, numbers, and names. Do not summarize."}, {"inlineData": {"mimeType": mime, "data": encoded}}]}]}, REQUEST_TIMEOUT)
+            data = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", {"x-goog-api-key": key, "Content-Type": "application/json"}, {"contents": [{"role": "user", "parts": [{"text": "Transcribe the attached audio exactly as spoken. Return only the transcription. Preserve Arabic, English, numbers, and names. Do not summarize."}, {"inlineData": {"mimeType": mime, "data": encoded}}]}]}, _configured_provider_timeout_seconds())
             text = _gemini_text(data)
             if not text:
                 raise ProviderError("Gemini returned no transcription text", error_class="empty_response")
