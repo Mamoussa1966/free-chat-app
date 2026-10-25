@@ -1469,6 +1469,70 @@ def _prune_voice_store() -> None:
     st.session_state.voice_audio_store = dict(reversed(kept))
 
 
+def _clear_voice_state_for_chats(chats, state=None) -> set[str]:
+    """Remove audio bytes and pending voice-input state for chats being deleted.
+
+    The audio_input widget is keyed by voice_nonce and may hold an unsent preview
+    that is not part of voice_audio_store yet. Rotating the key clears that draft;
+    message-linked audio blobs and deduplication fingerprints are cleaned separately.
+    """
+    runtime_state = st.session_state if state is None else state
+    if isinstance(chats, dict):
+        selected_chats = [chats]
+    elif isinstance(chats, (list, tuple)):
+        selected_chats = [item for item in chats if isinstance(item, dict)]
+    else:
+        selected_chats = []
+
+    deleted_chat_ids = {
+        str(item.get("id") or "").strip()
+        for item in selected_chats
+        if str(item.get("id") or "").strip()
+    }
+    voice_audio_keys: set[str] = set()
+    for item in selected_chats:
+        messages = item.get("messages", [])
+        if not isinstance(messages, list):
+            continue
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            key = str(
+                message.get("voice_audio_key")
+                or (message.get("id") if message.get("voice") else "")
+                or ""
+            ).strip()
+            if key and (message.get("voice") or message.get("voice_audio_key")):
+                voice_audio_keys.add(key)
+
+    voice_store = runtime_state.get("voice_audio_store")
+    if isinstance(voice_store, dict):
+        for key in voice_audio_keys:
+            voice_store.pop(key, None)
+
+    fingerprints = runtime_state.get("voice_fingerprints")
+    if isinstance(fingerprints, dict):
+        for chat_id in deleted_chat_ids:
+            fingerprints.pop(chat_id, None)
+
+    last_transcription = runtime_state.get("last_voice_transcription")
+    if (
+        isinstance(last_transcription, dict)
+        and str(last_transcription.get("chat_id") or "").strip() in deleted_chat_ids
+    ):
+        runtime_state["last_voice_transcription"] = {}
+    runtime_state["last_voice_error"] = ""
+
+    # Reset st.audio_input even when the recording has not been sent yet and
+    # therefore has no message ID in voice_audio_store.
+    try:
+        current_nonce = int(runtime_state.get("voice_nonce", 0) or 0)
+    except (TypeError, ValueError):
+        current_nonce = 0
+    runtime_state["voice_nonce"] = current_nonce + 1
+    return voice_audio_keys
+
+
 def _title_from_prompt(prompt: str) -> str:
     clean = re.sub(r"\s+", " ", str(prompt or "")).strip()
     return clean[:48] + ("…" if len(clean) > 48 else "") or "محادثة جديدة"
@@ -2887,6 +2951,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 if not _supabase_delete_remote_chat(chat):
                     st.error("لم يتأكد حذف المحادثة من التخزين الدائم؛ احتفظنا بها في الواجهة.")
                 else:
+                    _clear_voice_state_for_chats([chat])
                     if len(st.session_state.chats) == 1:
                         fresh = _new_chat()
                         st.session_state.chats = [fresh]
@@ -2901,6 +2966,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 if not _supabase_delete_all_remote_chats(list(st.session_state.chats)):
                     st.error("لم يتأكد حذف كل المحادثات من التخزين الدائم؛ لم نمسح سجل الواجهة.")
                 else:
+                    _clear_voice_state_for_chats(list(st.session_state.chats))
                     fresh = _new_chat()
                     st.session_state.chats = [fresh]
                     st.session_state.active_chat_id = fresh["id"]
