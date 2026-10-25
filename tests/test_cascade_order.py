@@ -1,4 +1,6 @@
+import time
 from unittest.mock import patch
+import providers
 from providers import SEATS, ProviderError, call_seat
 
 def test_failure_one_then_two_then_three():
