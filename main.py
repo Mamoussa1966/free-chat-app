@@ -16,7 +16,7 @@ import streamlit as st
 from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, get_secret, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit as _base_read_only_existing_records_audit
 from v23_final_closure_audit import build_v23_final_closure_audit
