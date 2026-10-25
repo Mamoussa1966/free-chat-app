@@ -1450,6 +1450,62 @@ def _active_chat() -> dict:
     return chat
 
 
+
+def _reset_voice_recorder_widget() -> None:
+    """Clear a pending audio_input preview by removing old keys and rotating its key."""
+    try:
+        previous_nonce = int(st.session_state.get("voice_nonce", 0) or 0)
+    except (TypeError, ValueError):
+        previous_nonce = 0
+    # The sidebar runs before the recorder is rendered on the next script pass.
+    # Remove its previous widget state so an unsent preview cannot survive deletion.
+    for key in list(st.session_state.keys()):
+        key_text = str(key)
+        if key_text.startswith(("voice_input_", "send_voice_")):
+            st.session_state.pop(key, None)
+    st.session_state["voice_nonce"] = previous_nonce + 1
+
+
+def _clear_voice_state_for_chat(chat: dict) -> None:
+    """Remove only the deleted chat's saved audio and clear its transient recorder state."""
+    chat_id = str(chat.get("id") or "").strip()
+    audio_keys: set[str] = set()
+    for message in chat.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        if message.get("voice") or message.get("voice_audio_key"):
+            voice_key = str(message.get("voice_audio_key") or message.get("id") or "").strip()
+            message_id = str(message.get("id") or "").strip()
+            if voice_key:
+                audio_keys.add(voice_key)
+            if message_id and (message.get("voice") or message.get("voice_audio_key")):
+                audio_keys.add(message_id)
+
+    audio_store = st.session_state.get("voice_audio_store")
+    if isinstance(audio_store, dict):
+        for key in audio_keys:
+            audio_store.pop(key, None)
+
+    fingerprints = st.session_state.get("voice_fingerprints")
+    if isinstance(fingerprints, dict) and chat_id:
+        fingerprints.pop(chat_id, None)
+
+    # This diagnostic is ephemeral and belongs to the most recently rendered
+    # voice submission. Do not let a deleted chat's transcript/error remain visible.
+    st.session_state["last_voice_transcription"] = {}
+    st.session_state["last_voice_error"] = ""
+    _reset_voice_recorder_widget()
+
+
+def _clear_all_voice_state() -> None:
+    """Clear all retained audio bytes and pending recorder state after deleting all chats."""
+    st.session_state["voice_audio_store"] = {}
+    st.session_state["voice_fingerprints"] = {}
+    st.session_state["last_voice_transcription"] = {}
+    st.session_state["last_voice_error"] = ""
+    _reset_voice_recorder_widget()
+
+
 def _prune_voice_store() -> None:
     store = st.session_state.get("voice_audio_store") or {}
     if not isinstance(store, dict):
@@ -2887,6 +2943,8 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 if not _supabase_delete_remote_chat(chat):
                     st.error("لم يتأكد حذف المحادثة من التخزين الدائم؛ احتفظنا بها في الواجهة.")
                 else:
+                    # Delete chat-owned voice bytes only after durable deletion succeeds.
+                    _clear_voice_state_for_chat(chat)
                     if len(st.session_state.chats) == 1:
                         fresh = _new_chat()
                         st.session_state.chats = [fresh]
@@ -2895,17 +2953,22 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                         st.session_state.chats = [x for x in st.session_state.chats if x.get("id") != chat["id"]]
                         st.session_state.active_chat_id = st.session_state.chats[0]["id"]
                     st.session_state.last_results = []
+                    st.session_state.last_diagnostics = []
+                    st.session_state.last_synthesis = {}
                     st.rerun()
         with c4:
             if st.button("🧹 مسح الكل", use_container_width=True):
                 if not _supabase_delete_all_remote_chats(list(st.session_state.chats)):
                     st.error("لم يتأكد حذف كل المحادثات من التخزين الدائم؛ لم نمسح سجل الواجهة.")
                 else:
+                    # Clear all recorded and unsubmitted audio only after every remote delete succeeds.
+                    _clear_all_voice_state()
                     fresh = _new_chat()
                     st.session_state.chats = [fresh]
                     st.session_state.active_chat_id = fresh["id"]
                     st.session_state.last_results = []
                     st.session_state.last_diagnostics = []
+                    st.session_state.last_synthesis = {}
                     st.rerun()
         st.divider()
         st.divider()
