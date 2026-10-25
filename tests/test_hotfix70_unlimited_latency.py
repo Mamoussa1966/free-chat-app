@@ -1,4 +1,5 @@
 from pathlib import Path
+import main
 import providers
 
 
