@@ -1504,8 +1504,31 @@ def _clear_deleted_chat_voice_state(
     if clear_all:
         target_state["voice_audio_store"] = {}
     else:
-        for key in audio_keys:
-            audio_store.pop(key, None)
+        # Preserve only audio still referenced by a different retained chat.
+        # This also garbage-collects recordings left behind by earlier deletion
+        # bugs, since voice bytes are not stored in Supabase with chat ownership.
+        retained_audio_keys: set[str] = set()
+        if chat_id:
+            for retained_chat in target_state.get("chats", []) or []:
+                if not isinstance(retained_chat, dict):
+                    continue
+                if str(retained_chat.get("id") or "").strip() == chat_id:
+                    continue
+                for retained_message in retained_chat.get("messages", []) or []:
+                    if not isinstance(retained_message, dict):
+                        continue
+                    retained_key = str(
+                        retained_message.get("voice_audio_key")
+                        or (retained_message.get("id") if retained_message.get("voice") else "")
+                        or ""
+                    ).strip()
+                    if retained_key and (
+                        retained_message.get("voice") or retained_message.get("voice_audio_key")
+                    ):
+                        retained_audio_keys.add(retained_key)
+        for key in list(audio_store):
+            if key in audio_keys or (chat_id and key not in retained_audio_keys):
+                audio_store.pop(key, None)
         target_state["voice_audio_store"] = audio_store
 
     fingerprints = target_state.get("voice_fingerprints")
