@@ -1469,6 +1469,74 @@ def _prune_voice_store() -> None:
     st.session_state.voice_audio_store = dict(reversed(kept))
 
 
+def _cleanup_voice_media_after_chat_delete(
+    deleted_chats: list[dict],
+    *,
+    clear_all: bool = False,
+) -> None:
+    """Remove deleted-chat voice blobs and rotate the recorder widget key.
+
+    Call only after the corresponding durable conversation deletion succeeds.
+    Blobs for other conversations are retained only when their message records
+    still exist; this also removes orphaned blobs left by older chat deletions.
+    Rotating voice_nonce makes Streamlit render a fresh audio_input widget on
+    the next pass, clearing any unsubmitted recording preview without mutating
+    the current widget's session-state key after widget creation.
+    """
+    deleted_chat_ids = {
+        str(item.get("id") or "").strip()
+        for item in (deleted_chats or [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+
+    retained_voice_keys: set[str] = set()
+    retained_chats = st.session_state.get("chats") or []
+    if isinstance(retained_chats, list):
+        for retained_chat in retained_chats:
+            if not isinstance(retained_chat, dict):
+                continue
+            messages = retained_chat.get("messages") or []
+            if not isinstance(messages, list):
+                continue
+            for message in messages:
+                if not isinstance(message, dict) or not message.get("voice"):
+                    continue
+                audio_key = str(
+                    message.get("voice_audio_key") or message.get("id") or ""
+                ).strip()
+                if audio_key:
+                    retained_voice_keys.add(audio_key)
+
+    voice_store = st.session_state.get("voice_audio_store")
+    if isinstance(voice_store, dict):
+        st.session_state.voice_audio_store = {
+            key: value for key, value in voice_store.items()
+            if str(key) in retained_voice_keys
+        }
+    else:
+        st.session_state.voice_audio_store = {}
+
+    fingerprints = st.session_state.get("voice_fingerprints")
+    if clear_all:
+        st.session_state.voice_fingerprints = {}
+    elif isinstance(fingerprints, dict):
+        for chat_id in deleted_chat_ids:
+            fingerprints.pop(chat_id, None)
+
+    transcript = st.session_state.get("last_voice_transcription")
+    if clear_all or (
+        isinstance(transcript, dict)
+        and str(transcript.get("chat_id") or "") in deleted_chat_ids
+    ):
+        st.session_state.last_voice_transcription = {}
+    st.session_state.last_voice_error = ""
+
+    try:
+        st.session_state.voice_nonce = int(st.session_state.get("voice_nonce") or 0) + 1
+    except (TypeError, ValueError):
+        st.session_state.voice_nonce = 1
+
+
 def _title_from_prompt(prompt: str) -> str:
     clean = re.sub(r"\s+", " ", str(prompt or "")).strip()
     return clean[:48] + ("…" if len(clean) > 48 else "") or "محادثة جديدة"
@@ -2887,6 +2955,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 if not _supabase_delete_remote_chat(chat):
                     st.error("لم يتأكد حذف المحادثة من التخزين الدائم؛ احتفظنا بها في الواجهة.")
                 else:
+                    # Keep the existing fail-closed order: clean local voice media
+                    # only after remote deletion was confirmed and the chat is removed.
+                    deleted_chats = [chat]
                     if len(st.session_state.chats) == 1:
                         fresh = _new_chat()
                         st.session_state.chats = [fresh]
@@ -2894,16 +2965,20 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                     else:
                         st.session_state.chats = [x for x in st.session_state.chats if x.get("id") != chat["id"]]
                         st.session_state.active_chat_id = st.session_state.chats[0]["id"]
+                    _cleanup_voice_media_after_chat_delete(deleted_chats)
                     st.session_state.last_results = []
+                    st.session_state.last_diagnostics = []
                     st.rerun()
         with c4:
             if st.button("🧹 مسح الكل", use_container_width=True):
-                if not _supabase_delete_all_remote_chats(list(st.session_state.chats)):
+                deleted_chats = list(st.session_state.chats)
+                if not _supabase_delete_all_remote_chats(deleted_chats):
                     st.error("لم يتأكد حذف كل المحادثات من التخزين الدائم؛ لم نمسح سجل الواجهة.")
                 else:
                     fresh = _new_chat()
                     st.session_state.chats = [fresh]
                     st.session_state.active_chat_id = fresh["id"]
+                    _cleanup_voice_media_after_chat_delete(deleted_chats, clear_all=True)
                     st.session_state.last_results = []
                     st.session_state.last_diagnostics = []
                     st.rerun()
