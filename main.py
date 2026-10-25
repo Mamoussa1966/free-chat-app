@@ -59,8 +59,26 @@ MAX_VOICE_BYTES = 8 * 1024 * 1024
 MAX_STORED_VOICE_ITEMS = 10
 MAX_STORED_VOICE_BYTES = 40 * 1024 * 1024
 MAX_ROUNDS = 4
-MAX_EXECUTION_SECONDS = None
+MAX_EXECUTION_SECONDS = None  # Historical default remains unlimited unless an explicit Secret opts in.
 MAX_PROMPT_CHARS = 20_000
+
+
+def _configured_execution_timeout_seconds() -> float | None:
+    """Return an explicitly configured whole-request deadline, or None.
+
+    The default remains unlimited for backward compatibility. Operators can
+    opt in through COUNCIL_EXECUTION_TIMEOUT_SECONDS in Streamlit Secrets.
+    Accepted values are 15..300 seconds; invalid settings fail closed to the
+    historical unlimited behavior rather than injecting a hidden policy.
+    """
+    raw = get_secret(("COUNCIL_EXECUTION_TIMEOUT_SECONDS",))
+    if raw is None:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if 15.0 <= seconds <= 300.0 else None
 MAX_CHAT_MESSAGES = 200
 MAX_REQUEST_IDS = 50
 MAX_WORKERS = 8
