@@ -3017,9 +3017,45 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                 st.write(message.get("content", ""))
                 if message.get("voice"):
                     st.caption("🎙️ رسالة صوتية — تم تحويلها إلى نص.")
-                    blob = st.session_state.get("voice_audio_store", {}).get(message.get("voice_audio_key"))
+                    voice_audio_key = str(message.get("voice_audio_key") or message.get("id") or "").strip()
+                    voice_message_id = str(message.get("id") or voice_audio_key).strip()
+                    voice_mime = str(message.get("voice_mime") or "audio/wav")
+                    blob = st.session_state.get("voice_audio_store", {}).get(voice_audio_key)
                     if blob:
-                        st.audio(blob, format=message.get("voice_mime", "audio/wav"))
+                        st.audio(blob, format=voice_mime)
+                        normalized_mime = voice_mime.split(";", 1)[0].strip().lower()
+                        voice_extension = {
+                            "audio/wav": "wav",
+                            "audio/x-wav": "wav",
+                            "audio/webm": "webm",
+                            "audio/ogg": "ogg",
+                            "audio/mpeg": "mp3",
+                            "audio/mp4": "m4a",
+                            "audio/aac": "aac",
+                        }.get(normalized_mime, "wav")
+                        download_col, delete_col = st.columns(2)
+                        with download_col:
+                            st.download_button(
+                                "⬇️ تنزيل الصوت",
+                                data=blob,
+                                file_name=f"voice-message-{voice_message_id[:12]}.{voice_extension}",
+                                mime=normalized_mime or "audio/wav",
+                                key=f"voice_message_download_{voice_message_id}",
+                                use_container_width=True,
+                            )
+                        with delete_col:
+                            if st.button(
+                                "🗑️ حذف التسجيل",
+                                key=f"voice_message_delete_{voice_message_id}",
+                                use_container_width=True,
+                                help="يحذف ملف الصوت من الجلسة فقط، مع إبقاء النص المستخرج وسجل ردود المجلس.",
+                            ):
+                                voice_store = st.session_state.get("voice_audio_store")
+                                if isinstance(voice_store, dict):
+                                    voice_store.pop(voice_audio_key, None)
+                                st.rerun()
+                    else:
+                        st.caption("التسجيل الصوتي غير متاح أو حُذف؛ النص المستخرج وسجل ردود المجلس محفوظان.")
                 for attachment in message.get("attachments", []):
                     st.caption(f"📎 {attachment.get('name', 'attachment')} · {attachment.get('mime', 'file')} · {attachment.get('size', 0)} bytes")
     return voice_submission
