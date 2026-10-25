@@ -14,3 +14,13 @@ def test_hotfix70_council_has_no_global_execution_deadline():
     source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8")
     assert "MAX_EXECUTION_SECONDS = None" in source
     assert "deadline = None" in source
+
+
+def test_global_execution_timeout_is_opt_in_and_bounded(monkeypatch):
+    monkeypatch.setattr(main, "get_secret", lambda names: "60" if tuple(names) == ("COUNCIL_EXECUTION_TIMEOUT_SECONDS",) else None)
+    assert main._configured_execution_timeout_seconds() == 60.0
+
+
+def test_invalid_global_execution_timeout_fails_back_to_legacy_unlimited(monkeypatch):
+    monkeypatch.setattr(main, "get_secret", lambda names: "not-a-number" if tuple(names) == ("COUNCIL_EXECUTION_TIMEOUT_SECONDS",) else None)
+    assert main._configured_execution_timeout_seconds() is None
