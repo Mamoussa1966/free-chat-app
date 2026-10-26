@@ -205,3 +205,23 @@ def test_missing_or_invalid_encryption_key_disables_persistent_restore():
     cipher, status = auth._fernet(invalid_key)
     assert cipher is None
     assert status == "invalid"
+
+def test_existing_authenticated_session_is_migrated_to_cookie_once(monkeypatch, fake_cookie_component):
+    jar, cookie_calls = fake_cookie_component
+    session = make_session()
+    st = FakeStreamlit(cookies={})
+    st.session_state[auth.AUTH_SESSION_KEY] = session.to_state()
+    st.session_state[auth.ACTIVE_SUBJECT_KEY] = USER_ID
+    fake_client = FakeAuthClient(session)
+    monkeypatch.setattr(auth, "_client", lambda _st: fake_client)
+
+    assert auth.ensure_supabase_auth(st) is True
+    assert auth.AUTH_COOKIE_NAME in jar
+    assert auth.AUTH_COOKIE_PERSISTED_STATE_KEY in st.session_state
+    assert any(call[0] == "set" for call in cookie_calls)
+
+    # A second ordinary rerun should not repeatedly issue the cookie write when
+    # the original HTTP request had no cookie but the component command was sent.
+    previous_writes = sum(1 for call in cookie_calls if call[0] == "set")
+    assert auth.ensure_supabase_auth(st) is True
+    assert sum(1 for call in cookie_calls if call[0] == "set") == previous_writes
