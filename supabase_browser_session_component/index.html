@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Council browser session bridge</title>
+</head>
+<body>
+<script>
+(() => {
+  "use strict";
+
+  // Only encrypted opaque session envelopes are accepted here. The Fernet key
+  // never leaves Streamlit Secrets and is never sent to this component.
+  const DEFAULT_STORAGE_KEY = "ai_council_supabase_session_v1";
+  let lastSent = "";
+
+  function sendToStreamlit(type, data) {
+    window.parent.postMessage(
+      Object.assign({ isStreamlitMessage: true, type }, data || {}),
+      "*"
+    );
+  }
+
+  function sendValue(value) {
+    const encoded = JSON.stringify(value);
+    if (encoded === lastSent) return;
+    lastSent = encoded;
+    sendToStreamlit("streamlit:setComponentValue", {
+      value,
+      dataType: "json"
+    });
+  }
+
+  function onRender(args) {
+    const storageKey = typeof args.storage_key === "string" && args.storage_key
+      ? args.storage_key : DEFAULT_STORAGE_KEY;
+    const persistedPayload = typeof args.persisted_payload === "string"
+      ? args.persisted_payload : "";
+    const clearId = typeof args.clear_id === "string" ? args.clear_id : "";
+
+    try {
+      if (args.clear === true) {
+        localStorage.removeItem(storageKey);
+        sendValue({ status: "empty", clear_id: clearId });
+        return;
+      }
+
+      if (persistedPayload) {
+        localStorage.setItem(storageKey, persistedPayload);
+        sendValue({ status: "ready", payload: persistedPayload });
+        return;
+      }
+
+      const saved = localStorage.getItem(storageKey);
+      sendValue(saved
+        ? { status: "ready", payload: saved }
+        : { status: "empty", clear_id: "" });
+    } catch (_error) {
+      // Storage can be disabled by browser policy. Authentication must fail
+      // closed to the current connection, not crash the app or expose tokens.
+      sendValue({ status: "unavailable", clear_id: clearId });
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    const message = event.data;
+    if (!message || message.type !== "streamlit:render") return;
+    onRender(message.args || {});
+  });
+
+  sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+  sendToStreamlit("streamlit:setFrameHeight", { height: 0 });
+})();
+</script>
+</body>
+</html>
