@@ -62,7 +62,7 @@ def test_browser_session_rejects_tampering_and_another_encryption_key():
     wrong_key_st = FakeStreamlit(key=Fernet.generate_key().decode("ascii"))
 
     assert browser_auth._unseal_browser_session_state(wrong_key_st, token) is None
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    tampered = token[:20] + ("A" if token[20] != "A" else "B") + token[21:]
     assert browser_auth._unseal_browser_session_state(st, tampered) is None
 
 
