@@ -182,7 +182,9 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                 st.stop()
 
             pending_token = state.get(PENDING_BROWSER_TOKEN_KEY)
-            if not pending_token and session.refresh_token != old_refresh_token:
+            # Prefer the token returned by the latest verified/rotated session;
+            # an earlier pending value must never overwrite a newly rotated token.
+            if session.refresh_token != old_refresh_token:
                 pending_token = session.refresh_token
                 state[PENDING_BROWSER_TOKEN_KEY] = pending_token
             if pending_token:
@@ -236,11 +238,6 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             state[BROWSER_STORAGE_DISABLED_KEY] = True
             state[AUTH_RECOVERY_FAILED_KEY] = True
             browser_result = {"action": "read", "value": "", "error": False}
-
-    if browser_result.get("error"):
-        state[AUTH_RECOVERY_FAILED_KEY] = True
-        state[PENDING_BROWSER_DELETE_KEY] = True
-        st.rerun()
 
     refresh_token = _normalize_refresh_token(browser_result.get("value"))
     if refresh_token:
