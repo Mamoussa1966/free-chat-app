@@ -189,6 +189,11 @@ def _clear_session_data(state: Any, *, keep_auth: dict[str, Any] | None = None, 
     # All conversation, context, audit, and widget state is user-scoped. Clear it
     # on account changes and sign-out so one user cannot inherit another session.
     for key in list(state.keys()):
+        # Streamlit forbids changing a component widget's state after it has
+        # been instantiated in the current run. Keep its opaque browser result;
+        # the pending write/clear operation below replaces it on the next run.
+        if key == _BROWSER_COMPONENT_KEY:
+            continue
         try:
             del state[key]
         except Exception:
