@@ -66,6 +66,8 @@ class FakeAuthTransport:
                 "expires_in": 3600,
                 "expires_at": int(time.time()) + 3600,
             })
+        if "/auth/v1/logout?scope=local" in url:
+            return FakeResponse(204, {})
         if url.endswith("/auth/v1/user"):
             token = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
             user = self.users.get(token)
@@ -240,3 +242,13 @@ def test_admin_keys_are_rejected(key):
             publishable_key=key,
             session=FakeAuthTransport(),
         )
+
+
+
+def test_sign_out_revokes_only_the_current_supabase_session():
+    client, transport = make_client()
+    client.sign_out(ACCESS_A)
+    logout = next(c for c in transport.calls if "/auth/v1/logout?scope=local" in c["url"])
+    assert logout["method"] == "POST"
+    assert logout["headers"]["Authorization"] == f"Bearer {ACCESS_A}"
+    assert logout["headers"]["apikey"] == PUBLISHABLE_KEY
