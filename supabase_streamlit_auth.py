@@ -279,6 +279,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             if fernet is not None and (
                 session.access_token != previous_access
                 or session.refresh_token != previous_refresh
+                or session.verified_at != int(stored.get("verified_at") or 0)
                 or (cookie_missing and cookie_not_written)
             ):
                 if not _persist_session_cookie(st, session, fernet):
