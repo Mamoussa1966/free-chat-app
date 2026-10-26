@@ -197,7 +197,7 @@ def test_virtual_microphone_permission_capture_preview_and_discard(streamlit_ser
             record_button.click()
 
             page.get_by_text(
-                re.compile(r"Captured audio bytes:\\s*[1-9]\\d*")
+                re.compile(r"Captured audio bytes:\s*[1-9]\d*")
             ).wait_for(state="visible", timeout=30_000)
             page.get_by_role(
                 "button", name="🗑️ حذف التسجيل قبل الإرسال"
