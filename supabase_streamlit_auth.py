@@ -24,6 +24,7 @@ AUTH_SESSION_KEY = "_supabase_auth_session"
 ACTIVE_SUBJECT_KEY = "_supabase_active_subject"
 AUTH_COOKIE_NAME = "__Host-council_auth_v1"
 AUTH_COOKIE_MANAGER_STATE_KEY = "_supabase_auth_cookie_manager"
+AUTH_COOKIE_PERSISTED_STATE_KEY = "_supabase_auth_cookie_persisted"
 AUTH_COOKIE_COMPONENT_KEY = "supabase_auth_cookie_manager"
 AUTH_COOKIE_TTL_SECONDS = 30 * 24 * 60 * 60
 AUTH_COOKIE_SCHEMA = "supabase-streamlit-auth/v1"
@@ -191,6 +192,10 @@ def _persist_session_cookie(st: Any, session: SupabaseAuthSession, fernet: Ferne
             secure=True,
             same_site="lax",
         )
+        # Avoid reissuing the component command on every Streamlit rerun.
+        # A new WebSocket session starts without this in-memory marker and must
+        # restore from the browser cookie again.
+        st.session_state[AUTH_COOKIE_PERSISTED_STATE_KEY] = True
         return True
     except Exception:
         # Do not log cookie contents, access tokens, or refresh tokens.
@@ -267,8 +272,14 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             previous_access = str(stored.get("access_token") or "")
             previous_refresh = str(stored.get("refresh_token") or "")
             _activate_session(st, session)
+            # Also migrate already-open pre-fix sessions into cookie persistence
+            # even when Auth did not need to rotate the tokens this time.
+            cookie_missing = not _context_cookie(st)
+            cookie_not_written = not bool(st.session_state.get(AUTH_COOKIE_PERSISTED_STATE_KEY))
             if fernet is not None and (
-                session.access_token != previous_access or session.refresh_token != previous_refresh
+                session.access_token != previous_access
+                or session.refresh_token != previous_refresh
+                or (cookie_missing and cookie_not_written)
             ):
                 if not _persist_session_cookie(st, session, fernet):
                     st.warning("تعذّر تحديث ملف استعادة الجلسة في المتصفح؛ سيظل الدخول الحالي صالحًا مؤقتًا.")
