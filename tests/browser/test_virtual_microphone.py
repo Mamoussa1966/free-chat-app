@@ -32,7 +32,7 @@ def streamlit_server(tmp_path_factory):
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
 
-    base_url = f"http://localhost:{port}"
+    base_url = f"http://127.0.0.1:{port}"
     log_path = tmp_path_factory.mktemp("voice-browser") / "streamlit.log"
     env = os.environ.copy()
     env["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
