@@ -2866,6 +2866,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             st.caption(f"🔐 الحساب: {str(auth_state.get('email') or auth_state.get('user_id') or 'مستخدم مصادق عليه')}")
             if st.button("تسجيل الخروج من التخزين السحابي", key="supabase_auth_logout", use_container_width=True):
                 logout_supabase_user(st)
+                st.session_state["_supabase_pending_browser_token_delete"] = True
                 st.rerun()
         if st.session_state.get("_supabase_last_storage_error"):
             st.warning(str(st.session_state.get("_supabase_last_storage_error")))

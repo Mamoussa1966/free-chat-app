@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    (() => {
+      "use strict";
+      const MAX_TOKEN_LENGTH = 4096;
+      let lastSignature = "";
+
+      function send(type, payload = {}) {
+        window.parent.postMessage(
+          Object.assign({ isStreamlitMessage: true, type }, payload),
+          "*"
+        );
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.source !== window.parent) return;
+        const message = event.data;
+        if (!message || message.type !== "streamlit:render") return;
+
+        const args = message.args || {};
+        const action = String(args.action || "read");
+        const storageKey = String(args.storage_key || "");
+        const refreshToken = String(args.refresh_token || "");
+        const signature = JSON.stringify([action, storageKey, refreshToken]);
+        if (signature === lastSignature) return;
+        lastSignature = signature;
+
+        const result = { action, value: "", error: false };
+        try {
+          if (!storageKey) throw new Error("missing storage key");
+          if (action === "read") {
+            const saved = localStorage.getItem(storageKey) || "";
+            if (
+              saved.length > MAX_TOKEN_LENGTH ||
+              /\s/.test(saved) ||
+              /[\u0000-\u001f\u007f]/.test(saved)
+            ) {
+              localStorage.removeItem(storageKey);
+              result.error = true;
+            } else {
+              result.value = saved;
+            }
+          } else if (action === "write") {
+            if (
+              !refreshToken ||
+              refreshToken.length > MAX_TOKEN_LENGTH ||
+              /\s/.test(refreshToken) ||
+              /[\u0000-\u001f\u007f]/.test(refreshToken)
+            ) {
+              throw new Error("invalid token value");
+            }
+            localStorage.setItem(storageKey, refreshToken);
+          } else if (action === "delete") {
+            localStorage.removeItem(storageKey);
+          } else {
+            throw new Error("unsupported storage action");
+          }
+        } catch (_) {
+          result.error = true;
+        }
+
+        send("streamlit:setComponentValue", { value: result });
+        send("streamlit:setFrameHeight", { height: 0 });
+      });
+
+      send("streamlit:componentReady", { apiVersion: 1 });
+      send("streamlit:setFrameHeight", { height: 0 });
+    })();
+  </script>
+</head>
+<body></body>
+</html>

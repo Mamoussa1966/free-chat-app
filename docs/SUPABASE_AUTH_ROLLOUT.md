@@ -20,11 +20,12 @@ Leave `SUPABASE_AUTH_ENABLED` set to `false` until the live acceptance test belo
 
 - Sign-up and password login use Supabase Auth's HTTPS REST API.
 - The account subject is obtained from the authenticated `GET /auth/v1/user` response, not from a user-supplied email or an unverified JWT decode.
-- The application stores access and refresh tokens only in server-side Streamlit session state. The access token is sent as the user bearer token; the publishable key is only the project API key.
+- The access token and current user identity stay in server-side Streamlit session state. To survive a page reload or a new Streamlit WebSocket session, the app may persist **only the Supabase refresh token** in this browser's localStorage through a tiny first-party component. The token is sent only to the configured project's Auth refresh endpoint; the resulting session is re-verified through `/auth/v1/user`, and rotated refresh tokens replace the previous value.
+- The refresh token is a bearer credential accessible to same-origin JavaScript, so this persistence is intended only for a trusted browser/device. The password, access token, refresh token, and Auth response bodies are never written to Git, application logs, or conversation content. Signing out removes the browser refresh token; browsers that block localStorage may require signing in again after reload.
 - A session is refreshed through `/auth/v1/token?grant_type=refresh_token` near expiry and periodically revalidated through Auth.
 - Each repository object is bound to one `AccountIdentity(issuer, subject)`; RLS remains the database authorization boundary.
 - Canonical identity history and a bounded presentation/history snapshot are written only after a request lifecycle completes. Save errors are shown as errors and are not reported as durable success.
-- Signing out or switching account clears the previous user's Streamlit session state. Only RLS-visible conversation IDs are loaded.
+- Signing out clears the previous user's Streamlit session state and deletes the browser refresh token before returning to the login screen. Only RLS-visible conversation IDs are loaded.
 - Sign-up may require email confirmation. If Auth does not return a session during sign-up, the UI asks the user to confirm the email and then sign in.
 
 ## Required live acceptance test
