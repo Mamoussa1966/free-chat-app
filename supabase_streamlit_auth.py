@@ -23,6 +23,7 @@ BROWSER_REFRESH_TOKEN_STORAGE_KEY = "ai-council:supabase-refresh-token:v1"
 BROWSER_STORAGE_WIDGET_KEY = "_supabase_browser_auth_storage"
 PENDING_BROWSER_TOKEN_KEY = "_supabase_pending_browser_refresh_token"
 PENDING_BROWSER_DELETE_KEY = "_supabase_pending_browser_token_delete"
+BROWSER_STORAGE_DISABLED_KEY = "_supabase_browser_storage_disabled"
 AUTH_RECOVERY_FAILED_KEY = "_supabase_auth_recovery_failed"
 
 
@@ -159,14 +160,22 @@ def ensure_supabase_auth(st: Any) -> bool | None:
         else:
             _activate_session(st, session)
 
+            # If the browser denies localStorage access, keep the current
+            # authenticated Streamlit session usable without retry loops.
+            if state.get(BROWSER_STORAGE_DISABLED_KEY):
+                state.pop(PENDING_BROWSER_TOKEN_KEY, None)
+                state.pop(PENDING_BROWSER_DELETE_KEY, None)
+                return True
+
             if state.get(PENDING_BROWSER_DELETE_KEY):
                 result = _browser_storage(st, "delete")
                 if _browser_storage_response_received(result, "delete"):
                     state.pop(PENDING_BROWSER_DELETE_KEY, None)
                     if result.get("error"):
+                        state[BROWSER_STORAGE_DISABLED_KEY] = True
                         state["_supabase_last_storage_error"] = (
                             "تعذّر حذف جلسة الدخول المحفوظة من المتصفح. "
-                            "أغلق جلسة التطبيق من هذا المتصفح وتحقق من إعدادات التخزين."
+                            "تحقق من إعدادات التخزين وأغلق جلسات التطبيق على هذا الجهاز."
                         )
                     st.rerun()
                 st.info("جارٍ إنهاء جلسة الدخول السابقة بأمان…")
@@ -180,9 +189,10 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                 result = _browser_storage(st, "write", str(pending_token))
                 if _browser_storage_response_received(result, "write"):
                     if result.get("error"):
+                        state[BROWSER_STORAGE_DISABLED_KEY] = True
                         state["_supabase_last_storage_error"] = (
                             "تم الدخول، لكن لم يتمكن المتصفح من حفظ الجلسة. "
-                            "قد تحتاج إلى تسجيل الدخول مجددًا بعد تحديث الصفحة."
+                            "ستظل الجلسة الحالية فعالة، وقد تحتاج إلى تسجيل الدخول مجددًا بعد تحديث الصفحة."
                         )
                     else:
                         state.pop("_supabase_last_storage_error", None)
@@ -191,20 +201,25 @@ def ensure_supabase_auth(st: Any) -> bool | None:
 
     # Logout or an invalid saved refresh token must remove the browser copy
     # before another read, otherwise a stale token could be retried forever.
-    browser_storage_action_pending = False
-    if state.get(PENDING_BROWSER_DELETE_KEY):
+    browser_storage_action_pending = bool(state.get(BROWSER_STORAGE_DISABLED_KEY))
+    if state.get(PENDING_BROWSER_DELETE_KEY) and not browser_storage_action_pending:
         result = _browser_storage(st, "delete")
         if _browser_storage_response_received(result, "delete"):
             state.pop(PENDING_BROWSER_DELETE_KEY, None)
             if result.get("error"):
+                state[BROWSER_STORAGE_DISABLED_KEY] = True
                 state["_supabase_last_storage_error"] = (
-                    "تعذّر حذف رمز الجلسة من تخزين المتصفح."
+                    "تعذّر حذف رمز الجلسة من تخزين المتصفح. "
+                    "سيظل تسجيل الدخول متاحًا، لكن راجع إعدادات تخزين المتصفح."
                 )
-            st.rerun()
-        st.info("جارٍ تنظيف جلسة الدخول المحفوظة…")
-        # Do not render the same keyed component twice in one Streamlit run.
-        # Keep the login form available even if the browser blocks localStorage.
-        browser_storage_action_pending = True
+                state[AUTH_RECOVERY_FAILED_KEY] = True
+                browser_storage_action_pending = True
+            else:
+                st.rerun()
+        else:
+            st.info("جارٍ تنظيف جلسة الدخول المحفوظة…")
+            # Do not render the same keyed component twice in one Streamlit run.
+            browser_storage_action_pending = True
 
     if browser_storage_action_pending:
         browser_result = {"action": "read", "value": "", "error": False}
@@ -214,6 +229,12 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             st.info("جارٍ فحص جلسة الدخول المحفوظة في هذا المتصفح…")
             # The component is still initializing. Showing the login form is a
             # safe fallback; a completed read will trigger a rerun automatically.
+            browser_result = {"action": "read", "value": "", "error": False}
+        elif browser_result.get("error"):
+            # localStorage can be blocked by browser policy. Do not retry forever
+            # or lock the user out of the ordinary email/password form.
+            state[BROWSER_STORAGE_DISABLED_KEY] = True
+            state[AUTH_RECOVERY_FAILED_KEY] = True
             browser_result = {"action": "read", "value": "", "error": False}
 
     if browser_result.get("error"):
