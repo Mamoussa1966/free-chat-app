@@ -21,6 +21,10 @@ from urllib.request import urlopen
 
 import pytest
 
+pytest.importorskip(
+    "playwright", reason="browser test requires Playwright; the dedicated workflow installs it"
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS = ROOT / "tests" / "browser" / "voice_audio_smoke_app.py"
 
