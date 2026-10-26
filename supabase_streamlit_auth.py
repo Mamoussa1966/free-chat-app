@@ -1,8 +1,9 @@
 """Streamlit UI/session boundary for Supabase email-password Auth.
 
 The feature is fail-safe and opt-in: it activates only when SUPABASE_AUTH_ENABLED
-is explicitly true and both project settings exist. Auth tokens stay in server-side
-Streamlit session state and are never written to the repository or chat history.
+is explicitly true and both project settings exist. The access token stays in
+server-side session state; only the refresh token may persist in this browser's
+localStorage. Tokens are never written to the repository, logs, or chat history.
 """
 from __future__ import annotations
 
@@ -189,7 +190,8 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             return True
 
     # Logout or an invalid saved refresh token must remove the browser copy
-    # before attempting another read, otherwise a stale token can loop forever.
+    # before another read, otherwise a stale token could be retried forever.
+    browser_storage_action_pending = False
     if state.get(PENDING_BROWSER_DELETE_KEY):
         result = _browser_storage(st, "delete")
         if _browser_storage_response_received(result, "delete"):
@@ -200,12 +202,19 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                 )
             st.rerun()
         st.info("جارٍ تنظيف جلسة الدخول المحفوظة…")
-        st.stop()
+        # Do not render the same keyed component twice in one Streamlit run.
+        # Keep the login form available even if the browser blocks localStorage.
+        browser_storage_action_pending = True
 
-    browser_result = _browser_storage(st, "read")
-    if not _browser_storage_response_received(browser_result, "read"):
-        st.info("جارٍ فحص جلسة الدخول المحفوظة في هذا المتصفح…")
-        st.stop()
+    if browser_storage_action_pending:
+        browser_result = {"action": "read", "value": "", "error": False}
+    else:
+        browser_result = _browser_storage(st, "read")
+        if not _browser_storage_response_received(browser_result, "read"):
+            st.info("جارٍ فحص جلسة الدخول المحفوظة في هذا المتصفح…")
+            # The component is still initializing. Showing the login form is a
+            # safe fallback; a completed read will trigger a rerun automatically.
+            browser_result = {"action": "read", "value": "", "error": False}
 
     if browser_result.get("error"):
         state[AUTH_RECOVERY_FAILED_KEY] = True
