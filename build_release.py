@@ -41,7 +41,7 @@ ALLOWED_BASELINE_CHANGES = {
     # confirms the exact, reviewed dependency set. This PR pins the two
     # dependencies required for encrypted cross-WebSocket Auth restoration.
     "requirements.txt",
-    "main.py, "conversation_store.py", "conversation_v25_runtime.py", "providers.py", "production_core_harness.py", "production_core_test_runner.py", "production_platform.py", "v23_final_closure_audit.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
+    "main.py", "conversation_store.py", "conversation_v25_runtime.py", "providers.py", "production_core_harness.py", "production_core_test_runner.py", "production_platform.py", "v23_final_closure_audit.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
     ".streamlit/secrets.toml.example", "build_release.py", ".github/workflows/hotfix164-18-proof-diagnostics.yml",
     "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
     "tests/test_hotfix26_release_roundtrip.py",
