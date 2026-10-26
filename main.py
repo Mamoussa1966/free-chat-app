@@ -3039,6 +3039,22 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
             audio_bytes = bytes(audio.getvalue())
             mime = str(getattr(audio, "type", None) or "audio/wav")
             st.audio(audio_bytes, format=mime)
+            # Explicitly let the user discard a recording while it is still only a preview.
+            # Rotating the audio_input key clears the widget without attempting to mutate
+            # the state of a widget that has already been instantiated in this run.
+            if st.button(
+                "🗑️ حذف التسجيل قبل الإرسال",
+                key=f"discard_voice_preview_{st.session_state.voice_nonce}",
+                use_container_width=True,
+                help="يمسح التسجيل الحالي قبل إرساله إلى المجلس.",
+            ):
+                try:
+                    st.session_state.voice_nonce = int(st.session_state.get("voice_nonce") or 0) + 1
+                except (TypeError, ValueError):
+                    st.session_state.voice_nonce = 1
+                st.session_state.last_voice_transcription = {}
+                st.session_state.last_voice_error = ""
+                st.rerun()
             if st.button("🎤 إرسال الصوت للمجلس", type="primary", use_container_width=True, key=f"send_voice_{st.session_state.voice_nonce}"):
                 fingerprint = hashlib.sha256(audio_bytes).hexdigest()
                 seen = st.session_state.voice_fingerprints.get(chat["id"], set())
