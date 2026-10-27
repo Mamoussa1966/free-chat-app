@@ -3255,6 +3255,13 @@ def _latest_seat_execution_result(chat: dict, seat_key: str) -> dict | None:
                     if str(model).strip()
                 ],
                 "executed_model": str(result.get("executed_model") or result.get("model") or "").strip(),
+                # Only a successful persisted RequestRecord row is eligible for
+                # read-only display fallback if the matching room message is absent.
+                "content": (
+                    str(result.get("content") or "").strip()
+                    if str(result.get("status") or "").strip().upper() == "SUCCESS"
+                    else ""
+                ),
             }
     return None
 
@@ -3332,6 +3339,12 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
                     st.info(f"حالة آخر تنفيذ: {latest_status['label']}")
                 elif latest_status["status"] == "SUCCESS":
                     st.warning("سُجّل نجاح طلب المزوّد، لكن لم تُعثر على رسالة رد مرتبطة به في سجل المحادثة.")
+                    # Read-only fallback from the authoritative saved RequestRecord.
+                    # Never allocate a message/request or mutate canonical history here.
+                    saved_content = str(latest_result.get("content") or "").strip()
+                    if saved_content:
+                        st.markdown("**الرد المحفوظ في سجل الطلب**")
+                        st.markdown(saved_content)
                 else:
                     st.warning(f"حالة آخر تنفيذ: {latest_status['label']} · `{latest_status['status']}`")
                 if latest_status["reason"]:
