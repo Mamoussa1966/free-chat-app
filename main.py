@@ -3295,13 +3295,20 @@ def _seat_result_has_message(chat: dict, seat, result: dict) -> bool:
         round_no = 0
     if not request_id or round_no <= 0:
         return False
-    return any(
-        isinstance(message, dict)
-        and str(message.get("request_id") or "").strip() == request_id
-        and str(message.get("seat_key") or message.get("provider_key") or "").strip() == str(seat.key)
-        and int(message.get("round") or 0) == round_no
-        for message in chat.get("messages", [])
-    )
+    for message in chat.get("messages", []):
+        if not isinstance(message, dict):
+            continue
+        try:
+            message_round = int(message.get("round") or 0)
+        except (TypeError, ValueError):
+            continue
+        if (
+            str(message.get("request_id") or "").strip() == request_id
+            and str(message.get("seat_key") or message.get("provider_key") or "").strip() == str(seat.key)
+            and message_round == round_no
+        ):
+            return True
+    return False
 
 
 def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
