@@ -4724,10 +4724,10 @@ def _pending_voice_recording_for_send(
         return None
     if str(pending_voice.get("chat_id") or "").strip() != str(active_chat_id or "").strip():
         return None
-    try:
-        audio_bytes = bytes(pending_voice.get("audio_bytes") or b"")
-    except (TypeError, ValueError):
+    raw_audio = pending_voice.get("audio_bytes")
+    if not isinstance(raw_audio, (bytes, bytearray, memoryview)):
         return None
+    audio_bytes = bytes(raw_audio)
     if not audio_bytes:
         return None
     mime = str(pending_voice.get("mime") or "audio/wav").strip() or "audio/wav"
