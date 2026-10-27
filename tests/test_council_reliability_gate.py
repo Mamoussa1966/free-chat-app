@@ -1,5 +1,4 @@
-from copy import deepcopy
-from unittest.mock import Mock
+from unittest.mock import patch
 
 import main
 from conversation_runtime import ensure_conversation_state
@@ -112,9 +111,9 @@ def _not_configured(seat, request_id, round_no):
     }
 
 
-def test_reliability_gate_keeps_successes_when_another_provider_fails_and_roundtrips():
+def test_reliability_gate_keeps_successes_when_another_provider_fails_and_roundtrips(monkeypatch):
     ss = SessionState()
-    main.st.session_state = ss
+    monkeypatch.setattr(main.st, "session_state", ss, raising=False)
     chat = {
         "id": "reliability-gate-conversation",
         "messages": [],
@@ -146,43 +145,36 @@ def test_reliability_gate_keeps_successes_when_another_provider_fails_and_roundt
             results.append(result)
         return results
 
-    monkeypatch_identity = Mock(return_value=True)
-    original_session_state = main.st.session_state
-    main.st.session_state = ss
-    try:
-        # A completed Request ID must be served from its result cache, not re-run.
-        from unittest.mock import patch
-        with patch("main._run_round", side_effect=fake_run_round) as provider_round, patch(
-            "main._provider_identity_matches", side_effect=monkeypatch_identity
-        ):
-            first = main._run_council(
-                "reliability gate test", chat, 1,
-                {"gemini": "test-credential", "deepseek": "test-credential", "claude": "test-credential"},
-                [],
-                {
-                    "gemini": ("gemini-free-1", "gemini-free-2", "gemini-free-3"),
-                    "deepseek": ("deepseek-free-1",),
-                    "claude": ("claude-free-1", "claude-free-2"),
-                },
-                "reliability-gate-message-1",
-                request_id,
-            )
-            message_count_after_first = len(chat["messages"])
-            second = main._run_council(
-                "reliability gate test", chat, 1,
-                {"gemini": "test-credential", "deepseek": "test-credential", "claude": "test-credential"},
-                [],
-                {
-                    "gemini": ("gemini-free-1", "gemini-free-2", "gemini-free-3"),
-                    "deepseek": ("deepseek-free-1",),
-                    "claude": ("claude-free-1", "claude-free-2"),
-                },
-                "reliability-gate-message-1",
-                request_id,
-            )
-            assert provider_round.call_count == 1
-    finally:
-        main.st.session_state = original_session_state
+    # A completed Request ID must be served from its result cache, not re-run.
+    with patch("main._run_round", side_effect=fake_run_round) as provider_round, patch(
+        "main._provider_identity_matches", return_value=True
+    ):
+        first = main._run_council(
+            "reliability gate test", chat, 1,
+            {"gemini": "test-credential", "deepseek": "test-credential", "claude": "test-credential"},
+            [],
+            {
+                "gemini": ("gemini-free-1", "gemini-free-2", "gemini-free-3"),
+                "deepseek": ("deepseek-free-1",),
+                "claude": ("claude-free-1", "claude-free-2"),
+            },
+            "reliability-gate-message-1",
+            request_id,
+        )
+        message_count_after_first = len(chat["messages"])
+        second = main._run_council(
+            "reliability gate test", chat, 1,
+            {"gemini": "test-credential", "deepseek": "test-credential", "claude": "test-credential"},
+            [],
+            {
+                "gemini": ("gemini-free-1", "gemini-free-2", "gemini-free-3"),
+                "deepseek": ("deepseek-free-1",),
+                "claude": ("claude-free-1", "claude-free-2"),
+            },
+            "reliability-gate-message-1",
+            request_id,
+        )
+        assert provider_round.call_count == 1
 
     assert round_calls == [(request_id, 1)]
     assert len(first) == len({row["seat"] for row in first})
