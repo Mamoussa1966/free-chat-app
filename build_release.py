@@ -64,7 +64,6 @@ APPROVED_REQUIREMENTS = (
     "streamlit==1.66.0",
     "requests>=2.31,<3",
     "cryptography==50.0.2",
-    "extra-streamlit-components==0.1.81",
     "pytest>=8,<10",
 )
 
