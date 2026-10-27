@@ -1,34 +1,40 @@
 """Streamlit UI/session boundary for Supabase email-password Auth.
 
-Supabase tokens remain server-side during a live Streamlit session. Optional
-cross-WebSocket restoration uses an encrypted, host-only browser cookie. The
-cookie is ciphertext, not a raw Supabase token. Streamlit's component cookie API
-cannot set HttpOnly, so this feature documents that limitation and must not be
-described as equivalent to a server-set HttpOnly cookie.
+Supabase tokens stay in server-side Streamlit state while connected. When the
+browser-persistence key is configured, a custom component stores only an
+authenticated, Fernet-encrypted session envelope in browser localStorage so a
+new Streamlit connection can restore and revalidate it. Never store tokens in
+URLs, logs, chat history, or plaintext browser storage.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+from streamlit.components.v1 import declare_component
 
 from supabase_auth import SupabaseAuthClient, SupabaseAuthError, SupabaseAuthSession
 
 
 AUTH_SESSION_KEY = "_supabase_auth_session"
 ACTIVE_SUBJECT_KEY = "_supabase_active_subject"
-AUTH_COOKIE_NAME = "__Host-council_auth_v1"
-AUTH_COOKIE_MANAGER_STATE_KEY = "_supabase_auth_cookie_manager"
-AUTH_COOKIE_PERSISTED_STATE_KEY = "_supabase_auth_cookie_persisted"
-AUTH_COOKIE_COMPONENT_KEY = "supabase_auth_cookie_manager"
-AUTH_COOKIE_TTL_SECONDS = 30 * 24 * 60 * 60
-AUTH_COOKIE_SCHEMA = "supabase-streamlit-auth/v1"
-MAX_AUTH_COOKIE_CHARS = 3800
+_PENDING_BROWSER_PAYLOAD = "_supabase_pending_browser_payload"
+_PENDING_BROWSER_CLEAR = "_supabase_pending_browser_clear"
+_PENDING_BROWSER_CLEAR_ID = "_supabase_pending_browser_clear_id"
+_AUTH_NOTICE_KEY = "_supabase_auth_notice"
+_BROWSER_COMPONENT_KEY = "_supabase_browser_session_bridge"
+_BROWSER_STORAGE_KEY = "ai_council_supabase_session_v1"
+_BROWSER_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+
+_BROWSER_SESSION_COMPONENT = declare_component(
+    "ai_council_supabase_browser_session",
+    path=str(Path(__file__).resolve().parent / "supabase_browser_session_component"),
+)
 
 
 def _secret(st: Any, name: str) -> str:
@@ -48,6 +54,125 @@ def get_supabase_config(st: Any) -> tuple[str, str, bool]:
     return url, key, flag in {"1", "true", "yes", "on"}
 
 
+def _session_fernet(st: Any) -> tuple[Fernet | None, str]:
+    """Return (cipher, status); the encryption key must remain server-side."""
+    raw = _secret(st, "SUPABASE_SESSION_ENCRYPTION_KEY")
+    if not raw:
+        return None, "MISSING"
+    try:
+        return Fernet(raw.encode("ascii")), "READY"
+    except (ValueError, TypeError, UnicodeError):
+        return None, "INVALID"
+
+
+def _seal_browser_session_state(st: Any, session_state: dict[str, Any]) -> str:
+    """Encrypt a session envelope for browser persistence; never return plaintext."""
+    cipher, status = _session_fernet(st)
+    if cipher is None or status != "READY":
+        return ""
+    url, _, _ = get_supabase_config(st)
+    if not url:
+        return ""
+    envelope = {
+        "version": 1,
+        "saved_at": int(time.time()),
+        "issuer": f"{url.rstrip('/')}/auth/v1",
+        "session": dict(session_state),
+    }
+    serialized = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return cipher.encrypt(serialized.encode("utf-8")).decode("ascii")
+
+
+def _unseal_browser_session_state(st: Any, token: str) -> dict[str, Any] | None:
+    """Decrypt and validate a persisted envelope before asking Auth to revalidate it."""
+    cipher, status = _session_fernet(st)
+    if cipher is None or status != "READY" or not isinstance(token, str) or not token:
+        return None
+    if len(token) > 16384:
+        return None
+    try:
+        raw = cipher.decrypt(token.encode("ascii"), ttl=_BROWSER_SESSION_MAX_AGE_SECONDS)
+        envelope = json.loads(raw.decode("utf-8"))
+    except (InvalidToken, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(envelope, dict) or envelope.get("version") != 1:
+        return None
+    try:
+        saved_at = int(envelope.get("saved_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    now = int(time.time())
+    if saved_at <= 0 or saved_at > now + 60 or now - saved_at > _BROWSER_SESSION_MAX_AGE_SECONDS:
+        return None
+
+    url, _, enabled = get_supabase_config(st)
+    expected_issuer = f"{url.rstrip('/')}/auth/v1" if url else ""
+    session_state = envelope.get("session")
+    if (
+        not enabled
+        or envelope.get("issuer") != expected_issuer
+        or not isinstance(session_state, dict)
+        or not str(session_state.get("access_token") or "").strip()
+        or not str(session_state.get("refresh_token") or "").strip()
+        or not str(session_state.get("user_id") or "").strip()
+        or str(session_state.get("issuer") or "") != expected_issuer
+    ):
+        return None
+    try:
+        expires_at = int(session_state.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if expires_at <= 0:
+        return None
+    return dict(session_state)
+
+
+def _browser_payload_from_result(value: Any) -> str:
+    if isinstance(value, dict) and value.get("status") == "ready":
+        payload = value.get("payload")
+        return payload if isinstance(payload, str) else ""
+    return ""
+
+
+def _render_browser_session_bridge(st: Any) -> Any:
+    """Synchronize pending encrypted persistence/clear operations with the browser."""
+    state = st.session_state
+    payload = str(state.get(_PENDING_BROWSER_PAYLOAD) or "")
+    clear_pending = bool(state.get(_PENDING_BROWSER_CLEAR))
+    clear_id = str(state.get(_PENDING_BROWSER_CLEAR_ID) or "")
+    try:
+        result = _BROWSER_SESSION_COMPONENT(
+            persisted_payload=payload,
+            clear=clear_pending,
+            clear_id=clear_id,
+            storage_key=_BROWSER_STORAGE_KEY,
+            default=None,
+            key=_BROWSER_COMPONENT_KEY,
+        )
+    except Exception:
+        return None
+
+    if payload and _browser_payload_from_result(result) == payload:
+        state.pop(_PENDING_BROWSER_PAYLOAD, None)
+    if clear_pending and isinstance(result, dict) and result.get("clear_id") == clear_id:
+        if result.get("status") in {"empty", "unavailable"}:
+            state.pop(_PENDING_BROWSER_CLEAR, None)
+            state.pop(_PENDING_BROWSER_CLEAR_ID, None)
+    return result
+
+
+def _schedule_browser_write(st: Any, session_state: dict[str, Any]) -> None:
+    sealed = _seal_browser_session_state(st, session_state)
+    if sealed:
+        st.session_state[_PENDING_BROWSER_PAYLOAD] = sealed
+
+
+def _schedule_browser_clear(st: Any) -> None:
+    st.session_state.pop(_PENDING_BROWSER_PAYLOAD, None)
+    st.session_state[_PENDING_BROWSER_CLEAR] = True
+    st.session_state[_PENDING_BROWSER_CLEAR_ID] = uuid.uuid4().hex
+
+
 def is_supabase_auth_active(st: Any) -> bool:
     url, key, enabled = get_supabase_config(st)
     return bool(enabled and url and key and isinstance(st.session_state.get(AUTH_SESSION_KEY), dict))
@@ -60,159 +185,19 @@ def _client(st: Any) -> SupabaseAuthClient:
     return SupabaseAuthClient(supabase_url=url, publishable_key=key)
 
 
-def _fernet(st: Any) -> tuple[Fernet | None, str]:
-    """Return a Fernet cipher and a non-sensitive configuration status."""
-    raw = _secret(st, "SUPABASE_SESSION_ENCRYPTION_KEY")
-    if not raw:
-        return None, "missing"
-    try:
-        return Fernet(raw.encode("ascii")), ""
-    except (ValueError, TypeError, UnicodeEncodeError):
-        return None, "invalid"
-    except Exception:
-        return None, "invalid"
-
-
-def _session_state(session: SupabaseAuthSession | dict[str, Any]) -> dict[str, Any]:
-    value = session.to_state() if isinstance(session, SupabaseAuthSession) else dict(session)
-    required = ("access_token", "refresh_token", "expires_at", "user_id", "email", "issuer", "verified_at")
-    if any(not str(value.get(key) or "").strip() for key in required):
-        raise ValueError("Supabase session is incomplete.")
-    # Never persist arbitrary additional fields or caller-provided metadata.
-    return {
-        "access_token": str(value["access_token"]),
-        "refresh_token": str(value["refresh_token"]),
-        "expires_at": int(value["expires_at"]),
-        "user_id": str(uuid.UUID(str(value["user_id"]))),
-        "email": str(value.get("email") or "")[:254],
-        "issuer": str(value["issuer"]),
-        "verified_at": int(value["verified_at"]),
-    }
-
-
-def _encode_session_cookie(
-    session: SupabaseAuthSession | dict[str, Any],
-    fernet: Fernet,
-) -> str:
-    state = _session_state(session)
-    payload = {
-        "schema": AUTH_COOKIE_SCHEMA,
-        "created_at": int(time.time()),
-        "session": state,
-    }
-    token = fernet.encrypt(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).decode("ascii")
-    if len(token) > MAX_AUTH_COOKIE_CHARS:
-        raise ValueError("Encrypted session cookie exceeds the browser cookie size limit.")
-    return token
-
-
-def _decode_session_cookie(
-    cookie_value: str,
-    fernet: Fernet,
-    expected_issuer: str,
-) -> dict[str, Any]:
-    raw = str(cookie_value or "").strip()
-    if not raw or len(raw) > MAX_AUTH_COOKIE_CHARS:
-        raise ValueError("Invalid session cookie.")
-    try:
-        decoded = fernet.decrypt(raw.encode("ascii"), ttl=AUTH_COOKIE_TTL_SECONDS)
-        payload = json.loads(decoded.decode("utf-8"))
-    except (InvalidToken, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
-        raise ValueError("Invalid session cookie.") from None
-    if not isinstance(payload, dict) or payload.get("schema") != AUTH_COOKIE_SCHEMA:
-        raise ValueError("Invalid session cookie schema.")
-    state = payload.get("session")
-    if not isinstance(state, dict):
-        raise ValueError("Invalid session cookie payload.")
-    try:
-        normalized = _session_state(state)
-    except (ValueError, TypeError, KeyError, OverflowError):
-        raise ValueError("Invalid session cookie session.") from None
-    if normalized["issuer"] != str(expected_issuer):
-        raise ValueError("Session issuer does not match the configured Supabase project.")
-    if len(normalized["access_token"]) > 8192 or len(normalized["refresh_token"]) > 4096:
-        raise ValueError("Invalid session token length.")
-    return normalized
-
-
-def _context_cookie(st: Any) -> str:
-    """Read the cookie from the initial HTTP request for this Streamlit session."""
-    try:
-        cookies = st.context.cookies
-        value = cookies.get(AUTH_COOKIE_NAME, "")
-        return str(value or "").strip()
-    except Exception:
-        return ""
-
-
-def _cookie_manager(st: Any) -> Any | None:
-    """Get a per-Streamlit-session component instance; never globally cache cookies."""
-    manager = st.session_state.get(AUTH_COOKIE_MANAGER_STATE_KEY)
-    if manager is not None:
-        return manager
-    try:
-        import extra_streamlit_components as stx
-        manager = stx.CookieManager(key=AUTH_COOKIE_COMPONENT_KEY)
-    except Exception:
-        return None
-    st.session_state[AUTH_COOKIE_MANAGER_STATE_KEY] = manager
-    return manager
-
-
-def _delete_session_cookie(st: Any) -> bool:
-    manager = _cookie_manager(st)
-    if manager is None:
-        return False
-    try:
-        # CookieManager.delete expects the cookie name to exist in its local dict
-        # even when the browser has already removed it; seed only an empty marker.
-        local_cookies = getattr(manager, "cookies", None)
-        if isinstance(local_cookies, dict):
-            local_cookies.setdefault(AUTH_COOKIE_NAME, "")
-        manager.delete(AUTH_COOKIE_NAME, key="delete_supabase_auth_session")
-        return True
-    except Exception:
-        return False
-
-
-def _persist_session_cookie(st: Any, session: SupabaseAuthSession, fernet: Fernet) -> bool:
-    manager = _cookie_manager(st)
-    if manager is None:
-        return False
-    try:
-        encrypted = _encode_session_cookie(session, fernet)
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=AUTH_COOKIE_TTL_SECONDS)
-        manager.set(
-            AUTH_COOKIE_NAME,
-            encrypted,
-            key="set_supabase_auth_session",
-            path="/",
-            expires_at=expires_at,
-            max_age=AUTH_COOKIE_TTL_SECONDS,
-            secure=True,
-            same_site="lax",
-        )
-        # Avoid reissuing the component command on every Streamlit rerun.
-        # A new WebSocket session starts without this in-memory marker and must
-        # restore from the browser cookie again.
-        st.session_state[AUTH_COOKIE_PERSISTED_STATE_KEY] = True
-        return True
-    except Exception:
-        # Do not log cookie contents, access tokens, or refresh tokens.
-        return False
-
-
 def _clear_session_data(state: Any, *, keep_auth: dict[str, Any] | None = None, subject: str = "") -> None:
-    # Conversation, context, audit, and widget data is user-scoped. Preserve only
-    # the cookie component handle (infrastructure, not user data) across clearing.
-    cookie_manager = state.get(AUTH_COOKIE_MANAGER_STATE_KEY)
+    # All conversation, context, audit, and widget state is user-scoped. Clear it
+    # on account changes and sign-out so one user cannot inherit another session.
     for key in list(state.keys()):
+        # Streamlit forbids changing a component widget's state after it has
+        # been instantiated in the current run. Keep its opaque browser result;
+        # the pending write/clear operation below replaces it on the next run.
+        if key == _BROWSER_COMPONENT_KEY:
+            continue
         try:
             del state[key]
         except Exception:
             pass
-    if cookie_manager is not None:
-        state[AUTH_COOKIE_MANAGER_STATE_KEY] = cookie_manager
     if keep_auth is not None:
         state[AUTH_SESSION_KEY] = keep_auth
     if subject:
@@ -231,18 +216,28 @@ def _activate_session(st: Any, session: SupabaseAuthSession) -> None:
 
 
 def logout_supabase_user(st: Any) -> None:
-    # Remove the persistent browser cookie before clearing in-memory session data.
-    _delete_session_cookie(st)
-    _clear_session_data(st.session_state)
+    """Revoke the current Supabase session when possible and clear browser state."""
+    state = st.session_state
+    auth_state = state.get(AUTH_SESSION_KEY)
+    logout_failed = False
+    if isinstance(auth_state, dict):
+        try:
+            _client(st).sign_out(str(auth_state.get("access_token") or ""))
+        except Exception:
+            # Local logout and browser cleanup must still happen even if the
+            # Auth endpoint is unavailable; surface the limitation to the user.
+            logout_failed = True
+    _clear_session_data(state)
+    _schedule_browser_clear(st)
+    if logout_failed:
+        state[_AUTH_NOTICE_KEY] = (
+            "تم مسح الجلسة من هذا المتصفح، لكن تعذّر تأكيد إبطالها من خادم Supabase. "
+            "تحقّق من الاتصال وسجّل الدخول مجددًا."
+        )
 
 
 def ensure_supabase_auth(st: Any) -> bool | None:
-    """Gate the app when enabled; None means Supabase Auth is not configured.
-
-    On a new WebSocket session, restore encrypted cookie material, revalidate the
-    user with Supabase Auth, and persist any rotated refresh-token pair. Cookie
-    restoration is available only when SUPABASE_SESSION_ENCRYPTION_KEY is set.
-    """
+    """Gate the app when enabled; None means Supabase Auth is not configured."""
     url, key, enabled = get_supabase_config(st)
     if not enabled:
         return None
@@ -259,68 +254,63 @@ def ensure_supabase_auth(st: Any) -> bool | None:
         st.error("إعداد Supabase Auth غير صالح. راجع عنوان المشروع ومفتاح Publishable.")
         return False
 
-    fernet, key_status = _fernet(st)
+    cipher, cipher_status = _session_fernet(st)
+    browser_result = _render_browser_session_bridge(st)
+    notice = st.session_state.pop(_AUTH_NOTICE_KEY, "")
+    if notice:
+        st.warning(str(notice))
+    if cipher_status != "READY":
+        st.warning(
+            "استعادة الدخول عند فتح اتصال جديد غير مفعّلة بعد. أضف سر "
+            "SUPABASE_SESSION_ENCRYPTION_KEY (مفتاح Fernet محفوظ في Streamlit Secrets) "
+            "لتمكين حفظ الجلسة المشفّر؛ تسجيل الدخول الحالي يظل متاحًا."
+        )
+    elif isinstance(browser_result, dict) and browser_result.get("status") == "unavailable":
+        st.warning(
+            "تعذّر الوصول إلى التخزين المحلي للمتصفح؛ سيعمل الدخول للجلسة الحالية فقط "
+            "ما لم يسمح المتصفح بتخزين بيانات الموقع."
+        )
+
     stored = st.session_state.get(AUTH_SESSION_KEY)
+    recovered_from_browser = False
+    if not isinstance(stored, dict) and cipher is not None and cipher_status == "READY":
+        browser_payload = _browser_payload_from_result(browser_result)
+        if browser_payload:
+            recovered = _unseal_browser_session_state(st, browser_payload)
+            if recovered is None:
+                _schedule_browser_clear(st)
+                st.rerun()
+                return False
+            stored = recovered
+            recovered_from_browser = True
+
     if isinstance(stored, dict):
         try:
             session = client.restore_or_refresh(stored)
         except SupabaseAuthError:
             _clear_session_data(st.session_state)
-            _delete_session_cookie(st)
-            st.info("انتهت جلسة الدخول أو لم تعد صالحة. سجّل الدخول مجددًا.")
-        else:
-            previous_access = str(stored.get("access_token") or "")
-            previous_refresh = str(stored.get("refresh_token") or "")
-            _activate_session(st, session)
-            # Also migrate already-open pre-fix sessions into cookie persistence
-            # even when Auth did not need to rotate the tokens this time.
-            cookie_missing = not _context_cookie(st)
-            cookie_not_written = not bool(st.session_state.get(AUTH_COOKIE_PERSISTED_STATE_KEY))
-            if fernet is not None and (
-                session.access_token != previous_access
-                or session.refresh_token != previous_refresh
-                or session.verified_at != int(stored.get("verified_at") or 0)
-                or (cookie_missing and cookie_not_written)
-            ):
-                if not _persist_session_cookie(st, session, fernet):
-                    st.warning("تعذّر تحديث ملف استعادة الجلسة في المتصفح؛ سيظل الدخول الحالي صالحًا مؤقتًا.")
-            return True
-
-    cookie_value = _context_cookie(st)
-    if cookie_value:
-        if fernet is None:
-            _delete_session_cookie(st)
-            key_message = (
-                "استعادة الجلسة بعد إعادة الاتصال غير مفعّلة. أضف "
-                "SUPABASE_SESSION_ENCRYPTION_KEY إلى Streamlit Secrets لتفعيلها."
-                if key_status == "missing"
-                else "مفتاح تشفير استعادة الجلسة غير صالح. صحّحه في Streamlit Secrets ثم سجّل الدخول."
+            _schedule_browser_clear(st)
+            st.session_state[_AUTH_NOTICE_KEY] = (
+                "انتهت جلسة الدخول أو لم تعد صالحة. تم طلب مسح الجلسة المحفوظة؛ سجّل الدخول مجددًا."
             )
-            st.warning(key_message)
+            st.rerun()
+            return False
         else:
-            try:
-                cookie_state = _decode_session_cookie(cookie_value, fernet, client.issuer)
-                session = client.restore_or_refresh(cookie_state)
-            except (ValueError, SupabaseAuthError):
-                _delete_session_cookie(st)
-                st.info("تعذّر استعادة جلسة المتصفح بأمان. سجّل الدخول مجددًا.")
-            else:
-                _activate_session(st, session)
-                if not _persist_session_cookie(st, session, fernet):
-                    st.warning("تم التحقق من الجلسة، لكن تعذّر تجديد ملف الاستعادة في المتصفح.")
-                return True
+            refreshed_state = session.to_state()
+            needs_browser_update = refreshed_state != stored
+            _activate_session(st, session)
+            if needs_browser_update and cipher_status == "READY":
+                _schedule_browser_write(st, refreshed_state)
+                st.rerun()
+                return False
+            if recovered_from_browser and cipher_status == "READY" and not needs_browser_update:
+                # The encrypted browser envelope has already been read and is
+                # valid; avoid rewriting it on every rerun.
+                pass
+            return True
 
     st.title("🔐 تسجيل الدخول إلى مجلس الذكاء الاصطناعي")
     st.caption("تُحفظ المحادثات تحت حسابك المصادق عليه. لا تستخدم مفاتيح إدارية هنا.")
-    if fernet is None:
-        key_message = (
-            "استعادة الجلسة بعد إعادة تحميل الصفحة تتطلب إضافة "
-            "SUPABASE_SESSION_ENCRYPTION_KEY إلى Streamlit Secrets."
-            if key_status == "missing"
-            else "SUPABASE_SESSION_ENCRYPTION_KEY غير صالح؛ استخدم مفتاح Fernet صحيحًا."
-        )
-        st.warning(key_message)
-
     sign_in_tab, sign_up_tab = st.tabs(["تسجيل الدخول", "إنشاء حساب"])
 
     with sign_in_tab:
@@ -332,8 +322,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             try:
                 session = client.sign_in(email, password)
                 _activate_session(st, session)
-                if fernet is not None and not _persist_session_cookie(st, session, fernet):
-                    st.warning("تم تسجيل الدخول، لكن تعذّر حفظ استعادة الجلسة في المتصفح.")
+                _schedule_browser_write(st, session.to_state())
             except (ValueError, SupabaseAuthError) as exc:
                 st.error(str(exc) if isinstance(exc, SupabaseAuthError) else "راجع البريد الإلكتروني وكلمة المرور.")
             else:
@@ -358,8 +347,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                         st.success("تم استقبال طلب إنشاء الحساب. افتح رسالة التأكيد التي يرسلها Supabase ثم سجّل الدخول.")
                     else:
                         _activate_session(st, session)
-                        if fernet is not None and not _persist_session_cookie(st, session, fernet):
-                            st.warning("تم إنشاء الجلسة، لكن تعذّر حفظ استعادة الجلسة في المتصفح.")
+                        _schedule_browser_write(st, session.to_state())
                         st.rerun()
     st.caption("المصادقة تتم عبر Supabase Auth؛ يتم تأكيد هوية المستخدم من استجابة /auth/v1/user.")
     return False
