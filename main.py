@@ -3176,14 +3176,202 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
     return voice_submission
 
 
+def _latest_seat_execution_result(chat: dict, seat_key: str) -> dict | None:
+    """Return the latest request's authoritative result for one seat.
+
+    Provider prose and the successful-message UI projection are not used to infer
+    execution state. The RequestRecord is the source of truth for terminal failures.
+    The last matching row is the last round for this seat in the latest request.
+    """
+    chat = chat if isinstance(chat, dict) else {}
+    records = chat.get("request_records", [])
+    if not isinstance(records, list):
+        return None
+    latest_record = next(
+        (
+            row for row in reversed(records)
+            if isinstance(row, dict) and str(row.get("request_id") or "").strip()
+        ),
+        None,
+    )
+    if latest_record is None:
+        return None
+
+    request_id = str(latest_record.get("request_id") or "").strip()
+    rows = latest_record.get("results", [])
+    matches = [
+        row for row in rows
+        if isinstance(row, dict)
+        and str(row.get("seat") or "").strip().lower() == str(seat_key or "").strip().lower()
+        and (
+            not str(row.get("request_id") or "").strip()
+            or str(row.get("request_id") or "").strip() == request_id
+        )
+    ] if isinstance(rows, list) else []
+    if matches:
+        return copy.deepcopy(matches[-1])
+
+    # Do not show an older success when the newest request has no result for this
+    # seat. State the observable gap rather than presenting "waiting" indefinitely.
+    record_state = str(latest_record.get("state") or "").strip().upper()
+    status = (
+        "REQUEST_RUNNING" if record_state in {"RUNNING", "STARTED", "IN_PROGRESS"}
+        else "REQUEST_FAILED" if record_state in {"FAILED", "CANCELLED"}
+        else "REQUEST_RESULT_MISSING"
+    )
+    return {
+        "seat": str(seat_key or "").strip(),
+        "request_id": request_id,
+        "round": latest_record.get("rounds_executed") or latest_record.get("rounds") or "",
+        "status": status,
+        "classification": status,
+        "dispatch_reason": "",
+        "content": "",
+        "result_key": "",
+        "source": "AUTHORITATIVE_REQUEST_RECORD",
+    }
+
+
+def _agent_terminal_status_presentation(result: dict) -> dict:
+    """Map a sanitized runtime result to safe, actionable UI text.
+
+    Never display raw provider exceptions, response bodies, credentials or request
+    payloads. Machine classifications are mapped through this fixed allowlist.
+    """
+    result = result if isinstance(result, dict) else {}
+    status = str(result.get("status") or "").strip().upper()
+    classification = str(result.get("classification") or "").strip().upper()
+    reason = str(result.get("dispatch_reason") or "").strip().upper()
+    reason_text = {
+        "CREDENTIAL_MISSING": "بيانات اعتماد هذا المزوّد غير مهيّأة.",
+        "FREE_MODEL_LIST_EMPTY": "قائمة النماذج المجانية الصريحة لهذا المزوّد غير مهيّأة.",
+        "REQUEST_ID_MISSING": "لم يُنشأ معرّف طلب صالح؛ لم يبدأ الإرسال.",
+        "ROUND_INVALID": "رقم الجولة غير صالح؛ لم يبدأ الإرسال.",
+        "SEAT_KEY_MISSING": "هوية مقعد الوكيل غير مكتملة؛ لم يبدأ الإرسال.",
+        "BRIDGE_SOURCE_NOT_COMMITTED": "لم يُرسل الطلب لأن شرط الجسر السابق لم يكتمل.",
+    }
+    classification_text = {
+        "AUTHENTICATION_ERROR": "رفض المزوّد المصادقة على الطلب.",
+        "RATE_LIMITED": "قيّد المزوّد معدل الطلبات.",
+        "QUOTA_EXCEEDED": "بلغ الطلب حد الحصة أو الاستخدام لدى المزوّد.",
+        "QUOTA_ERROR": "تعذر إكمال الطلب بسبب حد الحصة لدى المزوّد.",
+        "MODEL_UNAVAILABLE": "النموذج المهيأ غير متاح حاليًا لدى المزوّد.",
+        "API_ERROR": "أعاد المزوّد خطأً لطلب API.",
+        "PROVIDER_ERROR": "فشل تنفيذ الطلب داخل مسار المزوّد.",
+        "TRANSIENT_PROVIDER_ERROR": "حدث خطأ مؤقت لدى المزوّد.",
+        "INVALID_REQUEST": "رفض المزوّد صيغة الطلب.",
+        "NETWORK_ERROR": "تعذر إكمال الاتصال بالمزوّد.",
+        "NO_RESPONSE_AFTER_CASCADE": "لم تنتج قائمة النماذج المجانية المهيأة ردًا قابلًا للاستخدام.",
+        "UNKNOWN": "تعذر تصنيف نتيجة التنفيذ بصورة أكثر تحديدًا.",
+        "NOT_EXECUTED": "لم تُسجّل محاولة API فعلية لهذا المقعد.",
+        "DISPATCH_REJECTED": "رفضت بوابة التوزيع إرسال الطلب لهذا المقعد.",
+    }
+
+    if status == "SUCCESS":
+        return {
+            "kind": "success",
+            "title": "نجح التنفيذ، لكن رسالة الوكيل غير ظاهرة في سجل الغرفة.",
+            "detail": "عُثر على نتيجة ناجحة في سجل الطلب؛ تُعرض أدناه كنسخة احتياطية دون إنشاء رسالة أو طلب جديد.",
+        }
+    if status == "NOT_CONFIGURED":
+        return {
+            "kind": "warning",
+            "title": "الوكيل غير مهيّأ",
+            "detail": reason_text.get(reason, "لا توجد إعدادات صريحة كافية لإرسال الطلب لهذا الوكيل."),
+        }
+    if status == "DISPATCH_REJECTED":
+        return {
+            "kind": "warning",
+            "title": "لم يُرسل الطلب إلى هذا الوكيل",
+            "detail": reason_text.get(reason, classification_text.get(classification, "رفضت بوابة التوزيع الإرسال قبل تنفيذ API.")),
+        }
+    if status == "NOT_EXECUTED":
+        return {
+            "kind": "warning",
+            "title": "لم يبدأ تنفيذ API",
+            "detail": classification_text.get(classification, "لا توجد محاولة نموذج فعلية مسجلة لهذا المقعد."),
+        }
+    if status == "BRIDGE_NOT_READY":
+        return {
+            "kind": "warning",
+            "title": "توقف الإرسال عند شرط الجسر",
+            "detail": reason_text.get(reason, "لم يثبت اكتمال شرط الاعتماد السابق؛ لم يُرسل الطلب إلى هذا الوكيل."),
+        }
+    if status == "REQUEST_RUNNING":
+        return {"kind": "info", "title": "الطلب ما زال قيد التنفيذ", "detail": "سجل الطلب لم يسجل نتيجة نهائية لهذا المقعد بعد."}
+    if status == "REQUEST_FAILED":
+        return {"kind": "error", "title": "فشل الطلب قبل اكتمال سجل النتائج", "detail": "حالة الطلب النهائية FAILED؛ لم يُعثر على نتيجة مستقلة لهذا المقعد."}
+    if status == "REQUEST_RESULT_MISSING":
+        return {
+            "kind": "warning",
+            "title": "لا توجد نتيجة مسجلة لهذا المقعد في أحدث طلب",
+            "detail": "لم يُعثر على صف نتيجة مطابق لهوية الوكيل داخل سجل الطلب الأخير؛ لا يُعرض نجاح قديم على أنه نتيجة حالية.",
+        }
+
+    detail = classification_text.get(classification, classification_text.get(status))
+    if not detail:
+        detail = "لم يصل رد قابل للعرض من هذا المزوّد في آخر تنفيذ."
+    return {"kind": "warning", "title": "لم يحصل هذا الوكيل على رد ناجح", "detail": detail}
+
+
+def _seat_result_has_visible_message(result: dict, messages: list[dict]) -> bool:
+    """Match a persisted successful result to the UI row using runtime identity."""
+    if not isinstance(result, dict) or not isinstance(messages, list):
+        return False
+    result_key = str(result.get("result_key") or "").strip()
+    if result_key and any(
+        isinstance(message, dict) and str(message.get("result_key") or "").strip() == result_key
+        for message in messages
+    ):
+        return True
+    request_id = str(result.get("request_id") or "").strip()
+    try:
+        round_no = int(result.get("round") or 0)
+    except (TypeError, ValueError):
+        round_no = 0
+    if not request_id or round_no <= 0:
+        return False
+    return any(
+        isinstance(message, dict)
+        and str(message.get("request_id") or "").strip() == request_id
+        and str(message.get("seat_key") or "").strip().lower() == str(result.get("seat") or "").strip().lower()
+        and str(message.get("round") or "") == str(round_no)
+        for message in messages
+    )
+
+
 def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
         st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
         models = tuple(model_candidates.get(seat.key) or ())
         st.caption("Configured Free #1 → " + f"`{models[0]}`" if models else "لا يوجد Free API model مُكوّن")
         messages = [m for m in chat.get("messages", []) if m.get("seat") == seat.name]
+        latest_result = _latest_seat_execution_result(chat, seat.key)
+        result_is_visible = _seat_result_has_visible_message(latest_result, messages) if latest_result else True
+        if latest_result and not result_is_visible:
+            presentation = _agent_terminal_status_presentation(latest_result)
+            message = f"**آخر حالة تنفيذ: {presentation['title']}**\n\n{presentation['detail']}"
+            kind = presentation.get("kind")
+            if kind == "success":
+                st.success(message)
+                fallback_content = str(latest_result.get("content") or "").strip()
+                if fallback_content:
+                    st.markdown("**الرد المحفوظ في سجل الطلب**")
+                    st.markdown(fallback_content)
+            elif kind == "error":
+                st.error(message)
+            elif kind == "info":
+                st.info(message)
+            else:
+                st.warning(message)
+            rid = str(latest_result.get("request_id") or "").strip()
+            round_value = str(latest_result.get("round") or "").strip()
+            if rid:
+                trace = f" · الجولة {round_value}" if round_value else ""
+                st.caption(f"مصدر الحالة: سجل الطلب {rid}{trace}.")
         if not messages:
-            st.caption("بانتظار أول جولة…")
+            if latest_result is None:
+                st.caption("بانتظار أول جولة…")
             return
         for message in messages:
             displayed_model = str(message.get('executed_model') or message.get('model', '')).strip()
