@@ -204,6 +204,9 @@ def test_reliability_gate_keeps_successes_when_another_provider_fails_and_roundt
     assert live_request["request_metrics"]["attempts_by_provider"] == {
         "Gemini": 3, "DeepSeek": 1, "Claude": 2
     }
+    diagnostic_counters = main._ui_semantic_counters(live_request["results"])
+    assert diagnostic_counters["cascade_attempts"] == 6
+    assert diagnostic_counters["execution_started"] == 6
 
     # If the message projection is missing the Gemini row, the successful saved
     # request result remains available for a read-only display fallback.
@@ -246,3 +249,48 @@ def test_reliability_gate_keeps_successes_when_another_provider_fails_and_roundt
     assert reopened_results["gemini"]["content"] == "saved response from Gemini"
     assert reopened_results["deepseek"]["content"] == "saved response from DeepSeek"
     assert reopened_results["claude"]["status"] == "FAILED"
+
+
+
+def test_provider_diagnostic_displays_safe_http_status_without_raw_error(monkeypatch):
+    import main
+
+    rendered = []
+
+    class Expander:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(main.st, "expander", lambda *a, **k: Expander(), raising=False)
+    monkeypatch.setattr(main.st, "write", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(main.st, "caption", lambda value, *a, **k: rendered.append(str(value)), raising=False)
+
+    raw_error = "HTTP 400 private provider payload secret=DO_NOT_RENDER"
+    main._render_result_line({
+        "status": "FAILED",
+        "label": "Claude",
+        "name": "Claude",
+        "error": raw_error,
+        "attempted_models": ["claude-sonnet-4-6"],
+        "attempt_telemetry": [{
+            "provider": "Claude",
+            "attempt": 1,
+            "model": "claude-sonnet-4-6",
+            "status_code": 400,
+            "classification": "INVALID_REQUEST",
+            "cascade_action": "CASCADE_STOP",
+            "request_id": "REQUEST-SAFE",
+            "round": 1,
+            "final_result": "FAILED",
+        }],
+    })
+
+    joined = "\n".join(rendered)
+    assert "HTTP 400" in joined
+    assert "INVALID_REQUEST" in joined
+    assert "claude-sonnet-4-6" in joined
+    assert raw_error not in joined
+    assert "DO_NOT_RENDER" not in joined
