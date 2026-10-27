@@ -63,8 +63,8 @@ ALLOWED_BASELINE_CHANGES = {
 APPROVED_REQUIREMENTS = (
     "streamlit==1.66.0",
     "requests>=2.31,<3",
-    "cryptography==50.0.2",
     "pytest>=8,<10",
+    "cryptography==50.0.2",
 )
 
 
