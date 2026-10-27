@@ -105,7 +105,7 @@ class SupabaseVoiceStorage:
             len(parts) != 3
             or parts[0] != self._owner_id
             or not _SAFE_SEGMENT.fullmatch(parts[1])
-            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}\\.(?:wav|webm|ogg|mp3|m4a|aac)", parts[2])
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}\.(?:wav|webm|ogg|mp3|m4a|aac)", parts[2])
         ):
             raise ValueError("voice attachment path is invalid or belongs to another user")
         return value
