@@ -1,4 +1,4 @@
-""""Regression tests for handing a captured voice preview into the council request path."""
+"""Regression tests for handing a captured voice preview into the council request path."""
 from pathlib import Path
 
 from main import _pending_voice_recording_for_send
