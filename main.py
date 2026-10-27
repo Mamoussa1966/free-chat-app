@@ -1529,6 +1529,13 @@ def _cleanup_voice_media_after_chat_delete(
         and str(transcript.get("chat_id") or "") in deleted_chat_ids
     ):
         st.session_state.last_voice_transcription = {}
+
+    pending_voice = st.session_state.get("pending_voice_recording")
+    if clear_all or (
+        isinstance(pending_voice, dict)
+        and str(pending_voice.get("chat_id") or "") in deleted_chat_ids
+    ):
+        st.session_state["pending_voice_recording"] = {}
     st.session_state.last_voice_error = ""
 
     try:
@@ -3027,6 +3034,13 @@ def _voice_player(text: str, label: str = "🔊 استمع") -> None:
 
 def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
     voice_submission = None
+    pending_voice = st.session_state.get("pending_voice_recording")
+    if (
+        isinstance(pending_voice, dict)
+        and str(pending_voice.get("chat_id") or "") != str(chat.get("id") or "")
+    ):
+        # Never carry an unsubmitted recording into a different conversation.
+        st.session_state["pending_voice_recording"] = {}
     with st.container(height=500, border=True):
         st.subheader("👤 أنت · المقعد 6")
         user_messages = [m for m in chat.get("messages", []) if m.get("role") == "user"]
