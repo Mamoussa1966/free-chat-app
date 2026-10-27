@@ -3176,14 +3176,172 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
     return voice_submission
 
 
+_SEAT_EXECUTION_STATUS_LABELS = {
+    "SUCCESS": "نجح تنفيذ الوكيل",
+    "NOT_CONFIGURED": "الوكيل غير مُهيأ",
+    "DISPATCH_REJECTED": "رُفض الإرسال قبل بدء التنفيذ",
+    "DISPATCH_SUPPRESSED": "أُوقف الإرسال بواسطة بوابة أمان",
+    "BRIDGE_NOT_READY": "بوابة السياق المشترك غير جاهزة",
+    "NOT_EXECUTED": "لم يبدأ تنفيذ طلب المزوّد",
+    "PROVIDER_ERROR": "فشل التنفيذ بعد قبول الإرسال",
+    "TRANSIENT_PROVIDER_ERROR": "خطأ مؤقت من المزوّد",
+    "MODEL_UNAVAILABLE": "النموذج غير متاح",
+    "QUOTA_ERROR": "تعذر التنفيذ بسبب حصة الاستخدام",
+    "QUOTA_EXCEEDED": "تم بلوغ حد الاستخدام",
+    "RATE_LIMITED": "المزوّد يحد معدل الطلبات",
+    "AUTHENTICATION_ERROR": "فشل اعتماد المزوّد",
+    "API_ERROR": "أبلغت واجهة المزوّد عن خطأ",
+    "INVALID_REQUEST": "رفض المزوّد الطلب",
+    "NETWORK_ERROR": "تعذر الاتصال بالمزوّد",
+    "NO_RESPONSE": "لم يصل رد من المزوّد",
+    "NO_RESPONSE_AFTER_CASCADE": "لم يصل رد بعد محاولات النماذج",
+    "TIMEOUT": "انتهى وقت الانتظار",
+    "REQUEST_CREATED": "أُنشئ الطلب ولم يكتمل تنفيذه بعد",
+    "EXECUTION_STARTED": "بدأ التنفيذ ولم تُسجّل نتيجة نهائية بعد",
+    "UNKNOWN": "حالة تنفيذ غير معروفة",
+}
+
+_SEAT_DISPATCH_REASON_LABELS = {
+    "CREDENTIAL_MISSING": "اعتماد API غير متوفر لهذا المزوّد.",
+    "FREE_MODEL_LIST_EMPTY": "قائمة النماذج المجانية الصريحة غير مهيأة.",
+    "REQUEST_ID_MISSING": "هوية الطلب مفقودة؛ لم يبدأ الإرسال.",
+    "ROUND_INVALID": "رقم الجولة غير صالح؛ لم يبدأ الإرسال.",
+    "SEAT_KEY_MISSING": "هوية المقعد غير صالحة؛ لم يبدأ الإرسال.",
+    "BRIDGE_SOURCE_NOT_COMMITTED": "لم تُرسل الجولة لأن مصدر السياق المشترك لم يُثبت بعد.",
+    "READY_FREE_MODEL": "تم قبول الإرسال إلى مسار النماذج المجانية المهيأة.",
+}
+
+
+def _latest_seat_execution_result(chat: dict, seat_key: str) -> dict | None:
+    """Return a small, non-sensitive projection of the latest persisted seat result.
+
+    Results live on canonical request records even when a provider failed and no
+    assistant message was created. Read-only UI projection: it never creates
+    requests, mutates history, or changes provider dispatch.
+    """
+    request_records = chat.get("request_records", [])
+    if not isinstance(request_records, list):
+        return None
+    target_seat = str(seat_key or "").strip()
+    if not target_seat:
+        return None
+    for request_record in reversed(request_records):
+        if not isinstance(request_record, dict):
+            continue
+        results = request_record.get("results", [])
+        if not isinstance(results, list):
+            continue
+        record_request_id = str(request_record.get("request_id") or "").strip()
+        for result in reversed(results):
+            if not isinstance(result, dict) or str(result.get("seat") or "").strip() != target_seat:
+                continue
+            result_request_id = str(result.get("request_id") or record_request_id).strip()
+            if record_request_id and result_request_id and record_request_id != result_request_id:
+                continue
+            try:
+                round_no = int(result.get("round") or 0)
+            except (TypeError, ValueError):
+                round_no = 0
+            return {
+                "seat": target_seat,
+                "status": str(result.get("status") or "UNKNOWN").strip().upper(),
+                "classification": str(result.get("classification") or "").strip().upper(),
+                "dispatch_reason": str(result.get("dispatch_reason") or "").strip().upper(),
+                "request_id": result_request_id,
+                "round": round_no,
+                "attempted_models": [
+                    str(model).strip()
+                    for model in (result.get("attempted_models") or [])
+                    if str(model).strip()
+                ],
+                "executed_model": str(result.get("executed_model") or result.get("model") or "").strip(),
+            }
+    return None
+
+
+def _seat_execution_status(result: dict) -> dict:
+    """Map a persisted result to a safe, stable UI status without showing raw errors."""
+    status = str((result or {}).get("status") or "UNKNOWN").strip().upper()
+    classification = str((result or {}).get("classification") or "").strip().upper()
+    visible_status = status if status in _SEAT_EXECUTION_STATUS_LABELS else (
+        classification if classification in _SEAT_EXECUTION_STATUS_LABELS else "UNKNOWN"
+    )
+    reason = str((result or {}).get("dispatch_reason") or "").strip().upper()
+    try:
+        round_no = int((result or {}).get("round") or 0)
+    except (TypeError, ValueError):
+        round_no = 0
+    return {
+        "status": visible_status,
+        "label": _SEAT_EXECUTION_STATUS_LABELS[visible_status],
+        "reason": _SEAT_DISPATCH_REASON_LABELS.get(reason, ""),
+        "request_id": str((result or {}).get("request_id") or "").strip(),
+        "round": round_no,
+        "attempted_models": [
+            str(model).strip()
+            for model in ((result or {}).get("attempted_models") or [])
+            if str(model).strip()
+        ],
+        "executed_model": str((result or {}).get("executed_model") or "").strip(),
+    }
+
+
+def _seat_result_has_message(chat: dict, seat, result: dict) -> bool:
+    """Whether this successful request/round already has its canonical response message."""
+    request_id = str((result or {}).get("request_id") or "").strip()
+    try:
+        round_no = int((result or {}).get("round") or 0)
+    except (TypeError, ValueError):
+        round_no = 0
+    if not request_id or round_no <= 0:
+        return False
+    return any(
+        isinstance(message, dict)
+        and str(message.get("request_id") or "").strip() == request_id
+        and str(message.get("seat_key") or message.get("provider_key") or "").strip() == str(seat.key)
+        and int(message.get("round") or 0) == round_no
+        for message in chat.get("messages", [])
+    )
+
+
 def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
         st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
         models = tuple(model_candidates.get(seat.key) or ())
         st.caption("Configured Free #1 → " + f"`{models[0]}`" if models else "لا يوجد Free API model مُكوّن")
         messages = [m for m in chat.get("messages", []) if m.get("seat") == seat.name]
-        if not messages:
+        latest_result = _latest_seat_execution_result(chat, seat.key)
+        if latest_result is not None:
+            latest_status = _seat_execution_status(latest_result)
+            has_response_message = (
+                latest_status["status"] == "SUCCESS"
+                and _seat_result_has_message(chat, seat, latest_result)
+            )
+            # A failed latest attempt must remain visible even if an older
+            # successful response exists in this room. Successful responses are
+            # rendered from canonical chat messages below, not duplicated here.
+            if not has_response_message:
+                if latest_status["status"] == "NOT_CONFIGURED":
+                    st.info(f"حالة آخر تنفيذ: {latest_status['label']}")
+                elif latest_status["status"] == "SUCCESS":
+                    st.warning("سُجّل نجاح طلب المزوّد، لكن لم تُعثر على رسالة رد مرتبطة به في سجل المحادثة.")
+                else:
+                    st.warning(f"حالة آخر تنفيذ: {latest_status['label']} · `{latest_status['status']}`")
+                if latest_status["reason"]:
+                    st.caption(latest_status["reason"])
+                if latest_status["request_id"]:
+                    st.caption(f"Request ID = `{latest_status['request_id']}` · Round {latest_status['round']}")
+                if latest_status["attempted_models"]:
+                    st.caption(
+                        "محاولات النماذج: "
+                        + " → ".join(f"`{model}`" for model in latest_status["attempted_models"])
+                    )
+                elif latest_status["executed_model"]:
+                    st.caption(f"النموذج المنفذ: `{latest_status['executed_model']}`")
+        elif not messages:
             st.caption("بانتظار أول جولة…")
+            return
+        if not messages:
             return
         for message in messages:
             displayed_model = str(message.get('executed_model') or message.get('model', '')).strip()
