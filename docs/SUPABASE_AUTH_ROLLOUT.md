@@ -20,8 +20,10 @@ Leave `SUPABASE_AUTH_ENABLED` set to `false` until the live acceptance test belo
 
 - Sign-up and password login use Supabase Auth's HTTPS REST API.
 - The account subject is obtained from the authenticated `GET /auth/v1/user` response, not from a user-supplied email or an unverified JWT decode.
-- The application stores access and refresh tokens only in server-side Streamlit session state. The access token is sent as the user bearer token; the publishable key is only the project API key.
-- A session is refreshed through `/auth/v1/token?grant_type=refresh_token` near expiry and periodically revalidated through Auth.
+- During a live Streamlit WebSocket session, access and refresh tokens remain in server-side `st.session_state`; the access token is sent as the user bearer token and the publishable key is only the project API key.
+- When `SUPABASE_SESSION_ENCRYPTION_KEY` is configured, the app stores only a Fernet-encrypted session envelope in browser localStorage to restore a new Streamlit connection. The encryption key never leaves Streamlit Secrets; the browser component does not receive it. Browser storage is JavaScript-readable, so this is not equivalent to an HttpOnly server-set cookie. Keep untrusted HTML/JavaScript out of the app.
+- Restoration revalidates the session through Supabase Auth and checks the configured project issuer and user subject. Missing or invalid encryption keys disable cross-connection restoration without disabling ordinary login.
+- A session is refreshed through `/auth/v1/token?grant_type=refresh_token` near expiry and periodically revalidated through Auth; rotated session state is re-encrypted for browser persistence.
 - Each repository object is bound to one `AccountIdentity(issuer, subject)`; RLS remains the database authorization boundary.
 - Canonical identity history and a bounded presentation/history snapshot are written only after a request lifecycle completes. Save errors are shown as errors and are not reported as durable success.
 - Signing out or switching account clears the previous user's Streamlit session state. Only RLS-visible conversation IDs are loaded.
