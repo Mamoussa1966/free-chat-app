@@ -37,10 +37,6 @@ FINAL_CLOSURE_TEST_FILES = {"test_hotfix163_final_closure.py"}
 # Every other baseline file must remain byte-identical. The Claude and Grok
 # regression modules are allowed in addition to the 20-module Golden baseline.
 ALLOWED_BASELINE_CHANGES = {
-    # Requirements may change only when validate_requirement_policy() below
-    # confirms the exact, reviewed dependency set. This PR pins the two
-    # dependencies required for encrypted cross-WebSocket Auth restoration.
-    "requirements.txt",
     "main.py", "conversation_store.py", "conversation_v25_runtime.py", "providers.py", "production_core_harness.py", "production_core_test_runner.py", "production_platform.py", "v23_final_closure_audit.py", "README.md", "RELEASE_NOTES.md", "VERSION.txt",
     ".streamlit/secrets.toml.example", "build_release.py", ".github/workflows/hotfix164-18-proof-diagnostics.yml",
     "tests/test_core.py", "tests/test_hotfix19_fixes.py", "tests/test_hotfix21_release_consistency.py",
@@ -58,27 +54,6 @@ ALLOWED_BASELINE_CHANGES = {
     "tests/test_hotfix76_main_identity_guard.py", "tests/test_hotfix80_identity_surface.py", "tests/test_gemini_latency_hardening.py", "tests/test_hotfix88_bridge_transaction.py", "tests/test_hotfix89_bridge_read.py", "tests/test_hotfix91_transactional_proof.py",
     "tests/test_deepseek_integration.py", "tests/test_hotfix84_shared_context_bridge.py",
 }
-
-
-APPROVED_REQUIREMENTS = (
-    "streamlit==1.66.0",
-    "requests>=2.31,<3",
-    "pytest>=8,<10",
-    "cryptography==50.0.2",
-)
-
-
-def validate_requirement_policy() -> None:
-    """Allow only the explicitly approved dependency set in the frozen release."""
-    actual = tuple(
-        line.strip()
-        for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    )
-    if actual != APPROVED_REQUIREMENTS:
-        raise SystemExit(
-            "requirements.txt differs from the explicitly approved release dependency set"
-        )
 
 
 def _baseline_manifest() -> dict:
@@ -105,7 +80,24 @@ def compare_against_golden_baseline() -> None:
         current = hashlib.sha256(current_paths[rel].read_bytes()).hexdigest()
         if current != digest:
             changed.append(rel)
-    unauthorized = sorted(set(changed) - ALLOWED_BASELINE_CHANGES)
+    # One narrowly scoped dependency extension is authorized for encrypted
+    # Supabase browser-session recovery. Keep every other frozen requirements.txt
+    # edit blocked; do not widen ALLOWED_BASELINE_CHANGES for this exception.
+    authorized_session_requirements = [
+        "streamlit==1.66.0",
+        "requests>=2.31,<3",
+        "pytest>=8,<10",
+        "cryptography==50.0.2",
+    ]
+    unauthorized = sorted(
+        path for path in changed
+        if path not in ALLOWED_BASELINE_CHANGES
+        and not (
+            path == "requirements.txt"
+            and current_paths[path].read_text(encoding="utf-8").splitlines()
+            == authorized_session_requirements
+        )
+    )
     if unauthorized:
         raise SystemExit(f"Unauthorized baseline modifications: {unauthorized}")
     baseline_tests = set(baseline.get("test_files") or [])
@@ -122,7 +114,6 @@ def compare_against_golden_baseline() -> None:
 
 def validate_sources() -> None:
     compare_against_golden_baseline()
-    validate_requirement_policy()
     missing = [p for p in REQUIRED if not (ROOT / p).is_file()]
     if missing:
         raise SystemExit(f"Missing required release files: {missing}")

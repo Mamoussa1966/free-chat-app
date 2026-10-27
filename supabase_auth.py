@@ -169,6 +169,10 @@ class SupabaseAuthClient:
                 message = f"تعذر إكمال المصادقة (HTTP {status or 'unknown'})."
             raise SupabaseAuthError(message)
 
+        # Supabase Auth sign-out commonly returns HTTP 204 with no JSON body.
+        if status == 204:
+            return {}
+
         try:
             data = response.json()
         except Exception:
@@ -267,6 +271,13 @@ class SupabaseAuthClient:
         if not access or not refresh:
             raise SupabaseAuthError("لم تُصدر خدمة المصادقة جلسة صالحة.")
         return self._session_from_tokens(data, access, refresh)
+
+    def sign_out(self, access_token: str) -> None:
+        """Revoke the current user's session with Supabase Auth (local scope)."""
+        token = str(access_token or "").strip()
+        if not token:
+            return
+        self._request("POST", "logout?scope=local", access_token=token)
 
     def refresh_session(self, refresh_token: str) -> SupabaseAuthSession:
         token = str(refresh_token or "").strip()

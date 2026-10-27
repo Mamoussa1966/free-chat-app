@@ -1420,7 +1420,7 @@ def _assert_unique_history_identity(chat: dict, request_id: str, round_no: int, 
 
 def _init_state() -> None:
     ensure_persistence_store(st.session_state)
-    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "input_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}, "last_v23_final_closure_audit": {}}
+    defaults = {"rounds": 1, "folder_nonce": 0, "voice_nonce": 0, "input_nonce": 0, "last_results": [], "last_diagnostics": [], "voice_fingerprints": {}, "voice_audio_store": {}, "pending_voice_recording": {}, "last_voice_error": "", "platform_context_meta": {}, "last_synthesis": {}, "last_health_snapshot": [], "last_security_audit": {}, "last_v23_platform_audit": {}, "last_v23_final_closure_audit": {}}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -1529,6 +1529,13 @@ def _cleanup_voice_media_after_chat_delete(
         and str(transcript.get("chat_id") or "") in deleted_chat_ids
     ):
         st.session_state.last_voice_transcription = {}
+
+    pending_voice = st.session_state.get("pending_voice_recording")
+    if clear_all or (
+        isinstance(pending_voice, dict)
+        and str(pending_voice.get("chat_id") or "") in deleted_chat_ids
+    ):
+        st.session_state["pending_voice_recording"] = {}
     st.session_state.last_voice_error = ""
 
     try:
@@ -3027,6 +3034,13 @@ def _voice_player(text: str, label: str = "🔊 استمع") -> None:
 
 def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
     voice_submission = None
+    pending_voice = st.session_state.get("pending_voice_recording")
+    if (
+        isinstance(pending_voice, dict)
+        and str(pending_voice.get("chat_id") or "") != str(chat.get("id") or "")
+    ):
+        # Never carry an unsubmitted recording into a different conversation.
+        st.session_state["pending_voice_recording"] = {}
     with st.container(height=500, border=True):
         st.subheader("👤 أنت · المقعد 6")
         user_messages = [m for m in chat.get("messages", []) if m.get("role") == "user"]
@@ -3038,6 +3052,15 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
         if audio:
             audio_bytes = bytes(audio.getvalue())
             mime = str(getattr(audio, "type", None) or "audio/wav")
+            # Keep the captured recording available across reruns so the global
+            # "إرسال إلى المجلس" button can submit it too. The audio bytes remain
+            # session-scoped until the matching message is committed.
+            st.session_state["pending_voice_recording"] = {
+                "chat_id": str(chat.get("id") or ""),
+                "audio_bytes": audio_bytes,
+                "mime": mime,
+                "fingerprint": hashlib.sha256(audio_bytes).hexdigest(),
+            }
             st.audio(audio_bytes, format=mime)
             # Explicitly let the user discard a recording while it is still only a preview.
             # Rotating the audio_input key clears the widget without attempting to mutate
@@ -3054,6 +3077,7 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                     st.session_state.voice_nonce = 1
                 st.session_state.last_voice_transcription = {}
                 st.session_state.last_voice_error = ""
+                st.session_state["pending_voice_recording"] = {}
                 st.rerun()
             if st.button("🎤 إرسال الصوت للمجلس", type="primary", use_container_width=True, key=f"send_voice_{st.session_state.voice_nonce}"):
                 fingerprint = hashlib.sha256(audio_bytes).hexdigest()
@@ -4672,6 +4696,52 @@ def _supabase_delete_all_remote_chats(chats: list) -> bool:
     return True
 
 
+def _text_prompt_for_submission(typed_prompt: Any, send_clicked: bool) -> str:
+    """Return text only for an explicit Streamlit send-button event.
+
+    Text-area edits rerun Streamlit without sending. On the one run where the
+    send button is pressed, preserve the current textarea value as the request
+    prompt and strip only surrounding whitespace. Keep this boundary pure so
+    the widget-to-request handoff can be regression-tested without provider APIs.
+    """
+    if not send_clicked:
+        return ""
+    return str(typed_prompt or "").strip()
+
+
+def _pending_voice_recording_for_send(
+    pending_voice: Any,
+    active_chat_id: Any,
+    send_clicked: bool,
+) -> dict | None:
+    """Resolve a cached recording only on an explicit send event for its chat.
+
+    The recording is cached at preview time because Streamlit reruns for every
+    widget interaction. This resolver prevents an idle rerun or a different chat
+    from submitting it accidentally.
+    """
+    if not send_clicked or not isinstance(pending_voice, dict):
+        return None
+    if str(pending_voice.get("chat_id") or "").strip() != str(active_chat_id or "").strip():
+        return None
+    raw_audio = pending_voice.get("audio_bytes")
+    if not isinstance(raw_audio, (bytes, bytearray, memoryview)):
+        return None
+    audio_bytes = bytes(raw_audio)
+    if not audio_bytes:
+        return None
+    mime = str(pending_voice.get("mime") or "audio/wav").strip() or "audio/wav"
+    fingerprint = str(pending_voice.get("fingerprint") or "").strip()
+    if not fingerprint:
+        fingerprint = hashlib.sha256(audio_bytes).hexdigest()
+    return {
+        "chat_id": str(active_chat_id or ""),
+        "audio_bytes": audio_bytes,
+        "mime": mime,
+        "fingerprint": fingerprint,
+    }
+
+
 def run_app() -> None:
     # Supabase Auth is opt-in until the real Auth/PostgREST acceptance gate passes.
     auth_gate = ensure_supabase_auth(st)
@@ -4737,6 +4807,16 @@ def run_app() -> None:
         key=file_key,
         help="يمكنك اختيار أكثر من ملف من الهاتف قبل الإرسال.",
     )
+    pending_voice_hint = st.session_state.get("pending_voice_recording")
+    if (
+        isinstance(pending_voice_hint, dict)
+        and str(pending_voice_hint.get("chat_id") or "") == str(chat.get("id") or "")
+        and bool(pending_voice_hint.get("audio_bytes"))
+    ):
+        st.info(
+            "يوجد تسجيل صوتي جاهز. اضغط «🎤 إرسال الصوت للمجلس» أو «📨 إرسال إلى المجلس» "
+            "لإرساله مع النص المستخرج وإرفاق ملف الصوت بسجل الرسالة."
+        )
     send_clicked = st.button("📨 إرسال إلى المجلس", type="primary", use_container_width=True, key=f"send_message_{st.session_state.input_nonce}")
 
     prompt = ""
@@ -4744,13 +4824,62 @@ def run_app() -> None:
     voice_audio = None
     voice_mime = "audio/wav"
     voice_fingerprint = ""
+    # The global composer send button is also a valid submission action for a
+    # recording with a visible preview. Previously only the button inside the
+    # user-room panel could hand audio to the request path, which was easy to miss.
+    if send_clicked and not voice_submission:
+        pending_voice = _pending_voice_recording_for_send(
+            st.session_state.get("pending_voice_recording"),
+            chat.get("id"),
+            send_clicked,
+        )
+        if pending_voice:
+            audio_bytes = pending_voice["audio_bytes"]
+            mime = pending_voice["mime"]
+            fingerprint = pending_voice["fingerprint"]
+            if len(audio_bytes) > MAX_VOICE_BYTES:
+                st.error("الرسالة الصوتية أكبر من الحد المسموح 8 MB؛ لم تُرسل إلى المجلس.")
+                return
+            seen = set(st.session_state.get("voice_fingerprints", {}).get(chat["id"], set()) or set())
+            if fingerprint in seen:
+                st.warning("هذه الرسالة الصوتية تم إرسالها بالفعل؛ لم نكرر إرسالها.")
+                return
+            with st.spinner("تحويل التسجيل إلى نص ثم إرساله إلى المجلس…"):
+                transcription_started = time.perf_counter()
+                transcription = transcribe_audio_gemini(
+                    audio_bytes, mime, credentials.get("gemini"), model_candidates.get("gemini")
+                )
+            transcription_seconds = max(0.0, time.perf_counter() - transcription_started)
+            if transcription.get("status") == "SUCCESS" and str(transcription.get("text") or "").strip():
+                transcript_text = str(transcription.get("text") or "").strip()
+                transcription_model = str(transcription.get("model") or "").strip()
+                st.session_state.last_voice_error = ""
+                st.session_state.last_voice_transcription = {
+                    "chat_id": str(chat.get("id") or ""),
+                    "text": transcript_text,
+                    "seconds": float(transcription_seconds),
+                    "model": transcription_model,
+                }
+                voice_submission = (transcript_text, audio_bytes, mime, fingerprint)
+            else:
+                st.session_state.last_voice_transcription = {}
+                st.session_state.last_voice_error = str(transcription.get("error", "unknown error"))
+                st.error(
+                    "تعذر إرسال التسجيل إلى المجلس لأن تفريغ الصوت فشل: "
+                    f"{st.session_state.last_voice_error}. بقي التسجيل في المعاينة لإعادة المحاولة."
+                )
+                return
+
     if voice_submission:
         transcript, voice_audio, voice_mime, voice_fingerprint = voice_submission
         typed_prompt = (typed_prompt or "").strip()
         prompt = f"{typed_prompt}\n\n[تفريغ الرسالة الصوتية]:\n{transcript}" if typed_prompt and transcript else (typed_prompt or transcript)
         attachments = _submission_files(direct_files, folder_files)
     elif send_clicked:
-        prompt = (typed_prompt or "").strip()
+        # Keep Streamlit's one-run button event coupled to the current textarea
+        # value. This pure resolver is regression-tested with AppTest so a click
+        # must deliver the typed payload into the request path exactly once.
+        prompt = _text_prompt_for_submission(typed_prompt, send_clicked)
         attachments = _submission_files(direct_files, folder_files)
     else:
         # HOTFIX156.1: idle composer state must continue rendering the app.
@@ -4904,6 +5033,8 @@ def run_app() -> None:
             fingerprints = st.session_state.voice_fingerprints.setdefault(chat["id"], set())
             fingerprints.add(voice_fingerprint)
             st.session_state.voice_fingerprints[chat["id"]] = set(list(fingerprints)[-20:])
+            # The audio is now bound to the committed user-message record.
+            st.session_state["pending_voice_recording"] = {}
         st.session_state.last_diagnostics = []
         with st.spinner("المجلس ينفذ Free API Cascade…"):
             if harness_abc:
