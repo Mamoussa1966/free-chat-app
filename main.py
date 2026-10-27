@@ -4672,6 +4672,19 @@ def _supabase_delete_all_remote_chats(chats: list) -> bool:
     return True
 
 
+def _text_prompt_for_submission(typed_prompt: Any, send_clicked: bool) -> str:
+    """Return text only for an explicit Streamlit send-button event.
+
+    Text-area edits rerun Streamlit without sending. On the one run where the
+    send button is pressed, preserve the current textarea value as the request
+    prompt and strip only surrounding whitespace. Keep this boundary pure so
+    the widget-to-request handoff can be regression-tested without provider APIs.
+    """
+    if not send_clicked:
+        return ""
+    return str(typed_prompt or "").strip()
+
+
 def run_app() -> None:
     # Supabase Auth is opt-in until the real Auth/PostgREST acceptance gate passes.
     auth_gate = ensure_supabase_auth(st)
@@ -4750,7 +4763,10 @@ def run_app() -> None:
         prompt = f"{typed_prompt}\n\n[تفريغ الرسالة الصوتية]:\n{transcript}" if typed_prompt and transcript else (typed_prompt or transcript)
         attachments = _submission_files(direct_files, folder_files)
     elif send_clicked:
-        prompt = (typed_prompt or "").strip()
+        # Keep Streamlit's one-run button event coupled to the current textarea
+        # value. This pure resolver is regression-tested with AppTest so a click
+        # must deliver the typed payload into the request path exactly once.
+        prompt = _text_prompt_for_submission(typed_prompt, send_clicked)
         attachments = _submission_files(direct_files, folder_files)
     else:
         # HOTFIX156.1: idle composer state must continue rendering the app.
