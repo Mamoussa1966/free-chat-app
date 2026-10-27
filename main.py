@@ -3483,7 +3483,9 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
                 status_code = None
             if status_code is not None and 100 <= status_code <= 599:
                 status_code_text = f" · HTTP {status_code}"
-            st.caption(f"{provider} · Attempt {attempt} · Request ID = {request_id} · Round = {round_no} · {model}{status_code_text} → {cls} → {action} · Status = {status_text}")
+            st.caption(f"{provider} · Attempt {attempt} · Request ID = {request_id} · Round = {round_no} · {model} → {cls} → {action} · Status = {status_text}")
+            if status_code_text:
+                st.caption(f"{provider} · Attempt {attempt} · {model}{status_code_text}")
 
     if status == "SUCCESS":
         display_model = result.get('executed_model') or result['model']
