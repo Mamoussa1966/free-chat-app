@@ -36,6 +36,7 @@ from hotfix16430_deployment_attestation import build_runtime_deployment_attestat
 from conversation_repository import AccountIdentity, OwnedConversationSnapshot, ConversationRepositoryError
 from supabase_auth import SupabaseAuthError
 from supabase_conversation_repository import SupabaseConversationRepository
+from supabase_voice_storage import SupabaseVoiceStorage, VoiceStorageError
 from supabase_streamlit_auth import (
     AUTH_SESSION_KEY, ensure_supabase_auth, get_supabase_config,
     is_supabase_auth_active, logout_supabase_user,
@@ -3136,6 +3137,15 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                     voice_message_id = str(message.get("id") or voice_audio_key).strip()
                     voice_mime = str(message.get("voice_mime") or "audio/wav")
                     blob = st.session_state.get("voice_audio_store", {}).get(voice_audio_key)
+                    voice_storage_path = str(message.get("voice_storage_path") or "").strip()
+                    if not blob and voice_storage_path and is_supabase_auth_active(st):
+                        try:
+                            _voice_owner, voice_storage = _supabase_voice_storage_client()
+                            if voice_storage is not None:
+                                blob = voice_storage.download(voice_storage_path)
+                                st.session_state.voice_audio_store[voice_audio_key] = blob
+                        except (VoiceStorageError, ConversationRepositoryError, ValueError):
+                            blob = None
                     if blob:
                         st.audio(blob, format=voice_mime)
                         normalized_mime = voice_mime.split(";", 1)[0].strip().lower()
@@ -3163,14 +3173,27 @@ def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
                                 "🗑️ حذف التسجيل",
                                 key=f"voice_message_delete_{voice_message_id}",
                                 use_container_width=True,
-                                help="يحذف ملف الصوت من الجلسة فقط، مع إبقاء النص المستخرج وسجل ردود المجلس.",
+                                help="يحذف ملف الصوت من الجلسة والتخزين الخاص، مع إبقاء النص المستخرج وسجل ردود المجلس.",
                             ):
+                                if voice_storage_path and is_supabase_auth_active(st):
+                                    try:
+                                        _voice_owner, voice_storage = _supabase_voice_storage_client()
+                                        if voice_storage is not None:
+                                            voice_storage.delete([voice_storage_path])
+                                    except (VoiceStorageError, ConversationRepositoryError, ValueError):
+                                        st.error("تعذر تأكيد حذف ملف الصوت من التخزين الخاص؛ احتفظنا بسجل الرسالة.")
+                                        continue
+                                    message.pop("voice_storage_path", None)
+                                    _supabase_persist_completed_chat(chat)
                                 voice_store = st.session_state.get("voice_audio_store")
                                 if isinstance(voice_store, dict):
                                     voice_store.pop(voice_audio_key, None)
                                 st.rerun()
                     else:
-                        st.caption("التسجيل الصوتي غير متاح أو حُذف؛ النص المستخرج وسجل ردود المجلس محفوظان.")
+                        if voice_storage_path:
+                            st.caption("ملف الصوت مرتبط بالتخزين الخاص، لكن تعذر تحميله الآن؛ النص المستخرج وسجل ردود المجلس محفوظان.")
+                        else:
+                            st.caption("التسجيل الصوتي غير متاح أو حُذف؛ النص المستخرج وسجل ردود المجلس محفوظان.")
                 for attachment in message.get("attachments", []):
                     st.caption(f"📎 {attachment.get('name', 'attachment')} · {attachment.get('mime', 'file')} · {attachment.get('size', 0)} bytes")
     return voice_submission
@@ -4558,6 +4581,27 @@ def _supabase_identity_and_repository():
     return owner, repository
 
 
+def _supabase_voice_storage_client():
+    """Build a private voice-storage adapter bound to the current verified user."""
+    owner, _repository = _supabase_identity_and_repository()
+    if owner is None:
+        return None, None
+    url, publishable_key, enabled = get_supabase_config(st)
+    auth_state = st.session_state.get(AUTH_SESSION_KEY)
+    if not (enabled and url and publishable_key and isinstance(auth_state, dict)):
+        raise VoiceStorageError("تخزين الصوت الخاص غير مهيأ لجلسة المستخدم الحالية.")
+    try:
+        storage = SupabaseVoiceStorage(
+            supabase_url=url,
+            publishable_key=publishable_key,
+            access_token=str(auth_state.get("access_token") or ""),
+            authenticated_identity=owner,
+        )
+    except (ValueError, SupabaseAuthError):
+        raise VoiceStorageError("تعذر ربط ملف الصوت بحساب المستخدم المصادق عليه.") from None
+    return owner, storage
+
+
 def _supabase_presentation_state(chat: dict) -> dict:
     """Keep display/history content alongside, but separate from, canonical IDs."""
     return {
@@ -4989,6 +5033,36 @@ def run_app() -> None:
             chat["title"] = _title_from_prompt(prompt)
         user_message_id = uuid.uuid4().hex
         request_id = uuid.uuid4().hex
+        voice_storage_path = ""
+        # In authenticated production, uploading the original audio is a required
+        # step before allocating canonical Message/Request records or dispatching
+        # the transcript to providers. If it fails, fail closed rather than
+        # reporting a transcript-only submission as a complete voice send.
+        if voice_audio is not None:
+            _voice_supabase_url, _voice_supabase_key, voice_storage_enabled = get_supabase_config(st)
+            if voice_storage_enabled:
+                try:
+                    _voice_owner, voice_storage = _supabase_voice_storage_client()
+                    if voice_storage is None:
+                        raise VoiceStorageError("تخزين الصوت الخاص غير متاح.")
+                    voice_storage_path = voice_storage.object_path(
+                        chat.get("conversation_id") or chat.get("id"),
+                        user_message_id,
+                        voice_mime,
+                    )
+                    voice_storage.upload(voice_storage_path, voice_audio, voice_mime)
+                except (VoiceStorageError, ConversationRepositoryError, ValueError):
+                    with _REQUEST_GATE_LOCK:
+                        _ACTIVE_REQUEST_FINGERPRINTS.discard(fingerprint)
+                    st.session_state.last_voice_transcription = {}
+                    st.session_state.last_voice_error = (
+                        "تعذر حفظ ملف الصوت الأصلي في التخزين الخاص؛ لم تُرسل الرسالة إلى المجلس."
+                    )
+                    st.error(
+                        "❌ لم تُرسل الرسالة الصوتية إلى المجلس: تعذر حفظ ملف الصوت الأصلي. "
+                        "لم نعتمد التفريغ النصي وحده كنجاح؛ أعد المحاولة بعد معالجة التخزين."
+                    )
+                    return
         _ensure_chat_identity_state(chat)
         chat["request_ids"] = chat["request_ids"][-MAX_REQUEST_IDS:]
         chat["request_ids"].append(fingerprint)
@@ -5027,7 +5101,14 @@ def run_app() -> None:
         update_memory(chat, user_message_id, prompt, (chat.get("conversation_context") or {}).get("digest", ""))
         timeline_event(chat, request_id, user_message_id, "MESSAGE_CREATED", role="user")
         if voice_audio is not None:
-            chat["messages"][-1].update({"voice": True, "voice_audio_key": user_message_id, "voice_mime": voice_mime})
+            voice_message_metadata = {
+                "voice": True,
+                "voice_audio_key": user_message_id,
+                "voice_mime": voice_mime,
+            }
+            if voice_storage_path:
+                voice_message_metadata["voice_storage_path"] = voice_storage_path
+            chat["messages"][-1].update(voice_message_metadata)
             st.session_state.voice_audio_store[user_message_id] = voice_audio
             _prune_voice_store()
             fingerprints = st.session_state.voice_fingerprints.setdefault(chat["id"], set())
