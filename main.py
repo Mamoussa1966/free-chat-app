@@ -246,6 +246,38 @@ def _is_strict_live_bridge_prompt(prompt: str, bridge_controls=None) -> bool:
     ))
 
 
+def _round_provider_execution_order(seats, strict_live_bridge: bool = False):
+    """Return the provider order; strict live Bridge closure is scoped to its two proof endpoints."""
+    by_key = {str(getattr(seat, "key", "") or "").lower(): seat for seat in seats}
+    if strict_live_bridge:
+        # Cost/security boundary: this diagnostic only needs its real source and target.
+        # No unrelated configured provider may be dispatched during strict closure.
+        return [by_key[key] for key in ("deepseek", "gemini") if key in by_key]
+    bridge_order = []
+    for key in ("deepseek", "gemini"):
+        if key in by_key:
+            bridge_order.append(by_key.pop(key))
+    bridge_order.extend(seat for seat in seats if str(getattr(seat, "key", "") or "").lower() in by_key)
+    return bridge_order
+
+
+def _round_model_candidates(seat_key: str, model_candidates: dict, strict_live_bridge: bool = False) -> tuple[str, ...]:
+    """Prevent paid/extra cascade attempts during strict live closure; keep normal Free Cascade unchanged."""
+    key = str(seat_key or "").lower()
+    raw = (model_candidates or {}).get(key, ())
+    if isinstance(raw, str):
+        candidates = (raw,) if raw.strip() else ()
+    else:
+        candidates = tuple(str(item).strip() for item in (raw or ()) if str(item).strip())
+    if not strict_live_bridge:
+        return candidates
+    if key not in {"deepseek", "gemini"}:
+        return ()
+    # One explicitly configured candidate per proof endpoint. A failed candidate
+    # produces NOT_PROVEN rather than cascading into further billable API calls.
+    return candidates[:1]
+
+
 def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> dict:
     """Mandatory provider-output schema/identity gate before bridge handoff."""
     if not isinstance(result, dict):
@@ -2074,19 +2106,12 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     # seat Request. This is the production boundary for Request Determinism.
     execution_ledger = SeatExecutionLedger(request_id, round_no)
 
-    # Current release: provider calls use an explicit dependency order for bridge
-    # propagation. DeepSeek (seat 7) executes before Gemini (seat 2), while
-    # remaining seats retain canonical room order. Results are returned in
-    # canonical room order, so seat identity/history/UI ordering is unchanged.
+    # Normal council requests retain canonical provider ordering after the Bridge
+    # dependencies; strict closure uses only DeepSeek (source) then Gemini (target).
     by_key = {seat.key: seat for seat in seats}
-    # Keep an immutable lookup: bridge_order construction pops DeepSeek/Gemini
-    # out of by_key, so later target resolution must not query the depleted map.
+    # Keep an immutable lookup for the transaction target identity check.
     seat_by_key = dict(by_key)
-    bridge_order = []
-    for key in ("deepseek", "gemini"):
-        if key in by_key:
-            bridge_order.append(by_key.pop(key))
-    bridge_order.extend(seat for seat in seats if seat.key in by_key)
+    bridge_order = _round_provider_execution_order(seats, strict_live_bridge)
     # Keep the legacy source-inspection seam while executing the dependency
     # order selected above; the false branch is intentionally unreachable.
     for seat in SEATS if False else bridge_order:
@@ -2170,9 +2195,10 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 # The provider boundary and readiness gate have passed; this is the
                 # application-owned dispatch decision immediately before transport.
                 bridge._record_bridge_event("TARGET_DISPATCH", seat=2, target_seat=2, provider="Gemini", status="ACCEPTED")
+            provider_candidates = _round_model_candidates(seat.key, model_candidates, strict_live_bridge)
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
-                credentials.get(seat.key), attachments, model_candidates.get(seat.key),
+                credentials.get(seat.key), attachments, provider_candidates,
                 deadline, request_id,
             )
             result["dispatch_decision"] = "DISPATCH_ACCEPTED"
@@ -2317,13 +2343,30 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             results[seat.key] = failure
 
     for seat in seats:
-        results.setdefault(
-            seat.key,
-            _worker_failure(
-                seat, TimeoutError("round deadline exceeded"),
-                model_candidates, request_id, round_no,
-            ),
-        )
+        if seat.key not in results and strict_live_bridge and seat.key not in {"deepseek", "gemini"}:
+            results[seat.key] = {
+                "seat": seat.key, "name": seat.name, "label": seat.label,
+                "status": "NOT_REQUESTED_FOR_STRICT_BRIDGE_CLOSURE",
+                "classification": "NOT_REQUESTED_FOR_STRICT_BRIDGE_CLOSURE",
+                "dispatch_decision": "DISPATCH_SUPPRESSED",
+                "dispatch_reason": "STRICT_BRIDGE_SCOPE_ONLY_DEEPSEEK_AND_GEMINI",
+                "dispatch_accepted": False, "dispatch_gate": "HOTFIX164.30",
+                "mode": "internal", "model": "", "executed_model": "", "content": "",
+                "attempt_summaries": [], "attempt_telemetry": [], "attempted_models": [],
+                "official_authenticated": False, "execution_started": False,
+                "runtime_execution_events": [], "request_id": request_id, "round": round_no,
+                "request_routed": False, "model_candidates_configured": False,
+                "execution_id": f"{request_id}:{round_no}:{seat.key}",
+                "execution_claim": f"{request_id}:{round_no}:{seat.key}",
+            }
+        else:
+            results.setdefault(
+                seat.key,
+                _worker_failure(
+                    seat, TimeoutError("round deadline exceeded"),
+                    model_candidates, request_id, round_no,
+                ),
+            )
 
     # FINAL CLOSURE: materialize exactly one canonical Bridge evidence record per
     # logical Request, after the complete round has finished.  This deliberately
