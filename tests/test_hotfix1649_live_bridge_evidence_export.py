@@ -227,18 +227,22 @@ def test_hotfix1649_strict_two_request_bridge_regression_recovers_canonical_reco
     assert audit["gate"] == "PASS"
     assert audit["unique_bridge_ids"] == 2
     assert audit["bridge_ids_source"] == "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE"
+    # A partial sidecar cannot override the canonical record's complete proof.
     chat["bridge_runtime_evidence_store"]["r2"].pop("bridge_gate_status")
-    assert multi_request_regression_audit(chat)["gate"] == "FAIL"
+    recovered_partial_cache = multi_request_regression_audit(chat)
+    assert recovered_partial_cache["gate"] == "PASS"
+    assert recovered_partial_cache["strict_bridge_proof_missing"] is False
 
-    # A consistent but empty sidecar is recoverable from the canonical request.
+    # A missing sidecar is recoverable from the complete canonical request.
     chat["bridge_runtime_evidence_store"]["r2"] = deepcopy(evidence_2)
     del chat["bridge_runtime_evidence_store"]["r2"]
     recovered = multi_request_regression_audit(chat)
     assert recovered["gate"] == "PASS"
     assert recovered["strict_bridge_proof_missing"] is False
 
-    # Missing canonical proof remains a hard failure.
+    # Missing canonical proof remains a hard failure even with a sidecar present.
     chat["conversation_record"]["requests"][1].pop("bridge_runtime_evidence")
+    chat["bridge_runtime_evidence_store"]["r2"] = deepcopy(evidence_2)
     failed = multi_request_regression_audit(chat)
     assert failed["gate"] == "FAIL"
     assert failed["strict_bridge_proof_missing"] is True
