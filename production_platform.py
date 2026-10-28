@@ -1313,7 +1313,11 @@ def _strict_live_bridge_request_diagnostic(chat: dict[str, Any], request_record:
     if not isinstance(evidence, dict):
         if evidence_error in {"CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT", "CANONICAL_RUNTIME_EVIDENCE_REQUEST_ID_MISMATCH"}:
             result["status"] = "FAIL"
-            result["failure_reasons"] = [evidence_error]
+            if evidence_error == "CANONICAL_RUNTIME_EVIDENCE_REQUEST_ID_MISMATCH":
+                result["request_identity_status"] = "FAIL"
+                result["failure_reasons"] = ["REQUEST_ID_MISMATCH"]
+            else:
+                result["failure_reasons"] = [evidence_error]
         else:
             result["missing_evidence"] = [evidence_error or "APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"]
         return result
