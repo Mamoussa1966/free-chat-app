@@ -968,6 +968,7 @@ def rebuild_bridge_ledger_projection(chat: dict, request_id: str) -> dict:
         "request_id": rid,
         "round_id": round_id,
         "bridge_id_hash": bridge_hash,
+        "status": str(evidence.get("runtime_sequence_valid") or "NOT_PROVEN"),
         "authoritative_source": "CANONICAL_REQUEST_RECORD.bridge_runtime_evidence",
         "projection_only": True,
     })
