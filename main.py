@@ -262,7 +262,7 @@ def _round_provider_execution_order(seats, strict_live_bridge: bool = False):
 
 
 def _round_model_candidates(seat_key: str, model_candidates: dict, strict_live_bridge: bool = False) -> tuple[str, ...]:
-    """Prevent paid/extra cascade attempts during strict live closure; keep normal Free Cascade unchanged."""
+    """Use only known-working, explicitly configured models for strict closure; keep normal cascade unchanged."""
     key = str(seat_key or "").lower()
     raw = (model_candidates or {}).get(key, ())
     if isinstance(raw, str):
@@ -271,11 +271,18 @@ def _round_model_candidates(seat_key: str, model_candidates: dict, strict_live_b
         candidates = tuple(str(item).strip() for item in (raw or ()) if str(item).strip())
     if not strict_live_bridge:
         return candidates
-    if key not in {"deepseek", "gemini"}:
-        return ()
-    # One explicitly configured candidate per proof endpoint. A failed candidate
-    # produces NOT_PROVEN rather than cascading into further billable API calls.
-    return candidates[:1]
+
+    # Budget guard: pin the strict diagnostic to models that were previously
+    # observed succeeding in this deployed app. A pin is usable only when it
+    # already exists in the explicit *_FREE_MODELS candidates; never discover,
+    # invent, or fall back to another model during a budget-capped test.
+    preferred = {
+        "deepseek": "deepseek-flash",
+        "gemini": "gemini-3.6-flash",
+    }.get(key)
+    if preferred and preferred in candidates:
+        return (preferred,)
+    return ()
 
 
 def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> dict:
