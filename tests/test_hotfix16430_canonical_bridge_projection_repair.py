@@ -122,6 +122,19 @@ def test_strict_live_audit_rejects_a_conflicting_runtime_cache():
     assert diagnostic["failure_reasons"] == ["CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT"]
 
 
+
+def test_strict_live_audit_does_not_ignore_conflicting_cache_safety_flags():
+    chat = _fixture()
+    request = next(row for row in chat["conversation_record"]["requests"] if row["request_id"] == "r1")
+    chat["bridge_runtime_evidence_store"]["r1"] = deepcopy(request["bridge_runtime_evidence"])
+    chat["bridge_runtime_evidence_store"]["r1"]["control_plane_identity_leak"] = "YES"
+
+    assert _strict_live_bridge_evidence_complete(chat, request) is False
+    diagnostic = _strict_live_bridge_request_diagnostic(chat, request)
+    assert diagnostic["status"] == "FAIL"
+    assert diagnostic["failure_reasons"] == ["CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT"]
+
+
 def test_supabase_presentation_state_never_persists_raw_legacy_bridge_ids():
     chat = {
         "bridge_ledger_v24": [
