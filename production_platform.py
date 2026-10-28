@@ -68,6 +68,55 @@ def _canonical_round_binding(round_rows: list[Any], request_id: str, runtime: di
     return False
 
 
+def _canonical_strict_live_bridge_evidence(
+    chat: dict[str, Any], request_record: dict[str, Any] | None
+) -> tuple[dict[str, Any] | None, str]:
+    """Read strict Bridge proof from the canonical RequestRecord, never from a cache alone.
+
+    The per-chat runtime store is only a cache. A missing cache is normal after a
+    Streamlit rerun; a cache that contradicts the canonical evidence is a hard failure.
+    This helper is read-only and never synthesizes evidence.
+    """
+    rid = str((request_record or {}).get("request_id") or "").strip()
+    if not rid:
+        return None, "REQUEST_ID"
+    canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    rows = [
+        row for row in (canonical.get("requests", []) if isinstance(canonical.get("requests"), list) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+    ]
+    if len(rows) != 1:
+        return None, "CANONICAL_REQUEST_RECORD_MISSING_OR_DUPLICATED"
+    canonical_request = rows[0]
+    if str(canonical_request.get("bridge_runtime_contract") or "") != "STRICT_LIVE":
+        return None, "STRICT_LIVE_CANONICAL_REQUEST_REQUIRED"
+    evidence = canonical_request.get("bridge_runtime_evidence")
+    if not isinstance(evidence, dict) or str(evidence.get("request_id") or "").strip() != rid:
+        return None, "APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"
+    if not str(evidence.get("schema") or "").startswith("bridge-runtime-evidence/"):
+        return None, "BRIDGE_RUNTIME_EVIDENCE_SCHEMA_INVALID"
+
+    cache_store = chat.get("bridge_runtime_evidence_store")
+    cached = cache_store.get(rid) if isinstance(cache_store, dict) else None
+    if isinstance(cached, dict) and cached:
+        compare_fields = (
+            "request_id", "round_id", "canonical_round_id", "bridge_id_hash",
+            "runtime_payload_sha256", "runtime_sequence_valid", "runtime_sequence",
+            "application_owned", "bridge_gate_status", "terminal_state", "bridge_state_terminal",
+            "write_status", "commit_status", "read_status",
+        )
+        conflicts = [
+            key for key in compare_fields
+            if cached.get(key) not in (None, "", [], {})
+            and str(cached.get(key)) != str(evidence.get(key) or "")
+        ]
+        if conflicts:
+            return None, "CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT"
+    elif cached not in (None, {}):
+        return None, "CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT"
+    return evidence, ""
+
+
 @dataclass
 class ConversationStore:
     """Session-owned persistence with deterministic export/import shape."""
@@ -195,8 +244,8 @@ def conversation_persistence_audit(chat: dict[str, Any] | None, request_id: str 
         record = canonical_request
     bridge_requested = bool((record or {}).get("bridge_test_requested"))
     strict_bridge_requested = bool((record or {}).get("bridge_runtime_contract") == "STRICT_LIVE")
-    runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
-    runtime_bridge = runtime_store.get(rid) if rid and isinstance(runtime_store.get(rid), dict) else {}
+    runtime_bridge, runtime_evidence_error = _canonical_strict_live_bridge_evidence(chat, canonical_request or record or {"request_id": rid})
+    runtime_bridge = runtime_bridge if isinstance(runtime_bridge, dict) else {}
     canonical_round_bound = _canonical_round_binding(canonical_rounds, rid, runtime_bridge)
     runtime_bridge_ok = bool(
         runtime_bridge
@@ -700,7 +749,6 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
     seat_round_keys: list[tuple[str, int, str]] = []
     per_request: list[dict[str, Any]] = []
     contamination = False
-    bridge_runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
     strict_bridge_proof_missing = False
     canonical_record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
     canonical_round_rows = canonical_record.get("rounds", []) if isinstance(canonical_record.get("rounds"), list) else []
@@ -709,7 +757,8 @@ def multi_request_regression_audit(chat: dict[str, Any] | None) -> dict[str, Any
         bridges_for_request: list[str] = []
         strict_live = r.get("bridge_runtime_contract") == "STRICT_LIVE"
         if strict_live:
-            runtime = bridge_runtime_store.get(rid) if isinstance(bridge_runtime_store.get(rid), dict) else {}
+            runtime, runtime_error = _canonical_strict_live_bridge_evidence(chat, r)
+            runtime = runtime if isinstance(runtime, dict) else {}
             canonical_round_bound = _canonical_round_binding(canonical_round_rows, rid, runtime)
             complete = bool(
                 runtime
@@ -902,11 +951,12 @@ def build_v23_platform_audit(chat: dict[str, Any] | None, request_id: str, conte
         for item in rec.get("results", []) if isinstance(rec.get("results"), list) else []:
             if isinstance(item, dict) and isinstance(item.get("bridge_transaction_audit"), dict):
                 bridge_audits.append(item["bridge_transaction_audit"])
-    runtime_store = chat.get("bridge_runtime_evidence_store", {}) if isinstance(chat.get("bridge_runtime_evidence_store"), dict) else {}
-    runtime_bridge = runtime_store.get(str(request_id or "")) if isinstance(runtime_store.get(str(request_id or "")), dict) else None
     canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
     canonical_requests = canonical.get("requests", []) if isinstance(canonical.get("requests"), list) else []
     canonical_request = next((r for r in canonical_requests if isinstance(r, dict) and str(r.get("request_id") or "") == str(request_id or "")), None)
+    runtime_bridge, runtime_evidence_error = _canonical_strict_live_bridge_evidence(
+        chat, canonical_request or {"request_id": str(request_id or "")}
+    )
     # HOTFIX164.11: the current projection may omit an outer RequestRecord while
     # the canonical request and runtime evidence already exist. Bridge proof must
     # not be demoted to NOT_REQUESTED merely because that projection is narrow.
@@ -1117,11 +1167,8 @@ def _strict_live_bridge_evidence_complete(chat: dict[str, Any], request_record: 
     rid = str(request_record.get("request_id") or "").strip()
     if not rid:
         return False
-    store = chat.get("bridge_runtime_evidence_store")
-    if not isinstance(store, dict):
-        return False
-    evidence = store.get(rid)
-    if not isinstance(evidence, dict) or str(evidence.get("request_id") or "") != rid:
+    evidence, evidence_error = _canonical_strict_live_bridge_evidence(chat, request_record)
+    if not isinstance(evidence, dict):
         return False
 
     canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
@@ -1260,10 +1307,13 @@ def _strict_live_bridge_request_diagnostic(chat: dict[str, Any], request_record:
         result["missing_evidence"] = ["REQUEST_ID"]
         return result
 
-    store = chat.get("bridge_runtime_evidence_store")
-    evidence = store.get(rid) if isinstance(store, dict) else None
+    evidence, evidence_error = _canonical_strict_live_bridge_evidence(chat, request_record)
     if not isinstance(evidence, dict):
-        result["missing_evidence"] = ["APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"]
+        if evidence_error == "CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT":
+            result["status"] = "FAIL"
+            result["failure_reasons"] = [evidence_error]
+        else:
+            result["missing_evidence"] = [evidence_error or "APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"]
         return result
     result["evidence_record_present"] = True
 
@@ -1428,8 +1478,7 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                 if not complete:
                     checks["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] = False
                     checks["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] = False
-                    store = chat.get("bridge_runtime_evidence_store")
-                    evidence = store.get(str(record.get("request_id") or "")) if isinstance(store, dict) else None
+                    evidence, evidence_error = _canonical_strict_live_bridge_evidence(chat, record)
                     if not isinstance(evidence, dict) or evidence.get("control_plane_identity_leak") != "NO" or any(
                         evidence.get(field) != "NO" for field in (
                             "user_prompt_contains_bridge_id", "provider_prompt_contains_bridge_id",
@@ -1442,8 +1491,7 @@ def security_audit(chats: list[dict[str, Any]]) -> dict[str, Any]:
                     ):
                         checks["STRICT_LIVE_CONTROL_PLANE_IDENTITY_ISOLATED"] = False
                 else:
-                    store = chat.get("bridge_runtime_evidence_store")
-                    evidence = store.get(str(record.get("request_id") or "")) if isinstance(store, dict) else None
+                    evidence, evidence_error = _canonical_strict_live_bridge_evidence(chat, record)
                     bridge_hash = str((evidence or {}).get("bridge_id_hash") or "").strip()
                     if bridge_hash:
                         strict_bridge_hashes.append(bridge_hash)
