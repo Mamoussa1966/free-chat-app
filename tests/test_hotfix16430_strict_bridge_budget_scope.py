@@ -72,3 +72,16 @@ def test_normal_round_keeps_all_explicit_free_cascade_candidates():
 
     assert main._round_model_candidates("deepseek", candidates, False) == candidates["deepseek"]
     assert main._round_model_candidates("gemini", candidates, False) == candidates["gemini"]
+
+
+def test_strict_live_bridge_is_forced_to_one_round_even_if_ui_requests_more():
+    prompt = "AI Council — FINAL RUNTIME CLOSURE TEST MESSAGE 1 OF 2\nTRANSACTIONAL BRIDGE — REQUIRED"
+    assert main._round_count_for_request(4, prompt) == 1
+    assert main._round_count_for_request(1, prompt) == 1
+
+
+def test_normal_requests_keep_user_selected_round_count():
+    prompt = "Summarize the attached document."
+    assert main._round_count_for_request(1, prompt) == 1
+    assert main._round_count_for_request(2, prompt) == 2
+    assert main._round_count_for_request(999, prompt) == main.MAX_ROUNDS
