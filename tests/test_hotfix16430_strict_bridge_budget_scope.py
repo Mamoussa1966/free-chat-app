@@ -49,18 +49,19 @@ def test_normal_round_keeps_existing_order_and_all_seats():
     assert normal_keys == ["deepseek", "gemini", "chatgpt", "claude", "grok", "kimi"]
 
 
-def test_strict_live_bridge_uses_one_explicit_candidate_per_required_provider():
+def test_strict_live_bridge_uses_only_known_working_models_present_in_explicit_list():
     candidates = {
         "deepseek": ("deepseek-flash", "deepseek-other"),
-        "gemini": ("gemini-3.8-flash", "gemini-other"),
+        "gemini": ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"),
         "claude": ("claude-candidate-1", "claude-candidate-2"),
         "grok": ("grok-candidate-1", "grok-candidate-2"),
     }
 
     assert main._round_model_candidates("deepseek", candidates, True) == ("deepseek-flash",)
-    assert main._round_model_candidates("gemini", candidates, True) == ("gemini-3.8-flash",)
+    assert main._round_model_candidates("gemini", candidates, True) == ("gemini-3.6-flash",)
     assert main._round_model_candidates("claude", candidates, True) == ()
     assert main._round_model_candidates("grok", candidates, True) == ()
+    assert main._round_model_candidates("gemini", {"gemini": ("gemini-3.8-flash",)}, True) == ()
 
 
 def test_normal_round_keeps_all_explicit_free_cascade_candidates():
