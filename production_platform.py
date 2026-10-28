@@ -91,8 +91,10 @@ def _canonical_strict_live_bridge_evidence(
     if str(canonical_request.get("bridge_runtime_contract") or "") != "STRICT_LIVE":
         return None, "STRICT_LIVE_CANONICAL_REQUEST_REQUIRED"
     evidence = canonical_request.get("bridge_runtime_evidence")
-    if not isinstance(evidence, dict) or str(evidence.get("request_id") or "").strip() != rid:
+    if not isinstance(evidence, dict):
         return None, "APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"
+    if str(evidence.get("request_id") or "").strip() != rid:
+        return None, "CANONICAL_RUNTIME_EVIDENCE_REQUEST_ID_MISMATCH"
     if not str(evidence.get("schema") or "").startswith("bridge-runtime-evidence/"):
         return None, "BRIDGE_RUNTIME_EVIDENCE_SCHEMA_INVALID"
 
@@ -1309,7 +1311,7 @@ def _strict_live_bridge_request_diagnostic(chat: dict[str, Any], request_record:
 
     evidence, evidence_error = _canonical_strict_live_bridge_evidence(chat, request_record)
     if not isinstance(evidence, dict):
-        if evidence_error == "CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT":
+        if evidence_error in {"CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT", "CANONICAL_RUNTIME_EVIDENCE_REQUEST_ID_MISMATCH"}:
             result["status"] = "FAIL"
             result["failure_reasons"] = [evidence_error]
         else:
