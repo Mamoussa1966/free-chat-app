@@ -67,6 +67,7 @@ def test_hotfix16418_complete_independent_request_proofs_report_pass():
 def test_hotfix16418_explicit_prompt_value_leak_reports_fail_for_affected_request():
     chat = _chat_with_strict_requests()
     chat["conversation_record"]["requests"][0]["bridge_runtime_evidence"]["user_prompt_contains_value"] = "YES"
+    chat["bridge_runtime_evidence_store"]["req-one"]["user_prompt_contains_value"] = "YES"
 
     report = security_audit([chat])
     proof = report["strict_live_bridge_proof"]
