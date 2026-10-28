@@ -10,7 +10,7 @@ import hashlib
 import json
 
 import main
-from conversation_store import rebuild_bridge_ledger_projection
+from conversation_store import canonical_history_hash, rebuild_bridge_ledger_projection
 from production_platform import (
     _strict_live_bridge_evidence_complete,
     _strict_live_bridge_request_diagnostic,
@@ -167,4 +167,68 @@ def test_supabase_presentation_state_never_persists_raw_legacy_bridge_ids():
     assert "RAW_LEGACY_BRIDGE_ID" not in serialized
     assert "RAW_SECOND_BRIDGE_ID" not in serialized
     assert "RAW_CONFLICTING_BRIDGE_ID" not in serialized
+
+def _legacy_sidecar_chat():
+    chat = _strict_canonical_chat(sidecar=True)
+    for request in chat["conversation_record"]["requests"]:
+        rid = request["request_id"]
+        ordinal = str(request["canonical_round_base"])
+        request["bridge_runtime_evidence"]["canonical_round_ordinal"] = ordinal
+        chat["bridge_runtime_evidence_store"][rid]["canonical_round_ordinal"] = ordinal
+    return chat
+
+
+def test_explicit_repair_recovers_only_complete_existing_sidecar_evidence(monkeypatch):
+    chat = _legacy_sidecar_chat()
+    rid = "r1"
+    request_before = next(row for row in chat["conversation_record"]["requests"] if row["request_id"] == rid)
+    sidecar = deepcopy(chat["bridge_runtime_evidence_store"][rid])
+    request_before.pop("bridge_runtime_evidence")
+    identity_before = {
+        key: request_before.get(key)
+        for key in ("request_id", "message_id", "canonical_round_base", "canonical_request_ordinal")
+    }
+    history_hash_before = canonical_history_hash(chat["conversation_record"])
+    monkeypatch.setattr(main.st, "session_state", {})
+
+    result = main._hotfix16430_recover_canonical_bridge_evidence(chat, rid)
+
+    assert result == {
+        "status": "PASS",
+        "action": "RECOVERED_EXISTING_CANONICAL_EVIDENCE",
+        "request_id": rid,
+    }
+    request_after = next(row for row in chat["conversation_record"]["requests"] if row["request_id"] == rid)
+    assert request_after["bridge_runtime_evidence"] == sidecar
+    assert {
+        key: request_after.get(key)
+        for key in ("request_id", "message_id", "canonical_round_base", "canonical_request_ordinal")
+    } == identity_before
+    assert canonical_history_hash(chat["conversation_record"]) == history_hash_before
+    assert _strict_live_bridge_evidence_complete(chat, request_after) is True
+
+
+def test_explicit_repair_refuses_incomplete_or_unsafe_sidecar_without_mutation(monkeypatch):
+    chat = _legacy_sidecar_chat()
+    rid = "r1"
+    request = next(row for row in chat["conversation_record"]["requests"] if row["request_id"] == rid)
+    request.pop("bridge_runtime_evidence")
+    chat["bridge_runtime_evidence_store"][rid]["control_plane_identity_leak"] = "YES"
+    identity_before = {
+        key: request.get(key)
+        for key in ("request_id", "message_id", "canonical_round_base", "canonical_request_ordinal")
+    }
+    history_hash_before = canonical_history_hash(chat["conversation_record"])
+    monkeypatch.setattr(main.st, "session_state", {})
+
+    result = main._hotfix16430_recover_canonical_bridge_evidence(chat, rid)
+
+    assert result["status"] == "NOT_PROVEN"
+    assert result["reason"] == "EXISTING_RUNTIME_RECORD_FAILED_STRICT_LIVE_VALIDATION"
+    assert "bridge_runtime_evidence" not in request
+    assert {
+        key: request.get(key)
+        for key in ("request_id", "message_id", "canonical_round_base", "canonical_request_ordinal")
+    } == identity_before
+    assert canonical_history_hash(chat["conversation_record"]) == history_hash_before
 
