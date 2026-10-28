@@ -271,11 +271,19 @@ def _round_model_candidates(seat_key: str, model_candidates: dict, strict_live_b
         candidates = tuple(str(item).strip() for item in (raw or ()) if str(item).strip())
     if not strict_live_bridge:
         return candidates
-    if key not in {"deepseek", "gemini"}:
-        return ()
-    # One explicitly configured candidate per proof endpoint. A failed candidate
-    # produces NOT_PROVEN rather than cascading into further billable API calls.
-    return candidates[:1]
+    if key == "deepseek":
+        # The configured deepseek-flash candidate is the previously observed
+        # successful source model for this account.
+        return candidates[:1]
+    if key == "gemini":
+        # The most recent canonical runtime records show gemini-3.6-flash as
+        # the successful target after earlier configured candidates failed.
+        # Pin that exact name only when it is already explicitly configured.
+        # If absent, fail closed without trying another candidate or discovering models.
+        proven_target = "gemini-3.6-flash"
+        return (proven_target,) if proven_target in candidates else ()
+    # Strict live closure never dispatches unrelated providers.
+    return ()
 
 
 def _validate_provider_output(result: dict, seat, request_id: str, round_no: int) -> dict:
