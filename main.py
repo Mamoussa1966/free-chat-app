@@ -2852,13 +2852,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # V26.3.10: mutate the canonical RequestRecord with authoritative
             # completion/metrics data, then commit the entire historical record.
             canonical_upsert_request(chat, record, st.session_state)
-            # Keep the V24 Bridge index in sync only from a completed, canonical,
-            # request-bound Strict Live proof. Failure stays explicit; never infer
-            # evidence from provider prose or repair a missing canonical record here.
+            # Keep the V24 Bridge index in sync only from the completed canonical
+            # RequestRecord. The helper validates identity bindings and only writes
+            # a sanitized projection; it never creates runtime proof.
             if str(record.get("bridge_runtime_contract") or "") == "STRICT_LIVE":
-                bridge_projection_result = rebuild_bridge_ledger_projection(chat, request_id)
-                if bridge_projection_result.get("status") != "PASS":
-                    record["bridge_projection_update_status"] = str(bridge_projection_result.get("status") or "NOT_PROVEN")
+                rebuild_bridge_ledger_projection(chat, request_id)
             st.session_state["last_synthesis"] = copy.deepcopy(record["synthesis"])
         # FINAL CLOSURE: generate the conversation audit only after the completed
         # RequestRecord has been persisted back into the canonical store.  This
@@ -4723,10 +4721,10 @@ def _render_hotfix16419_read_only_page() -> None:
     with st.sidebar:
         st.title("HOTFIX164.30 — Deployed-Commit-Bound Live Closure")
         st.warning(
-            "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
-            "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
-            "إذا تُرك الحقلان فارغين فستظهر NO_TARGETS / NOT_PROVEN، دون اختيار تلقائي. "
-            "لا يحذف السجلات التاريخية ولا يعيد كتابتها."
+            "التدقيق نفسه للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
+            "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ لا يوجد اختيار تلقائي. "
+            "يوجد أسفل التقرير إجراء إصلاح منفصل يعيد بناء إسقاط Bridge فقط من دليل قانوني موجود ومطابق؛ "
+            "لا يكتب دليل تشغيل مفقودًا ولا يعدّل Message أو Request أو Round."
         )
         report_targets = list(report.get("target_request_ids") or [])
         # Do not repopulate form fields from a stale report. Only retain IDs that still
@@ -4765,6 +4763,61 @@ def _render_hotfix16419_read_only_page() -> None:
         )
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
+        prior_repair = st.session_state.get("_hotfix16430_projection_repair_result")
+        if isinstance(prior_repair, dict) and str(prior_repair.get("conversation_id") or "") == str(chat.get("conversation_id") or ""):
+            st.caption("نتيجة إجراء إصلاح الإسقاط المنفصل")
+            st.json(prior_repair)
+
+        if st.button(
+            "🛠️ إصلاح إسقاط Bridge من الدليل القانوني الموجود فقط",
+            key="hotfix16430_rebuild_bridge_projection",
+            use_container_width=True,
+        ):
+            active_chat = _active_chat_without_initialization()
+            explicit_targets = [
+                str(st.session_state.get("hotfix16422_target_request_1") or "").strip(),
+                str(st.session_state.get("hotfix16422_target_request_2") or "").strip(),
+            ]
+            explicit_targets = [rid for rid in explicit_targets if rid]
+            repair_rows = []
+            if not explicit_targets:
+                repair_rows.append({
+                    "status": "NOT_PROVEN", "action": "NONE",
+                    "reason": "EXPLICIT_TARGET_REQUEST_ID_REQUIRED",
+                })
+            else:
+                for rid in explicit_targets:
+                    repair_rows.append(rebuild_bridge_ledger_projection(active_chat, rid))
+
+            persistence_status = "NOT_ATTEMPTED"
+            if explicit_targets and any(row.get("status") == "PASS" for row in repair_rows):
+                _, _, storage_enabled = get_supabase_config(st)
+                save_confirmed = _supabase_persist_completed_chat(active_chat)
+                if not save_confirmed:
+                    persistence_status = "NOT_CONFIRMED"
+                elif storage_enabled:
+                    persistence_status = "CONFIRMED_IN_OWNER_SCOPED_STORAGE"
+                else:
+                    persistence_status = "SESSION_ONLY_STORAGE_DISABLED"
+
+            updated_audit = _hotfix16420_read_only_target_audit(active_chat, explicit_targets)
+            st.session_state["last_hotfix16422_read_only_audit"] = updated_audit
+            st.session_state["_hotfix16430_projection_repair_result"] = {
+                "schema": "hotfix16430-explicit-bridge-projection-repair/v1",
+                "conversation_id": str(active_chat.get("conversation_id") or ""),
+                "read_only_audit_before_repair": str(report.get("status") or "NOT_PROVEN").upper(),
+                "repair_results": repair_rows,
+                "projection_persistence_status": persistence_status,
+                "audit_status_after_repair": str(updated_audit.get("status") or "NOT_PROVEN").upper(),
+                "blockers_after_repair": list(updated_audit.get("blockers") or []),
+                "provider_api_calls": 0,
+                "new_requests": 0,
+                "new_rounds": 0,
+                "new_bridges": 0,
+                "canonical_message_request_round_records_modified": False,
+            }
+            st.rerun()
+
         _render_section_actions(
             "HOTFIX164.30 — Deployed-Commit-Bound Live Closure",
             payload,
