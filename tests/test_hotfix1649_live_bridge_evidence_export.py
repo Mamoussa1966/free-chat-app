@@ -1,5 +1,6 @@
 import json
 import hashlib
+from copy import deepcopy
 
 import main
 from conversation_store import authoritative_snapshot
