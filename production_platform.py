@@ -101,12 +101,10 @@ def _canonical_strict_live_bridge_evidence(
     cache_store = chat.get("bridge_runtime_evidence_store")
     cached = cache_store.get(rid) if isinstance(cache_store, dict) else None
     if isinstance(cached, dict) and cached:
-        compare_fields = (
-            "request_id", "round_id", "canonical_round_id", "bridge_id_hash",
-            "runtime_payload_sha256", "runtime_sequence_valid", "runtime_sequence",
-            "application_owned", "bridge_gate_status", "terminal_state", "bridge_state_terminal",
-            "write_status", "commit_status", "read_status",
-        )
+        # Compare every overlapping field that the cache actually supplies.
+        # Missing sidecar fields are recoverable, but a contradictory safety flag,
+        # hash, identity, or runtime phase is not.
+        compare_fields = set(cached).intersection(evidence)
         conflicts = [
             key for key in compare_fields
             if cached.get(key) not in (None, "", [], {})
