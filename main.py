@@ -24,7 +24,7 @@ from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_audit_preflight
-from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit, rebuild_bridge_ledger_projection
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -2852,6 +2852,13 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # V26.3.10: mutate the canonical RequestRecord with authoritative
             # completion/metrics data, then commit the entire historical record.
             canonical_upsert_request(chat, record, st.session_state)
+            # Keep the V24 Bridge index in sync only from a completed, canonical,
+            # request-bound Strict Live proof. Failure stays explicit; never infer
+            # evidence from provider prose or repair a missing canonical record here.
+            if str(record.get("bridge_runtime_contract") or "") == "STRICT_LIVE":
+                bridge_projection_result = rebuild_bridge_ledger_projection(chat, request_id)
+                if bridge_projection_result.get("status") != "PASS":
+                    record["bridge_projection_update_status"] = str(bridge_projection_result.get("status") or "NOT_PROVEN")
             st.session_state["last_synthesis"] = copy.deepcopy(record["synthesis"])
         # FINAL CLOSURE: generate the conversation audit only after the completed
         # RequestRecord has been persisted back into the canonical store.  This
@@ -4812,6 +4819,9 @@ def _supabase_presentation_state(chat: dict) -> dict:
         "request_ids": copy.deepcopy((chat.get("request_ids") or [])[-MAX_REQUEST_IDS:]),
         "history_identity_ledger": copy.deepcopy((chat.get("history_identity_ledger") or [])[-2000:]),
         "result_keys": copy.deepcopy((chat.get("result_keys") or [])[-2000:]),
+        # V24 Bridge rows are a compatibility index only; canonical evidence remains
+        # on the authoritative RequestRecord and is independently validated.
+        "bridge_ledger_v24": copy.deepcopy((chat.get("bridge_ledger_v24") or [])[-MAX_REQUEST_IDS:]),
     }
 
 
@@ -4884,6 +4894,8 @@ def _supabase_load_saved_chats() -> None:
             chat["request_ids"] = view.get("request_ids") if isinstance(view.get("request_ids"), list) else []
             chat["history_identity_ledger"] = view.get("history_identity_ledger") if isinstance(view.get("history_identity_ledger"), list) else []
             chat["result_keys"] = view.get("result_keys") if isinstance(view.get("result_keys"), list) else []
+            # Hydrate the Bridge compatibility projection separately from canonical proof.
+            chat["bridge_ledger_v24"] = view.get("bridge_ledger_v24") if isinstance(view.get("bridge_ledger_v24"), list) else []
             chat["conversation_record"] = record
             _ensure_chat_identity_state(chat)
             commit_canonical_record(chat, st.session_state)
