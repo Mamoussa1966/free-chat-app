@@ -88,4 +88,4 @@ def test_hotfix16418_wrong_request_identity_is_explicit_failure():
     assert proof["status"] == "FAIL"
     assert rows["req-one"]["status"] == "FAIL"
     assert rows["req-one"]["request_identity_status"] == "FAIL"
-    assert rows["req-one"]["failure_reasons"] == ["CANONICAL_RUNTIME_EVIDENCE_REQUEST_ID_MISMATCH"]
+    assert rows["req-one"]["failure_reasons"] == ["REQUEST_ID_MISMATCH"]
