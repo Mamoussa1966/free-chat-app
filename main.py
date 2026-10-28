@@ -4862,6 +4862,38 @@ def _supabase_identity_and_repository():
     return owner, repository
 
 
+def _safe_bridge_projection_for_storage(chat: dict) -> list[dict]:
+    """Persist only sanitized Bridge projection hashes, never raw Bridge IDs or values."""
+    source_rows = chat.get("bridge_ledger_v24")
+    if not isinstance(source_rows, list):
+        return []
+    safe_rows: list[dict] = []
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        request_id = str(row.get("request_id") or "").strip()
+        round_id = str(row.get("round_id") or row.get("canonical_round_record_id") or "").strip()
+        if not request_id or not round_id:
+            continue
+        bridge_hash = str(row.get("bridge_id_hash") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", bridge_hash):
+            raw_id = str(row.get("bridge_id") or "").strip()
+            if not raw_id or raw_id == "[REDACTED]":
+                continue
+            bridge_hash = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+        raw_status = str(row.get("status") or "NOT_PROVEN").upper()
+        status = raw_status if raw_status in {"PASS", "FAIL", "NOT_PROVEN"} else "NOT_PROVEN"
+        safe_rows.append({
+            "schema": "bridge-ledger-projection/v1",
+            "request_id": request_id,
+            "round_id": round_id,
+            "bridge_id_hash": bridge_hash,
+            "status": status,
+            "projection_only": True,
+        })
+    return safe_rows[-MAX_REQUEST_IDS:]
+
+
 def _supabase_presentation_state(chat: dict) -> dict:
     """Keep display/history content alongside, but separate from, canonical IDs."""
     return {
@@ -4874,7 +4906,7 @@ def _supabase_presentation_state(chat: dict) -> dict:
         "result_keys": copy.deepcopy((chat.get("result_keys") or [])[-2000:]),
         # V24 Bridge rows are a compatibility index only; canonical evidence remains
         # on the authoritative RequestRecord and is independently validated.
-        "bridge_ledger_v24": copy.deepcopy((chat.get("bridge_ledger_v24") or [])[-MAX_REQUEST_IDS:]),
+        "bridge_ledger_v24": _safe_bridge_projection_for_storage(chat),
     }
 
 
