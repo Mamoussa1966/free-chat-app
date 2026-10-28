@@ -134,16 +134,24 @@ def test_supabase_presentation_state_never_persists_raw_legacy_bridge_ids():
                 "bridge_id_hash": "a" * 64, "bridge_id": "RAW_SECOND_BRIDGE_ID",
                 "status": "PASS",
             },
+            {
+                "request_id": "r-bad-hash", "round_id": "c:r-bad-hash:r1",
+                "bridge_id_hash": "not-a-valid-hash", "bridge_id": "RAW_CONFLICTING_BRIDGE_ID",
+                "status": "PASS",
+            },
         ]
     }
 
     rows = main._safe_bridge_projection_for_storage(chat)
 
-    assert len(rows) == 2
+    assert len(rows) == 3
     assert rows[0]["bridge_id_hash"] == hashlib.sha256(b"RAW_LEGACY_BRIDGE_ID").hexdigest()
     assert rows[1]["bridge_id_hash"] == "a" * 64
+    assert rows[2]["bridge_id_hash"] == "NOT_PROVEN"
+    assert rows[2]["status"] == "NOT_PROVEN"
     assert all("bridge_id" not in row for row in rows)
     serialized = json.dumps(rows, sort_keys=True)
     assert "RAW_LEGACY_BRIDGE_ID" not in serialized
     assert "RAW_SECOND_BRIDGE_ID" not in serialized
+    assert "RAW_CONFLICTING_BRIDGE_ID" not in serialized
 
