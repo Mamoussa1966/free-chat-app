@@ -246,6 +246,13 @@ def _is_strict_live_bridge_prompt(prompt: str, bridge_controls=None) -> bool:
     ))
 
 
+def _round_count_for_request(rounds: int, user_prompt: str, bridge_controls=None) -> int:
+    """Strict live Bridge proof is always exactly one Round per submitted Request."""
+    if _is_strict_live_bridge_prompt(user_prompt, bridge_controls):
+        return 1
+    return max(1, min(int(rounds), MAX_ROUNDS))
+
+
 def _round_provider_execution_order(seats, strict_live_bridge: bool = False):
     """Return the provider order; strict live Bridge closure is scoped to its two proof endpoints."""
     by_key = {str(getattr(seat, "key", "") or "").lower(): seat for seat in seats}
@@ -2706,7 +2713,7 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
     chat.setdefault("audit_events", [])
     chat["audit_events"] = [e for e in chat.get("audit_events", []) if e.get("request_id") != request_id]
     all_results: list[dict] = []
-    total_rounds = max(1, min(int(rounds), MAX_ROUNDS))
+    total_rounds = _round_count_for_request(rounds, user_prompt, bridge_controls)
     # HOTFIX126: round identity is conversation-scoped, not reset to r1 for every
     # new Request. The provider still executes exactly `total_rounds` rounds for
     # this Request, but the authoritative RoundRecord receives the next monotonic
