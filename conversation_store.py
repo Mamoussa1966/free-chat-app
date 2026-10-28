@@ -922,18 +922,17 @@ def rebuild_bridge_ledger_projection(chat: dict, request_id: str) -> dict:
     if (not round_id
             or str(round_row.get("message_id") or "").strip() != str(request.get("message_id") or "").strip()):
         return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_MESSAGE_BINDING_NOT_PROVEN"}
-    try:
-        ordinal = int(round_row.get("ordinal") or round_row.get("round_number") or round_row.get("round") or 0)
-        evidence_ordinal = int(round_row.get("ordinal") or round_row.get("round_number") or round_row.get("round") or 0)
-        runtime_ordinal = int(request.get("bridge_runtime_evidence", {}).get("round_id") or 0)
-    except (AttributeError, TypeError, ValueError):
-        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_ORDINAL_INVALID"}
-    if ordinal <= 0 or evidence_ordinal != ordinal or runtime_ordinal != ordinal:
-        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_ORDINAL_MISMATCH"}
-
     evidence = request.get("bridge_runtime_evidence")
     if not isinstance(evidence, dict):
         return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_RUNTIME_EVIDENCE_MISSING"}
+    try:
+        ordinal = int(round_row.get("ordinal") or round_row.get("round_number") or round_row.get("round") or 0)
+        evidence_ordinal = int(evidence.get("canonical_round_ordinal") or 0)
+        runtime_ordinal = int(evidence.get("round_id") or 0)
+    except (TypeError, ValueError):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_ORDINAL_INVALID"}
+    if ordinal <= 0 or evidence_ordinal != ordinal or runtime_ordinal != ordinal:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_ORDINAL_MISMATCH"}
     if (not str(evidence.get("schema") or "").startswith("bridge-runtime-evidence/")
             or str(evidence.get("request_id") or "").strip() != rid
             or str(evidence.get("canonical_round_id") or "").strip() != round_id
