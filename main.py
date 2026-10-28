@@ -4812,8 +4812,8 @@ def _render_hotfix16419_read_only_page() -> None:
         st.warning(
             "التدقيق نفسه للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
             "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ لا يوجد اختيار تلقائي. "
-            "يوجد أسفل التقرير إجراء إصلاح منفصل يعيد بناء إسقاط Bridge فقط من دليل قانوني موجود ومطابق؛ "
-            "لا يكتب دليل تشغيل مفقودًا ولا يعدّل Message أو Request أو Round."
+            "إجراء الإصلاح منفصل: يجوز له تثبيت دليل تشغيل موجود ومتحقق داخل Request القانوني ثم إعادة بناء صف الإسقاط فقط. "
+            "لا يغيّر هوية Message/Request/Round، ولا يخترع دليلًا، ولا ينفذ أي مزود."
         )
         report_targets = list(report.get("target_request_ids") or [])
         # Do not repopulate form fields from a stale report. Only retain IDs that still
@@ -4921,7 +4921,11 @@ def _render_hotfix16419_read_only_page() -> None:
                 "new_requests": 0,
                 "new_rounds": 0,
                 "new_bridges": 0,
-                "canonical_message_request_round_records_modified": False,
+                "canonical_message_request_round_identity_fields_modified": False,
+                "existing_runtime_evidence_attached_to_canonical_request": any(
+                    row.get("canonical_evidence_recovery", {}).get("action") == "RECOVERED_EXISTING_CANONICAL_EVIDENCE"
+                    for row in repair_rows
+                ),
             }
             st.rerun()
 
