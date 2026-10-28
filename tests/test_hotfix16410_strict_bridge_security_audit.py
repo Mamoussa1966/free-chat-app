@@ -91,8 +91,22 @@ def _chat_with_strict_requests():
         "conversation_record": {
             "messages": [],
             "requests": [
-                {"request_id": r1, "message_id": "msg-one", "canonical_round_base": 1},
-                {"request_id": r2, "message_id": "msg-two", "canonical_round_base": 2},
+                {
+                    "request_id": r1, "message_id": "msg-one", "canonical_round_base": 1,
+                    "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE",
+                    "bridge_runtime_evidence": {
+                        **_runtime_record(r1, 1, "hash-one"),
+                        "schema": "bridge-runtime-evidence/v3", "canonical_round_ordinal": "1",
+                    },
+                },
+                {
+                    "request_id": r2, "message_id": "msg-two", "canonical_round_base": 2,
+                    "bridge_test_requested": True, "bridge_runtime_contract": "STRICT_LIVE",
+                    "bridge_runtime_evidence": {
+                        **_runtime_record(r2, 2, "hash-two"),
+                        "schema": "bridge-runtime-evidence/v3", "canonical_round_ordinal": "2",
+                    },
+                },
             ],
             "rounds": [
                 {"round_id": f"conv:{r1}:r1", "request_id": r1, "message_id": "msg-one", "round_number": 1, "ordinal": 1},
@@ -119,9 +133,19 @@ def test_hotfix16410_security_audit_uses_application_owned_strict_bridge_store()
     assert report["checks"]["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] is True
 
 
-def test_hotfix16410_security_audit_fails_closed_when_strict_evidence_is_missing():
+def test_hotfix16410_security_audit_recovers_canonical_proof_when_sidecar_cache_is_missing():
     chat = _chat_with_strict_requests()
     del chat["bridge_runtime_evidence_store"]["req-two"]
+    report = security_audit([chat])
+    assert report["status"] == "PASS"
+    assert report["checks"]["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] is True
+    assert report["checks"]["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] is True
+
+
+def test_hotfix16410_security_audit_fails_when_canonical_and_sidecar_evidence_are_missing():
+    chat = _chat_with_strict_requests()
+    del chat["bridge_runtime_evidence_store"]["req-two"]
+    chat["conversation_record"]["requests"][1].pop("bridge_runtime_evidence")
     report = security_audit([chat])
     assert report["status"] == "FAIL"
     assert report["checks"]["BRIDGE_VALUES_NOT_IN_USER_PROMPT"] is False
@@ -131,7 +155,9 @@ def test_hotfix16410_security_audit_fails_closed_when_strict_evidence_is_missing
 def test_hotfix16410_security_audit_rejects_bad_sequence_and_noncanonical_round_binding():
     chat = _chat_with_strict_requests()
     chat["bridge_runtime_evidence_store"]["req-one"]["runtime_sequence"][5]["phase"] = "READ"
+    chat["conversation_record"]["requests"][0]["bridge_runtime_evidence"]["runtime_sequence"][5]["phase"] = "READ"
     chat["bridge_runtime_evidence_store"]["req-two"]["canonical_round_id"] = "other-round"
+    chat["conversation_record"]["requests"][1]["bridge_runtime_evidence"]["canonical_round_id"] = "other-round"
     report = security_audit([chat])
     assert report["status"] == "FAIL"
     assert report["checks"]["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] is False
@@ -140,6 +166,7 @@ def test_hotfix16410_security_audit_rejects_bad_sequence_and_noncanonical_round_
 def test_hotfix16410_security_audit_rejects_reused_bridge_identity_across_requests():
     chat = _chat_with_strict_requests()
     chat["bridge_runtime_evidence_store"]["req-two"]["bridge_id_hash"] = chat["bridge_runtime_evidence_store"]["req-one"]["bridge_id_hash"]
+    chat["conversation_record"]["requests"][1]["bridge_runtime_evidence"]["bridge_id_hash"] = chat["conversation_record"]["requests"][0]["bridge_runtime_evidence"]["bridge_id_hash"]
     report = security_audit([chat])
     assert report["status"] == "FAIL"
     assert report["checks"]["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] is False
@@ -148,6 +175,7 @@ def test_hotfix16410_security_audit_rejects_reused_bridge_identity_across_reques
 def test_hotfix16410_security_audit_does_not_accept_agent_result_audit_as_strict_proof():
     chat = _chat_with_strict_requests()
     chat["bridge_runtime_evidence_store"] = {}
+    chat["conversation_record"]["requests"][0].pop("bridge_runtime_evidence")
     chat["request_records"][0]["results"] = [{
         "bridge_transaction_audit": {
             "BRIDGE_ID": "agent-result-id", "WRITE": "PASS", "VALIDATE": "PASS",
@@ -165,5 +193,6 @@ def test_hotfix16410_security_audit_does_not_accept_agent_result_audit_as_strict
 def test_hotfix16415_strict_live_gate_rejects_commit_with_target_seat_zero():
     chat = _chat_with_strict_requests()
     chat["bridge_runtime_evidence_store"]["req-one"]["runtime_sequence"][3]["target_seat"] = 0
+    chat["conversation_record"]["requests"][0]["bridge_runtime_evidence"]["runtime_sequence"][3]["target_seat"] = 0
     result = security_audit([chat])
     assert result["checks"]["STRICT_LIVE_BRIDGE_EVIDENCE_AUTHORITATIVE_AND_COMPLETE"] is False

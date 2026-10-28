@@ -875,6 +875,105 @@ def append_once(rows: list, row: dict, identity_keys: tuple[str, ...]) -> None:
             return
     rows.append(copy.deepcopy(row))
 
+
+def rebuild_bridge_ledger_projection(chat: dict, request_id: str) -> dict:
+    """Explicitly rebuild one V24 Bridge index row from an existing canonical proof.
+
+    This mutates only the compatibility projection. It never creates or edits a
+    canonical Message, Request, Round, or runtime-evidence record. Callers should
+    expose this as a separate, explicit repair action; read-only audits must not
+    invoke it.
+    """
+    rid = str(request_id or "").strip()
+    if not isinstance(chat, dict) or not rid:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "EXPLICIT_REQUEST_ID_REQUIRED"}
+
+    canonical = chat.get("conversation_record")
+    if not isinstance(canonical, dict):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_CONVERSATION_MISSING"}
+    requests = [
+        row for row in (canonical.get("requests") if isinstance(canonical.get("requests"), list) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+    ]
+    if len(requests) != 1:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_REQUEST_MISSING_OR_DUPLICATED"}
+    request = requests[0]
+    if str(request.get("bridge_runtime_contract") or "") != "STRICT_LIVE" or request.get("bridge_test_requested") is not True:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "STRICT_LIVE_BRIDGE_REQUEST_REQUIRED"}
+
+    messages = [
+        row for row in (canonical.get("messages") if isinstance(canonical.get("messages"), list) else [])
+        if isinstance(row, dict)
+        and str(row.get("role") or "").lower() == "user"
+        and str(row.get("request_id") or "").strip() == rid
+        and str(row.get("message_id") or "").strip() == str(request.get("message_id") or "").strip()
+    ]
+    if len(messages) != 1 or not str(request.get("message_id") or "").strip():
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_MESSAGE_REQUEST_BINDING_NOT_PROVEN"}
+
+    rounds = [
+        row for row in (canonical.get("rounds") if isinstance(canonical.get("rounds"), list) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+    ]
+    if len(rounds) != 1:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_MISSING_OR_DUPLICATED"}
+    round_row = rounds[0]
+    round_id = str(round_row.get("round_id") or "").strip()
+    if (not round_id
+            or str(round_row.get("message_id") or "").strip() != str(request.get("message_id") or "").strip()):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_MESSAGE_BINDING_NOT_PROVEN"}
+    evidence = request.get("bridge_runtime_evidence")
+    if not isinstance(evidence, dict):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_RUNTIME_EVIDENCE_MISSING"}
+    try:
+        ordinal = int(round_row.get("ordinal") or round_row.get("round_number") or round_row.get("round") or 0)
+        evidence_ordinal = int(evidence.get("canonical_round_ordinal") or 0)
+        runtime_ordinal = int(evidence.get("round_id") or 0)
+    except (TypeError, ValueError):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_ORDINAL_INVALID"}
+    if ordinal <= 0 or evidence_ordinal != ordinal or runtime_ordinal != ordinal:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_ROUND_ORDINAL_MISMATCH"}
+    if (not str(evidence.get("schema") or "").startswith("bridge-runtime-evidence/")
+            or str(evidence.get("request_id") or "").strip() != rid
+            or str(evidence.get("canonical_round_id") or "").strip() != round_id
+            or str(evidence.get("canonical_round_ordinal") or "").strip() != str(ordinal)):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_RUNTIME_EVIDENCE_BINDING_MISMATCH"}
+    bridge_hash = str(evidence.get("bridge_id_hash") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", bridge_hash):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_BRIDGE_IDENTITY_HASH_MISSING"}
+
+    projection = chat.get("bridge_ledger_v24")
+    if not isinstance(projection, list):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "BRIDGE_PROJECTION_CONTAINER_INVALID"}
+    matches = [
+        row for row in projection
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+    ]
+    if len(matches) > 1:
+        return {"status": "FAIL", "action": "NONE", "reason": "DUPLICATE_BRIDGE_PROJECTION_RECORDS_FOR_REQUEST"}
+    if matches:
+        existing = matches[0]
+        existing_round = str(existing.get("round_id") or "").strip()
+        existing_hash = str(existing.get("bridge_id_hash") or "").strip().lower()
+        if not existing_hash:
+            old_id = str(existing.get("bridge_id") or "").strip()
+            existing_hash = hashlib.sha256(old_id.encode("utf-8")).hexdigest() if old_id and old_id != "[REDACTED]" else ""
+        if existing_round == round_id and existing_hash == bridge_hash:
+            return {"status": "PASS", "action": "ALREADY_PRESENT", "request_id": rid, "round_id": round_id}
+        return {"status": "FAIL", "action": "NONE", "reason": "EXISTING_BRIDGE_PROJECTION_CONFLICT"}
+
+    # Keep this index sanitized: never project raw Bridge IDs, values, prompts, or HTTP bodies.
+    projection.append({
+        "schema": "bridge-ledger-projection/v1",
+        "request_id": rid,
+        "round_id": round_id,
+        "bridge_id_hash": bridge_hash,
+        "status": str(evidence.get("runtime_sequence_valid") or "NOT_PROVEN"),
+        "authoritative_source": "CANONICAL_REQUEST_RECORD.bridge_runtime_evidence",
+        "projection_only": True,
+    })
+    return {"status": "PASS", "action": "REBUILT", "request_id": rid, "round_id": round_id}
+
 _BRIDGE_RUNTIME_PHASES = [
     "SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
     "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH",

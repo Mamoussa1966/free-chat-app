@@ -18,13 +18,13 @@ from streamlit.components.v1 import html as components_html
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, get_secret, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
-from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit as _base_read_only_existing_records_audit
+from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit as _base_read_only_existing_records_audit, _strict_live_bridge_evidence_complete
 from v23_final_closure_audit import build_v23_final_closure_audit
 from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_audit_preflight
-from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit, rebuild_bridge_ledger_projection
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -2852,6 +2852,11 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # V26.3.10: mutate the canonical RequestRecord with authoritative
             # completion/metrics data, then commit the entire historical record.
             canonical_upsert_request(chat, record, st.session_state)
+            # Keep the V24 Bridge index in sync only from the completed canonical
+            # RequestRecord. The helper validates identity bindings and only writes
+            # a sanitized projection; it never creates runtime proof.
+            if str(record.get("bridge_runtime_contract") or "") == "STRICT_LIVE":
+                rebuild_bridge_ledger_projection(chat, request_id)
             st.session_state["last_synthesis"] = copy.deepcopy(record["synthesis"])
         # FINAL CLOSURE: generate the conversation audit only after the completed
         # RequestRecord has been persisted back into the canonical store.  This
@@ -4691,6 +4696,96 @@ def _is_hotfix16420_read_only_audit_command(prompt: str) -> bool:
     return has_version and has_read_only and has_audit
 
 
+def _hotfix16430_recover_canonical_bridge_evidence(chat: dict, request_id: str) -> dict:
+    """Attach already-persisted sidecar evidence only after full strict-live validation.
+
+    This is an explicit repair action, not part of read-only audit rendering. It
+    may add the existing evidence artifact to a canonical RequestRecord, but does
+    not alter Message/Request/Round identity fields or invoke a provider.
+    """
+    rid = str(request_id or "").strip()
+    if not isinstance(chat, dict) or not rid:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "EXPLICIT_REQUEST_ID_REQUIRED"}
+    canonical = chat.get("conversation_record")
+    if not isinstance(canonical, dict):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_CONVERSATION_MISSING"}
+    requests = [
+        row for row in (canonical.get("requests") if isinstance(canonical.get("requests"), list) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+    ]
+    if len(requests) != 1:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_REQUEST_MISSING_OR_DUPLICATED"}
+    request = requests[0]
+    if str(request.get("bridge_runtime_contract") or "") != "STRICT_LIVE" or request.get("bridge_test_requested") is not True:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "STRICT_LIVE_BRIDGE_REQUEST_REQUIRED"}
+
+    existing = request.get("bridge_runtime_evidence")
+    runtime_store = chat.get("bridge_runtime_evidence_store")
+    sidecar = runtime_store.get(rid) if isinstance(runtime_store, dict) else None
+    if isinstance(existing, dict):
+        if _strict_live_bridge_evidence_complete(chat, request):
+            return {"status": "PASS", "action": "CANONICAL_EVIDENCE_ALREADY_VALID", "request_id": rid}
+        return {"status": "FAIL", "action": "NONE", "reason": "EXISTING_CANONICAL_BRIDGE_EVIDENCE_INVALID"}
+    if not isinstance(sidecar, dict):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "NO_EXISTING_BRIDGE_RUNTIME_RECORD_TO_RECOVER"}
+
+    rounds = [
+        row for row in (canonical.get("rounds") if isinstance(canonical.get("rounds"), list) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+    ]
+    messages = [
+        row for row in (canonical.get("messages") if isinstance(canonical.get("messages"), list) else [])
+        if isinstance(row, dict)
+        and str(row.get("role") or "").lower() == "user"
+        and str(row.get("request_id") or "").strip() == rid
+    ]
+    if len(rounds) != 1 or len(messages) != 1:
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_MESSAGE_ROUND_BINDING_NOT_UNIQUE"}
+    round_row = rounds[0]
+    round_id = str(round_row.get("round_id") or "").strip()
+    ordinal_value = round_row.get("ordinal") or round_row.get("round_number") or round_row.get("round")
+    try:
+        ordinal = int(ordinal_value or 0)
+        evidence_round = int(sidecar.get("round_id") or 0)
+        evidence_ordinal = int(sidecar.get("canonical_round_ordinal") or 0)
+    except (TypeError, ValueError):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "RUNTIME_EVIDENCE_ROUND_ORDINAL_INVALID"}
+    if (
+        not round_id or not ordinal or evidence_round != ordinal or evidence_ordinal != ordinal
+        or str(round_row.get("message_id") or "") != str(request.get("message_id") or "")
+        or str(messages[0].get("message_id") or "") != str(request.get("message_id") or "")
+        or str(sidecar.get("request_id") or "").strip() != rid
+        or str(sidecar.get("canonical_round_id") or "").strip() != round_id
+        or not str(sidecar.get("schema") or "").startswith("bridge-runtime-evidence/")
+        or not re.fullmatch(r"[0-9a-f]{64}", str(sidecar.get("bridge_id_hash") or "").strip().lower())
+    ):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "RUNTIME_EVIDENCE_IDENTITY_BINDING_MISMATCH"}
+
+    # Validate a candidate copy first. Incomplete/unsafe evidence never mutates history.
+    candidate_chat = copy.deepcopy(chat)
+    candidate_requests = candidate_chat["conversation_record"]["requests"]
+    candidate_request = next(row for row in candidate_requests if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid)
+    candidate_request["bridge_runtime_evidence"] = copy.deepcopy(sidecar)
+    candidate_store = candidate_chat.get("bridge_runtime_evidence_store")
+    if not isinstance(candidate_store, dict):
+        candidate_store = {}
+        candidate_chat["bridge_runtime_evidence_store"] = candidate_store
+    candidate_store[rid] = copy.deepcopy(sidecar)
+    if not _strict_live_bridge_evidence_complete(candidate_chat, candidate_request):
+        return {"status": "NOT_PROVEN", "action": "NONE", "reason": "EXISTING_RUNTIME_RECORD_FAILED_STRICT_LIVE_VALIDATION"}
+
+    # Attach precisely the validated existing record; preserve all immutable identity fields.
+    request_update = copy.deepcopy(request)
+    request_update["bridge_runtime_evidence"] = copy.deepcopy(sidecar)
+    # canonical_upsert_request commits the complete canonical snapshot itself;
+    # do not perform a second commit/merge on the same evidence repair.
+    canonical_upsert_request(chat, request_update, st.session_state)
+    stored_request = next(row for row in chat["conversation_record"]["requests"] if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid)
+    if not _strict_live_bridge_evidence_complete(chat, stored_request):
+        return {"status": "FAIL", "action": "EVIDENCE_ATTACHED_BUT_POST_COMMIT_VALIDATION_FAILED", "request_id": rid}
+    return {"status": "PASS", "action": "RECOVERED_EXISTING_CANONICAL_EVIDENCE", "request_id": rid}
+
+
 def _render_hotfix16419_read_only_page() -> None:
     """Render the explicit-target forensics report in the sidebar only."""
     chat = _active_chat_without_initialization()
@@ -4716,10 +4811,10 @@ def _render_hotfix16419_read_only_page() -> None:
     with st.sidebar:
         st.title("HOTFIX164.30 — Deployed-Commit-Bound Live Closure")
         st.warning(
-            "فحص للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
-            "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ يمكن ترك الحقل الثاني فارغًا. "
-            "إذا تُرك الحقلان فارغين فستظهر NO_TARGETS / NOT_PROVEN، دون اختيار تلقائي. "
-            "لا يحذف السجلات التاريخية ولا يعيد كتابتها."
+            "التدقيق نفسه للقراءة فقط: لا ينشئ Request أو Round أو Bridge ولا يستدعي أي مزود. "
+            "أدخل معرّف Request حقيقيًا واحدًا على الأقل من السجل القانوني؛ لا يوجد اختيار تلقائي. "
+            "إجراء الإصلاح منفصل: يجوز له تثبيت دليل تشغيل موجود ومتحقق داخل Request القانوني ثم إعادة بناء صف الإسقاط فقط. "
+            "لا يغيّر هوية Message/Request/Round، ولا يخترع دليلًا، ولا ينفذ أي مزود."
         )
         report_targets = list(report.get("target_request_ids") or [])
         # Do not repopulate form fields from a stale report. Only retain IDs that still
@@ -4758,6 +4853,83 @@ def _render_hotfix16419_read_only_page() -> None:
         )
         st.caption(f"Audit status: {str(report.get('status') or 'NOT_PROVEN').upper()}")
         st.json(report)
+        prior_repair = st.session_state.get("_hotfix16430_projection_repair_result")
+        if isinstance(prior_repair, dict) and str(prior_repair.get("conversation_id") or "") == str(chat.get("conversation_id") or ""):
+            st.caption("نتيجة إجراء إصلاح الإسقاط المنفصل")
+            st.json(prior_repair)
+
+        if st.button(
+            "🛠️ إصلاح إسقاط Bridge من الدليل القانوني الموجود فقط",
+            key="hotfix16430_rebuild_bridge_projection",
+            use_container_width=True,
+        ):
+            active_chat = _active_chat_without_initialization()
+            explicit_targets = [
+                str(st.session_state.get("hotfix16422_target_request_1") or "").strip(),
+                str(st.session_state.get("hotfix16422_target_request_2") or "").strip(),
+            ]
+            explicit_targets = [rid for rid in explicit_targets if rid]
+            repair_rows = []
+            if not explicit_targets:
+                repair_rows.append({
+                    "status": "NOT_PROVEN", "action": "NONE",
+                    "reason": "EXPLICIT_TARGET_REQUEST_ID_REQUIRED",
+                })
+            else:
+                for rid in explicit_targets:
+                    recovery = _hotfix16430_recover_canonical_bridge_evidence(active_chat, rid)
+                    if recovery.get("status") not in {"PASS"}:
+                        repair_rows.append({
+                            "request_id": rid,
+                            "canonical_evidence_recovery": recovery,
+                            "projection_repair": {"status": "NOT_PROVEN", "action": "NONE", "reason": "CANONICAL_EVIDENCE_RECOVERY_NOT_PASSED"},
+                        })
+                        continue
+                    projection_result = rebuild_bridge_ledger_projection(active_chat, rid)
+                    repair_rows.append({
+                        "request_id": rid,
+                        "canonical_evidence_recovery": recovery,
+                        "projection_repair": projection_result,
+                        "status": "PASS" if projection_result.get("status") == "PASS" else projection_result.get("status", "NOT_PROVEN"),
+                    })
+
+            persistence_status = "NOT_ATTEMPTED"
+            if explicit_targets and any(
+                row.get("status") == "PASS"
+                or row.get("canonical_evidence_recovery", {}).get("status") == "PASS"
+                for row in repair_rows
+            ):
+                _, _, storage_enabled = get_supabase_config(st)
+                save_confirmed = _supabase_persist_completed_chat(active_chat)
+                if not save_confirmed:
+                    persistence_status = "NOT_CONFIRMED"
+                elif storage_enabled:
+                    persistence_status = "CONFIRMED_IN_OWNER_SCOPED_STORAGE"
+                else:
+                    persistence_status = "SESSION_ONLY_STORAGE_DISABLED"
+
+            updated_audit = _hotfix16420_read_only_target_audit(active_chat, explicit_targets)
+            st.session_state["last_hotfix16422_read_only_audit"] = updated_audit
+            st.session_state["_hotfix16430_projection_repair_result"] = {
+                "schema": "hotfix16430-explicit-bridge-projection-repair/v1",
+                "conversation_id": str(active_chat.get("conversation_id") or ""),
+                "read_only_audit_before_repair": str(report.get("status") or "NOT_PROVEN").upper(),
+                "repair_results": repair_rows,
+                "projection_persistence_status": persistence_status,
+                "audit_status_after_repair": str(updated_audit.get("status") or "NOT_PROVEN").upper(),
+                "blockers_after_repair": list(updated_audit.get("blockers") or []),
+                "provider_api_calls": 0,
+                "new_requests": 0,
+                "new_rounds": 0,
+                "new_bridges": 0,
+                "canonical_message_request_round_identity_fields_modified": False,
+                "existing_runtime_evidence_attached_to_canonical_request": any(
+                    row.get("canonical_evidence_recovery", {}).get("action") == "RECOVERED_EXISTING_CANONICAL_EVIDENCE"
+                    for row in repair_rows
+                ),
+            }
+            st.rerun()
+
         _render_section_actions(
             "HOTFIX164.30 — Deployed-Commit-Bound Live Closure",
             payload,
@@ -4802,6 +4974,45 @@ def _supabase_identity_and_repository():
     return owner, repository
 
 
+def _safe_bridge_projection_for_storage(chat: dict) -> list[dict]:
+    """Persist only sanitized Bridge projection hashes, never raw Bridge IDs or values."""
+    source_rows = chat.get("bridge_ledger_v24")
+    if not isinstance(source_rows, list):
+        return []
+    safe_rows: list[dict] = []
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        request_id = str(row.get("request_id") or "").strip()
+        round_id = str(row.get("round_id") or row.get("canonical_round_record_id") or "").strip()
+        if not request_id or not round_id:
+            continue
+        supplied_hash = str(row.get("bridge_id_hash") or "").strip().lower()
+        if supplied_hash:
+            # A malformed explicit hash is a contradiction, not permission to
+            # replace it with a hash calculated from a legacy raw-ID field.
+            bridge_hash = supplied_hash if re.fullmatch(r"[0-9a-f]{64}", supplied_hash) else "NOT_PROVEN"
+        else:
+            raw_id = str(row.get("bridge_id") or "").strip()
+            bridge_hash = (
+                hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+                if raw_id and raw_id != "[REDACTED]" else "NOT_PROVEN"
+            )
+        raw_status = str(row.get("status") or "NOT_PROVEN").upper()
+        status = raw_status if raw_status in {"PASS", "FAIL", "NOT_PROVEN"} else "NOT_PROVEN"
+        if bridge_hash == "NOT_PROVEN":
+            status = "NOT_PROVEN"
+        safe_rows.append({
+            "schema": "bridge-ledger-projection/v1",
+            "request_id": request_id,
+            "round_id": round_id,
+            "bridge_id_hash": bridge_hash,
+            "status": status,
+            "projection_only": True,
+        })
+    return safe_rows[-MAX_REQUEST_IDS:]
+
+
 def _supabase_presentation_state(chat: dict) -> dict:
     """Keep display/history content alongside, but separate from, canonical IDs."""
     return {
@@ -4812,6 +5023,9 @@ def _supabase_presentation_state(chat: dict) -> dict:
         "request_ids": copy.deepcopy((chat.get("request_ids") or [])[-MAX_REQUEST_IDS:]),
         "history_identity_ledger": copy.deepcopy((chat.get("history_identity_ledger") or [])[-2000:]),
         "result_keys": copy.deepcopy((chat.get("result_keys") or [])[-2000:]),
+        # V24 Bridge rows are a compatibility index only; canonical evidence remains
+        # on the authoritative RequestRecord and is independently validated.
+        "bridge_ledger_v24": _safe_bridge_projection_for_storage(chat),
     }
 
 
@@ -4884,6 +5098,8 @@ def _supabase_load_saved_chats() -> None:
             chat["request_ids"] = view.get("request_ids") if isinstance(view.get("request_ids"), list) else []
             chat["history_identity_ledger"] = view.get("history_identity_ledger") if isinstance(view.get("history_identity_ledger"), list) else []
             chat["result_keys"] = view.get("result_keys") if isinstance(view.get("result_keys"), list) else []
+            # Hydrate the Bridge compatibility projection separately from canonical proof.
+            chat["bridge_ledger_v24"] = view.get("bridge_ledger_v24") if isinstance(view.get("bridge_ledger_v24"), list) else []
             chat["conversation_record"] = record
             _ensure_chat_identity_state(chat)
             commit_canonical_record(chat, st.session_state)
