@@ -6,8 +6,10 @@ perform provider calls or manufacture live execution records.
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 
+import main
 from conversation_store import rebuild_bridge_ledger_projection
 from production_platform import (
     _strict_live_bridge_evidence_complete,
@@ -118,3 +120,30 @@ def test_strict_live_audit_rejects_a_conflicting_runtime_cache():
     diagnostic = _strict_live_bridge_request_diagnostic(chat, request)
     assert diagnostic["status"] == "FAIL"
     assert diagnostic["failure_reasons"] == ["CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT"]
+
+
+def test_supabase_presentation_state_never_persists_raw_legacy_bridge_ids():
+    chat = {
+        "bridge_ledger_v24": [
+            {
+                "request_id": "r-legacy", "round_id": "c:r-legacy:r1",
+                "bridge_id": "RAW_LEGACY_BRIDGE_ID", "status": "PASS",
+            },
+            {
+                "request_id": "r-hash", "round_id": "c:r-hash:r1",
+                "bridge_id_hash": "a" * 64, "bridge_id": "RAW_SECOND_BRIDGE_ID",
+                "status": "PASS",
+            },
+        ]
+    }
+
+    rows = main._safe_bridge_projection_for_storage(chat)
+
+    assert len(rows) == 2
+    assert rows[0]["bridge_id_hash"] == hashlib.sha256(b"RAW_LEGACY_BRIDGE_ID").hexdigest()
+    assert rows[1]["bridge_id_hash"] == "a" * 64
+    assert all("bridge_id" not in row for row in rows)
+    serialized = json.dumps(rows, sort_keys=True)
+    assert "RAW_LEGACY_BRIDGE_ID" not in serialized
+    assert "RAW_SECOND_BRIDGE_ID" not in serialized
+
