@@ -4875,14 +4875,21 @@ def _safe_bridge_projection_for_storage(chat: dict) -> list[dict]:
         round_id = str(row.get("round_id") or row.get("canonical_round_record_id") or "").strip()
         if not request_id or not round_id:
             continue
-        bridge_hash = str(row.get("bridge_id_hash") or "").strip().lower()
-        if not re.fullmatch(r"[0-9a-f]{64}", bridge_hash):
+        supplied_hash = str(row.get("bridge_id_hash") or "").strip().lower()
+        if supplied_hash:
+            # A malformed explicit hash is a contradiction, not permission to
+            # replace it with a hash calculated from a legacy raw-ID field.
+            bridge_hash = supplied_hash if re.fullmatch(r"[0-9a-f]{64}", supplied_hash) else "NOT_PROVEN"
+        else:
             raw_id = str(row.get("bridge_id") or "").strip()
-            if not raw_id or raw_id == "[REDACTED]":
-                continue
-            bridge_hash = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+            bridge_hash = (
+                hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+                if raw_id and raw_id != "[REDACTED]" else "NOT_PROVEN"
+            )
         raw_status = str(row.get("status") or "NOT_PROVEN").upper()
         status = raw_status if raw_status in {"PASS", "FAIL", "NOT_PROVEN"} else "NOT_PROVEN"
+        if bridge_hash == "NOT_PROVEN":
+            status = "NOT_PROVEN"
         safe_rows.append({
             "schema": "bridge-ledger-projection/v1",
             "request_id": request_id,
