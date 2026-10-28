@@ -170,6 +170,9 @@ def test_supabase_presentation_state_never_persists_raw_legacy_bridge_ids():
 
 def _legacy_sidecar_chat():
     chat = _strict_canonical_chat(sidecar=True)
+    # Production canonical records are committed with top-level conversation identity.
+    chat["conversation_record"]["conversation_id"] = chat["conversation_id"]
+    chat["conversation_record"]["session_id"] = chat["session_id"]
     for request in chat["conversation_record"]["requests"]:
         rid = request["request_id"]
         ordinal = str(request["canonical_round_base"])
