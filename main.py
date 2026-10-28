@@ -4777,8 +4777,9 @@ def _hotfix16430_recover_canonical_bridge_evidence(chat: dict, request_id: str) 
     # Attach precisely the validated existing record; preserve all immutable identity fields.
     request_update = copy.deepcopy(request)
     request_update["bridge_runtime_evidence"] = copy.deepcopy(sidecar)
+    # canonical_upsert_request commits the complete canonical snapshot itself;
+    # do not perform a second commit/merge on the same evidence repair.
     canonical_upsert_request(chat, request_update, st.session_state)
-    commit_canonical_record(chat, st.session_state)
     stored_request = next(row for row in chat["conversation_record"]["requests"] if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid)
     if not _strict_live_bridge_evidence_complete(chat, stored_request):
         return {"status": "FAIL", "action": "EVIDENCE_ATTACHED_BUT_POST_COMMIT_VALIDATION_FAILED", "request_id": rid}
