@@ -58,9 +58,17 @@ def test_strict_live_bridge_uses_one_explicit_candidate_per_required_provider():
     }
 
     assert main._round_model_candidates("deepseek", candidates, True) == ("deepseek-flash",)
-    assert main._round_model_candidates("gemini", candidates, True) == ("gemini-3.8-flash",)
+    # Use only the explicitly configured Gemini candidate already shown to
+    # succeed in this account's canonical runtime records; do not cascade.
+    assert main._round_model_candidates("gemini", candidates, True) == ("gemini-3.6-flash",)
     assert main._round_model_candidates("claude", candidates, True) == ()
     assert main._round_model_candidates("grok", candidates, True) == ()
+
+
+def test_strict_bridge_fails_closed_if_known_gemini_model_is_not_explicitly_configured():
+    candidates = {"gemini": ("gemini-3.8-flash", "gemini-3.7-flash")}
+
+    assert main._round_model_candidates("gemini", candidates, True) == ()
 
 
 def test_normal_round_keeps_all_explicit_free_cascade_candidates():
