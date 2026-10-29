@@ -1,0 +1,95 @@
+name: Archive exact HOTFIX164.30 production baseline
+
+on:
+  push:
+    branches:
+      - archive/hotfix16430-baseline-20261029
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive-hotfix16430-baseline-20261029
+  cancel-in-progress: false
+
+jobs:
+  verify-and-publish:
+    name: Test exact production commit and publish permanent baseline assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASELINE_SHA: aa55bd6474b59288f962bb531801aac60e196624
+      RELEASE_TAG: HOTFIX164.30-BASELINE-2026-10-29
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact deployed production commit, not the archive-branch tip
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: aa55bd6474b59288f962bb531801aac60e196624
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source checkout is exactly the baseline SHA
+        run: |
+          test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
+          echo "BASELINE_SOURCE_COMMIT=$BASELINE_SHA"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Compile sources and run the complete regression suite
+        run: |
+          python -m compileall -q .
+          python -m pytest -q
+
+      - name: Build and verify archive and SHA-256 sidecar
+        run: |
+          mkdir -p dist
+          python build_release.py --output dist/HOTFIX164.30_BASELINE_PROJECT.zip
+          (cd dist && sha256sum -c HOTFIX164.30_BASELINE_PROJECT.zip.sha256)
+          unzip -t dist/HOTFIX164.30_BASELINE_PROJECT.zip
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          archive = Path("dist/HOTFIX164.30_BASELINE_PROJECT.zip")
+          sidecar = Path(str(archive) + ".sha256")
+          manifest = Path("RELEASE_MANIFEST.json")
+          if not manifest.is_file():
+              raise SystemExit("RELEASE_MANIFEST_MISSING")
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          expected = f"{digest}  {archive.name}"
+          if sidecar.read_text(encoding="utf-8").strip() != expected:
+              raise SystemExit("BASELINE_SHA256_SIDECAR_MISMATCH")
+          print("BASELINE_ARCHIVE_SHA256=" + digest)
+          print("BASELINE_ARCHIVE_BYTES=" + str(archive.stat().st_size))
+          print("BASELINE_RELEASE_MANIFEST=PASS")
+          print("BASELINE_ZIP_INTEGRITY=PASS")
+          PY
+
+      - name: Refuse to overwrite any existing release/tag
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "BASELINE_ARCHIVE_ABORTED: release/tag already exists; refusing to overwrite."
+            exit 1
+          fi
+
+      - name: Publish permanent archive, detached SHA-256, and release manifest
+        run: |
+          gh release create "$RELEASE_TAG" \
+            dist/HOTFIX164.30_BASELINE_PROJECT.zip \
+            dist/HOTFIX164.30_BASELINE_PROJECT.zip.sha256 \
+            RELEASE_MANIFEST.json \
+            --target "$BASELINE_SHA" \
+            --title "AI Council HOTFIX164.30 Production Baseline" \
+            --notes "Verified archival build from exact deployed production commit $BASELINE_SHA. The full offline regression suite, ZIP integrity check, and detached SHA-256 sidecar check passed before publishing. This release is a preserved baseline; it does not claim all future roadmap features are complete."
