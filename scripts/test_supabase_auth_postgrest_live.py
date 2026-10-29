@@ -36,11 +36,13 @@ from supabase_auth import SupabaseAuthClient
 from supabase_conversation_repository import SupabaseConversationRepository, _checksum
 
 
-def required(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
+def required(name: str, *, strip: bool = True) -> str:
+    value = os.environ.get(name, "")
+    if not value.strip():
         raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+    # Passwords are opaque secrets: preserve every character supplied via
+    # GitHub Actions instead of silently trimming leading/trailing whitespace.
+    return value.strip() if strip else value
 
 
 def canonical_record(conversation_id: str) -> dict:
@@ -96,17 +98,35 @@ def main() -> int:
     project_url = required("SUPABASE_URL")
     publishable_key = required("SUPABASE_PUBLISHABLE_KEY")
     email_a = required("SUPABASE_TEST_USER_A_EMAIL")
-    password_a = required("SUPABASE_TEST_USER_A_PASSWORD")
+    password_a = required("SUPABASE_TEST_USER_A_PASSWORD", strip=False)
     email_b = required("SUPABASE_TEST_USER_B_EMAIL")
-    password_b = required("SUPABASE_TEST_USER_B_PASSWORD")
+    password_b = required("SUPABASE_TEST_USER_B_PASSWORD", strip=False)
 
     auth = SupabaseAuthClient(supabase_url=project_url, publishable_key=publishable_key)
+
+    # Show the target project and failure stage without revealing emails,
+    # passwords, API keys, or tokens. This helps separate project mismatch from
+    # an account-specific Auth rejection.
+    from urllib.parse import urlsplit
+    target_host = urlsplit(project_url).hostname or ""
+    target_ref = target_host.split(".", 1)[0]
+    print(f"LIVE_AUTH_TARGET_PROJECT_REF={target_ref}")
 
     # The separate signup phase creates these disposable accounts first. This
     # phase deliberately performs password login and refresh only, so it can be
     # rerun after email confirmation without attempting to register duplicates.
-    session_a = auth.sign_in(email_a, password_a)
-    session_b = auth.sign_in(email_b, password_b)
+    try:
+        session_a = auth.sign_in(email_a, password_a)
+    except Exception as exc:
+        print(f"LIVE_AUTH_SIGN_IN_A=FAIL ({exc.__class__.__name__})", file=sys.stderr)
+        raise
+    print("LIVE_AUTH_SIGN_IN_A=PASS")
+    try:
+        session_b = auth.sign_in(email_b, password_b)
+    except Exception as exc:
+        print(f"LIVE_AUTH_SIGN_IN_B=FAIL ({exc.__class__.__name__})", file=sys.stderr)
+        raise
+    print("LIVE_AUTH_SIGN_IN_B=PASS")
     assert_live(session_a.user_id != session_b.user_id, "Auth returns two distinct verified user identities")
 
     session_a = auth.refresh_session(session_a.refresh_token)
