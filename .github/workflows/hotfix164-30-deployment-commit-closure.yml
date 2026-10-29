@@ -1,6 +1,12 @@
 name: HOTFIX164.30 Deployed Commit-Bound Live Closure
 
 on:
+  push:
+    branches:
+      - 'evidence/hotfix16430-live-closure-20261028-201531utc'
+    paths:
+      - 'evidence/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json'
+      - '.github/workflows/hotfix164-30-deployment-commit-closure.yml'
   workflow_dispatch:
     inputs:
       evidence_path:
@@ -35,7 +41,7 @@ jobs:
       - name: Save fresh app-exported report before checking out deployed source
         id: report
         env:
-          EVIDENCE_PATH: ${{ inputs.evidence_path }}
+          EVIDENCE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.evidence_path || 'evidence/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json' }}
           FALLBACK_COMMIT: ${{ inputs.deployed_commit_sha }}
         run: |
           test -f "$EVIDENCE_PATH"
