@@ -145,6 +145,14 @@ def build_report(
                 "cancelled": sum(
                     str(r.get("conclusion") or "").lower() in CANCELLED_CONCLUSIONS for r in recent_ci_runs
                 ),
+                "latest_failures": sorted(
+                    (
+                        _run_projection(r) for r in recent_ci_runs
+                        if str(r.get("conclusion") or "").lower() in FAILURE_CONCLUSIONS
+                    ),
+                    key=lambda r: str(r.get("created_at") or ""),
+                    reverse=True,
+                )[:10],
             },
         },
         "workflows": {
