@@ -74,6 +74,41 @@ jobs:
       - name: Install minimal HTTP dependency
         run: python -m pip install "requests>=2.31,<3"
 
+      - name: Diagnose credential-secret metadata without revealing values
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+
+          def mask_email(value):
+              value = value.strip()
+              if "@" not in value:
+                  return "<invalid-email-format>"
+              local, domain = value.split("@", 1)
+              if len(local) <= 3:
+                  visible = local[:1] + "*" * max(0, len(local) - 1)
+              else:
+                  visible = local[:2] + "*" * (len(local) - 4) + local[-2:]
+              return f"{visible}@{domain.lower()}"
+
+          email_a = os.environ.get("SUPABASE_TEST_USER_A_EMAIL", "")
+          email_b = os.environ.get("SUPABASE_TEST_USER_B_EMAIL", "")
+          password_a = os.environ.get("SUPABASE_TEST_USER_A_PASSWORD", "")
+          password_b = os.environ.get("SUPABASE_TEST_USER_B_PASSWORD", "")
+
+          print("LIVE_AUTH_SECRET_DIAGNOSTICS_BEGIN")
+          print("A_EMAIL_MASKED=" + mask_email(email_a))
+          print("B_EMAIL_MASKED=" + mask_email(email_b))
+          print("EMAILS_DISTINCT_CASE_INSENSITIVE=" + str(email_a.strip().casefold() != email_b.strip().casefold()))
+          for label, password in (("A", password_a), ("B", password_b)):
+              print(f"{label}_PASSWORD_LENGTH={len(password)}")
+              print(f"{label}_PASSWORD_HAS_EDGE_WHITESPACE={password != password.strip()}")
+              print(f"{label}_PASSWORD_HAS_CR_OR_LF={chr(10) in password or chr(13) in password}")
+              print(f"{label}_PASSWORD_HAS_TAB={chr(9) in password}")
+          print("PASSWORD_SECRETS_DISTINCT=" + str(password_a != password_b))
+          print("LIVE_AUTH_SECRET_DIAGNOSTICS_END")
+          PY
+
       - name: Run real Auth signup smoke test
         if: ${{ inputs.phase == 'signup' }}
         run: PYTHONPATH=. python scripts/test_supabase_auth_signup_live.py
