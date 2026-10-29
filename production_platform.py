@@ -117,6 +117,38 @@ def _canonical_strict_live_bridge_evidence(
     return evidence, ""
 
 
+def _strict_live_bridge_cache_conflict_fields(chat: dict[str, Any], request_record: dict[str, Any] | None) -> list[str]:
+    """Expose only safe evidence field names when the runtime cache conflicts.
+
+    Field names help operators repair the writer/commit path; evidence values,
+    Bridge IDs, hashes, prompts, payloads, and provider bodies remain undisclosed.
+    """
+    rid = str((request_record or {}).get("request_id") or "").strip()
+    if not rid:
+        return []
+    canonical = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    rows = [
+        row for row in (canonical.get("requests", []) if isinstance(canonical.get("requests"), list) else [])
+        if isinstance(row, dict) and str(row.get("request_id") or "").strip() == rid
+    ]
+    if len(rows) != 1:
+        return []
+    evidence = rows[0].get("bridge_runtime_evidence")
+    cache_store = chat.get("bridge_runtime_evidence_store")
+    cached = cache_store.get(rid) if isinstance(cache_store, dict) else None
+    if not isinstance(evidence, dict) or not isinstance(cached, dict) or not cached:
+        return []
+    compare_fields = set(cached).intersection(evidence)
+    conflicts = [
+        str(key) for key in compare_fields
+        if cached.get(key) not in (None, "", [], {})
+        and str(cached.get(key)) != str(evidence.get(key) or "")
+    ]
+    # Evidence keys are application-defined identifiers, not values. Restrict the
+    # diagnostic to ordinary identifier tokens as an additional redaction guard.
+    return sorted(key for key in conflicts if __import__("re").fullmatch(r"[a-z][a-z0-9_]{0,63}", key))
+
+
 @dataclass
 class ConversationStore:
     """Session-owned persistence with deterministic export/import shape."""
@@ -1302,6 +1334,7 @@ def _strict_live_bridge_request_diagnostic(chat: dict[str, Any], request_record:
         "canonical_round_binding_status": "NOT_PROVEN",
         "missing_evidence": [],
         "failure_reasons": [],
+        "conflicting_cache_fields": [],
     }
     if not rid:
         result["missing_evidence"] = ["REQUEST_ID"]
@@ -1316,6 +1349,8 @@ def _strict_live_bridge_request_diagnostic(chat: dict[str, Any], request_record:
                 result["failure_reasons"] = ["REQUEST_ID_MISMATCH"]
             else:
                 result["failure_reasons"] = [evidence_error]
+                if evidence_error == "CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT":
+                    result["conflicting_cache_fields"] = _strict_live_bridge_cache_conflict_fields(chat, request_record)
         else:
             result["missing_evidence"] = [evidence_error or "APPLICATION_OWNED_BRIDGE_RUNTIME_RECORD"]
         return result
