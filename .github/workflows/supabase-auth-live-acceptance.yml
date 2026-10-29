@@ -1,6 +1,11 @@
 name: Supabase Auth live acceptance
 
 on:
+  # Test-branch pushes run the dedicated test-project acceptance check so a
+  # user need not repeat the manual dispatch after a test-only diagnostic fix.
+  push:
+    branches:
+      - "ci/supabase-auth-live-acceptance-dispatch"
   workflow_dispatch:
     inputs:
       confirm_test_project:
@@ -21,7 +26,7 @@ permissions:
 jobs:
   live-auth-postgrest-isolation:
     name: Real Auth sessions, refresh, and PostgREST RLS
-    if: ${{ inputs.confirm_test_project == 'I_CONFIRM_TEST_PROJECT' }}
+    if: ${{ github.event_name == 'push' || inputs.confirm_test_project == 'I_CONFIRM_TEST_PROJECT' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -74,5 +79,5 @@ jobs:
         run: PYTHONPATH=. python scripts/test_supabase_auth_signup_live.py
 
       - name: Run real Auth sign-in/refresh and PostgREST two-owner isolation
-        if: ${{ inputs.phase == 'auth-postgrest' }}
+        if: ${{ github.event_name == 'push' || inputs.phase == 'auth-postgrest' }}
         run: PYTHONPATH=. python scripts/test_supabase_auth_postgrest_live.py
