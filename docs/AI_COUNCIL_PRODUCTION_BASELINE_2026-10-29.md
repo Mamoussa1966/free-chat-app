@@ -22,18 +22,26 @@ This record pins the stable production source before follow-on work. It does not
 - Workflow log asserted `HOTFIX164.30_DEPLOYED_COMMIT_FINAL_CLOSURE=PASS`.
 - The closure workflow ran on the evidence branch; it did not update the production branch.
 
-## Retained release candidate artifact and checksum
+## Permanent release archive and SHA-256
 
-The verified candidate is currently stored as a GitHub Actions artifact:
+The exact production baseline was archived after a separate successful verification workflow:
 
+- Permanent GitHub Release: https://github.com/Mamoussa1966/free-chat-app/releases/tag/HOTFIX164.30-BASELINE-2026-10-29
+- Release tag: `HOTFIX164.30-BASELINE-2026-10-29`
+- Archival workflow: https://github.com/Mamoussa1966/free-chat-app/actions/runs/40810998432
+- Archival workflow result: `success`
+- The workflow checked out and verified exactly `aa55bd6474b59288f962bb531801aac60e196624`, then passed compilation, the complete offline regression suite, ZIP integrity and the detached SHA-256 sidecar check.
+- Archive: [HOTFIX164.30_BASELINE_PROJECT.zip](https://github.com/Mamoussa1966/free-chat-app/releases/download/HOTFIX164.30-BASELINE-2026-10-29/HOTFIX164.30_BASELINE_PROJECT.zip)
+- Archive size: `798857` bytes
+- Archive SHA-256: `cc8f521510a1e9a674dda2d55a938d07ff85b59a18db71b1567bee43c9ea744c`
+- Detached checksum: [HOTFIX164.30_BASELINE_PROJECT.zip.sha256](https://github.com/Mamoussa1966/free-chat-app/releases/download/HOTFIX164.30-BASELINE-2026-10-29/HOTFIX164.30_BASELINE_PROJECT.zip.sha256)
+- Release manifest: [RELEASE_MANIFEST.json](https://github.com/Mamoussa1966/free-chat-app/releases/download/HOTFIX164.30-BASELINE-2026-10-29/RELEASE_MANIFEST.json)
+
+The separate verified-closure Actions artifact remains available as secondary evidence until `2026-11-28`:
 - Artifact name: `HOTFIX164.30-deployed-commit-closure-verified-candidate`
 - Artifact ID: `12868926545`
-- Archive size: `758508` bytes
 - GitHub artifact digest: `sha256:cbfbbba89eb8d0fea42d4a56185da291532086ff43d760686e5476e4cf98a233`
-- Download/inspection entry point: https://github.com/Mamoussa1966/free-chat-app/actions/runs/40807383965
-- Expiry: `2026-11-28T02:37:36Z`
-
-**Retention limitation:** this verified candidate is time-limited, not a permanent release asset. A durable GitHub Release containing the archive and its `.sha256` sidecar is still required to complete long-term archival. Do not treat an expiring Actions artifact as permanent backup.
+- Workflow: https://github.com/Mamoussa1966/free-chat-app/actions/runs/40807383965
 
 The accompanying diagnostic artifact is `12868757566`, digest `sha256:895e609c20a15ceece9e9e5e6d72549b42a43da1fbab418c72aebaf9fa2a8845`, also expiring on `2026-11-28`.
 
