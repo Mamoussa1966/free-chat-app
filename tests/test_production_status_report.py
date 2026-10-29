@@ -174,3 +174,24 @@ def test_collect_report_paginates_all_recent_ci_runs():
     assert result["workflows"]["last_30_days"]["runs_seen"] == 102
     assert result["workflows"]["last_30_days"]["failures"] == 1
 
+
+def test_failure_in_another_workflow_warns_even_if_exact_commit_ci_passes():
+    ci_run = _run(120, PRODUCTION_SHA, conclusion="success")
+    other_failure = _run(
+        121,
+        "b" * 40,
+        conclusion="failure",
+        path=".github/workflows/supabase-rls-tests.yml",
+    )
+    result = report.build_report(
+        _branch(),
+        {"workflow_runs": [ci_run]},
+        {"workflow_runs": []},
+        all_workflow_data={"workflow_runs": [ci_run, other_failure]},
+        now=NOW,
+    )
+
+    assert result["ci"]["current_commit_status"] == "PASS"
+    assert result["workflows"]["last_30_days"]["failures"] == 1
+    assert result["report_status"] == "WARN"
+
