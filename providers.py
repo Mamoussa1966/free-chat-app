@@ -740,6 +740,27 @@ def _take_runtime_payload_attestation() -> dict:
     _RUNTIME_ATTESTATION_LOCAL.value = {}
     return value
 
+
+def _mark_runtime_transport_attempt(
+    status: str,
+    response_received: bool,
+    status_code: Optional[int] = None,
+    error_class: str = "",
+) -> None:
+    """Attach safe outcome metadata to the exact prepared-body attestation."""
+    record = getattr(_RUNTIME_ATTESTATION_LOCAL, "value", {}) or {}
+    if not isinstance(record, dict) or not record:
+        return
+    record["transport_attempt_status"] = str(status or "NOT_PROVEN")
+    record["transport_response_received"] = bool(response_received)
+    record["transport_http_status_code"] = (
+        int(status_code) if status_code is not None else None
+    )
+    if error_class:
+        record["transport_error_class"] = str(error_class)
+    _RUNTIME_ATTESTATION_LOCAL.value = record
+
+
 def _runtime_payload_attestation(url: str, payload: dict, prepared_body=None) -> dict:
     """Attest the exact prepared HTTP body supplied to requests.post(data=...).
 
@@ -789,6 +810,7 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
             )
         except requests.Timeout as exc:
             last = ProviderError("network timeout", error_class="timeout")
+            _mark_runtime_transport_attempt("NETWORK_TIMEOUT", False, error_class="timeout")
             if attempt < retry_budget and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
                 delay = _retry_delay(None, attempt)
                 if deadline is not None:
@@ -799,6 +821,7 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
             raise last from exc
         except requests.RequestException as exc:
             last = ProviderError(f"network error: {exc.__class__.__name__}", error_class="network")
+            _mark_runtime_transport_attempt("NETWORK_ERROR", False, error_class="network")
             if attempt < retry_budget and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
                 delay = min(_retry_delay(None, attempt), max(0.0, (_remaining(deadline) or 0) - 0.05)) if deadline is not None else _retry_delay(None, attempt)
                 if delay > 0:
@@ -809,6 +832,7 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
         if response.status_code >= 400:
             body = _sanitize(response.text[:1600])
             last = ProviderError(f"HTTP {response.status_code}: {body or 'empty error body'}", response.status_code, _classify(response.status_code, body))
+            _mark_runtime_transport_attempt("HTTP_ERROR", True, response.status_code, last.error_class)
             if _retryable(response.status_code, body) and attempt < retry_budget and (_remaining(deadline) is None or (_remaining(deadline) or 0) > 0.2):
                 delay = _retry_delay(response, attempt)
                 if deadline is not None:
@@ -817,6 +841,7 @@ def _post(url: str, headers: dict, payload: dict, timeout: Optional[float] = Non
                     time.sleep(delay)
                 continue
             raise last
+        _mark_runtime_transport_attempt("HTTP_RESPONSE_RECEIVED", True, response.status_code)
         try:
             data = response.json()
         except ValueError as exc:
@@ -1404,6 +1429,40 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     def _should_continue_cascade(exc: ProviderError, classification: str, index: int) -> bool:
         return _cascade_decision(exc, classification, index)[0] == "CASCADE_CONTINUE"
 
+    def _failed_runtime_attestation(exc: ProviderError, attempted_model: str) -> dict:
+        # Drain the thread-local record on every failure to prevent cross-attempt
+        # reuse. Only Gemini strict-closure diagnostics retain failed target-body
+        # metadata; a failed attempt is explicitly never attached to a successful
+        # provider response and therefore cannot satisfy the live Bridge gate.
+        captured = _take_runtime_payload_attestation()
+        if (
+            str(seat.key or "").lower() != "gemini"
+            or not isinstance(captured, dict)
+            or not isinstance(captured.get("payload_json"), str)
+            or not captured
+        ):
+            return {}
+        checked = dict(captured)
+        checked.update({
+            "request_id": str(request_id or ""),
+            "round_no": int(round_no),
+            "seat_key": str(seat.key or "").lower(),
+            "seat_slot": int(getattr(seat, "room_slot", 0) or 0),
+            "executed_model": str(attempted_model or "").strip(),
+            "transport_response_attached": False,
+        })
+        if checked.get("transport_http_status_code") in (None, "") and exc.status_code is not None:
+            checked["transport_http_status_code"] = int(exc.status_code)
+            checked["transport_response_received"] = True
+        if not str(checked.get("transport_attempt_status") or "").strip():
+            checked["transport_attempt_status"] = (
+                "HTTP_ERROR" if exc.status_code is not None else "TRANSPORT_FAILED"
+            )
+        if not str(checked.get("transport_error_class") or "").strip():
+            checked["transport_error_class"] = str(exc.error_class or "provider_error")
+        return checked
+
+    failed_runtime_attestation: dict = {}
     for index, model in enumerate(candidates):
         if seat_deadline is not None and (_remaining(seat_deadline) or 0) <= 0:
             last_error = ProviderError("execution deadline exceeded", error_class="deadline_exceeded")
@@ -1506,6 +1565,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             result["output_schema_valid"] = True
             return result
         except ProviderError as exc:
+            failed_runtime_attestation = _failed_runtime_attestation(exc, executed_model)
             last_error = exc
             classification = _canonical_error_classification(exc.error_class)
             cascade_action, cascade_reason = _cascade_decision(exc, classification, index)
@@ -1545,6 +1605,7 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             internal = _classify(status_code, text)
             normalized = _canonical_error_classification(internal)
             wrapped = ProviderError(text or exc.__class__.__name__, status_code, internal)
+            failed_runtime_attestation = _failed_runtime_attestation(wrapped, executed_model)
             last_error = wrapped
             cascade_action, cascade_reason = _cascade_decision(wrapped, normalized, index)
             attempt_diagnostics.append({
@@ -1572,7 +1633,13 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
             if cascade_action == "CASCADE_STOP":
                 break
 
-    return _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
+    failure_result = _result(seat, "FAILED", attempted[-1] if attempted else candidates[0], "", _diagnostic(last_error, credential), started, attempted, request_id=request_id, round_no=round_no, attempt_diagnostics=attempt_diagnostics)
+    if failed_runtime_attestation:
+        # The caller strips these transient fields before persistence/UI history.
+        # The payload itself is never copied into the exported runtime record.
+        failure_result["_provider_input_prompt"] = str(locals().get("provider_prompt") or "")
+        failure_result["_runtime_payload_attestation"] = failed_runtime_attestation
+    return failure_result
 
 
 def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:
