@@ -122,7 +122,9 @@ def build_report(
     return {
         "schema": "ai-council-production-status-report/v1",
         "generated_at_utc": now.isoformat().replace("+00:00", "Z"),
-        "report_status": "PASS" if current_ci_status == "PASS" else "WARN",
+        "report_status": (
+            "PASS" if current_ci_status == "PASS" and not workflow_failures else "WARN"
+        ),
         "report_is_read_only": True,
         "production": {
             "branch": production_branch,
