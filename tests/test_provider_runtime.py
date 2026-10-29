@@ -79,3 +79,98 @@ def test_hotfix16428_transport_sends_only_the_attested_prepared_body():
     assert hashlib.sha256(body).hexdigest() == attestation["payload_sha256"]
     assert body == attestation["payload_json"].encode("utf-8")
     assert json.loads(body) == payload
+
+def test_hotfix16430_failed_gemini_transport_exports_attempt_metadata_without_passing():
+    import hashlib
+    import json
+    import main
+
+    seat = next(s for s in providers.get_seats() if s.key == "gemini")
+    request_id = "hotfix16430-failed-gemini-r1"
+    endpoint = "https://example.invalid/v1beta/models/gemini-3.6-flash:generateContent"
+    payload_json = json.dumps(
+        {"contents": [{"role": "user", "parts": [{"text": "safe diagnostic"}]}]},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload_bytes = payload_json.encode("utf-8")
+
+    def fail_after_http_503(*args, **kwargs):
+        providers._RUNTIME_ATTESTATION_LOCAL.value = {
+            "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+            "payload_bytes": len(payload_bytes),
+            "endpoint_sha256": hashlib.sha256(endpoint.encode("utf-8")).hexdigest(),
+            "payload_json": payload_json,
+            "transport_boundary": "requests.PreparedRequest.body",
+            "prepared_request_verified": True,
+            "transport_attempt_status": "HTTP_ERROR",
+            "transport_response_received": True,
+            "transport_http_status_code": 503,
+            "transport_error_class": "transient_provider_error",
+        }
+        raise ProviderError(
+            "HTTP 503: temporary service issue",
+            503,
+            "transient_provider_error",
+        )
+
+    with patch("providers.call_official", side_effect=fail_after_http_503):
+        result = providers.call_seat(
+            seat,
+            "safe diagnostic",
+            "",
+            1,
+            False,
+            "test-credential",
+            attachments=[],
+            model_candidates=("gemini-3.6-flash",),
+            request_id=request_id,
+        )
+
+    assert result["status"] == "FAILED"
+    attestation = result["_runtime_payload_attestation"]
+    assert attestation["payload_sha256"] == hashlib.sha256(payload_bytes).hexdigest()
+    assert attestation["payload_bytes"] == len(payload_bytes)
+    assert attestation["executed_model"] == "gemini-3.6-flash"
+    assert attestation["transport_attempt_status"] == "HTTP_ERROR"
+    assert attestation["transport_http_status_code"] == 503
+    assert attestation["transport_error_class"] == "transient_provider_error"
+    assert attestation["transport_response_attached"] is False
+    assert attestation["request_id"] == request_id
+    assert attestation["round_no"] == 1
+    assert attestation["seat_key"] == "gemini"
+    assert attestation["seat_slot"] == 2
+
+    bridge = main.SharedContextBridge(
+        request_id=request_id,
+        round_no=1,
+        strict_live_source=True,
+    )
+    bridge._runtime_bridge_evidence["canonical_round_id"] = f"conversation:{request_id}:r1"
+    bridge.record_provider_input(seat, "safe diagnostic")
+    bridge.record_runtime_payload_attestation(seat, attestation)
+    checked = bridge._runtime_payload_attestations[2]
+    assert checked["request_identity_binding_status"] == "PASS"
+    assert checked["round_identity_binding_status"] == "PASS"
+    assert checked["target_identity_binding_status"] == "PASS"
+    assert checked["transport_response_binding_status"] == "NOT_PROVEN"
+    assert checked["canonical_round_binding_status"] == "PASS"
+    assert checked["integrity_valid"] is False
+
+    runtime_record = bridge.runtime_evidence_record()
+    exported = main._hotfix16429_export_runtime_http_attestation(
+        runtime_record, request_id, "1"
+    )
+    assert exported["payload_sha256"] == hashlib.sha256(payload_bytes).hexdigest()
+    assert exported["payload_bytes"] == len(payload_bytes)
+    assert exported["transport_attempt_status"] == "HTTP_ERROR"
+    assert exported["transport_http_status_code"] == 503
+    assert exported["transport_error_class"] == "transient_provider_error"
+    assert exported["http_payload_attested"] == "NO"
+    assert exported["payload_hash_integrity"] == "FAIL"
+    assert exported["response_binding_status"] == "NOT_PROVEN"
+    serialized = json.dumps(runtime_record, sort_keys=True)
+    assert payload_json not in serialized
+    assert "safe diagnostic" not in serialized
+
