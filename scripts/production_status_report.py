@@ -170,14 +170,37 @@ def collect_report(
     if get_json is None:
         def get_json(path: str) -> dict[str, Any]:
             return _api_get(path, api_base_url=api_base_url, token=token)
+    report_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     branch_data = get_json(f"{repo_path}/branches/{branch}")
-    ci_data = get_json(f"{repo_path}/actions/workflows/ci.yml/runs?branch={branch}&per_page=100")
+
+    # Ask GitHub for the rolling 30-day window and paginate it. A single
+    # per_page=100 response is not enough to claim complete failure counts in
+    # a repository with frequent pushes. Fail closed rather than silently
+    # truncating the report if the API returns more than 10,000 matching runs.
+    cutoff = (report_now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    created_filter = quote(">=" + cutoff, safe="")
+    all_ci_runs: list[dict[str, Any]] = []
+    for page in range(1, 101):
+        ci_page = get_json(
+            f"{repo_path}/actions/workflows/ci.yml/runs"
+            f"?branch={branch}&created={created_filter}&per_page=100&page={page}"
+        )
+        page_runs = ci_page.get("workflow_runs", [])
+        if not isinstance(page_runs, list):
+            raise RuntimeError("GitHub CI workflow-runs response omitted workflow_runs")
+        all_ci_runs.extend(run for run in page_runs if isinstance(run, dict))
+        if len(page_runs) < 100:
+            break
+    else:
+        raise RuntimeError("More than 10,000 CI runs exist in the 30-day window; report refused to truncate")
+
+    ci_data = {"workflow_runs": all_ci_runs}
     closure_data = get_json(
         f"{repo_path}/actions/workflows/hotfix164-30-deployment-commit-closure.yml/runs?per_page=20"
     )
     return build_report(
         branch_data, ci_data, closure_data,
-        production_branch=production_branch, now=now,
+        production_branch=production_branch, now=report_now,
     )
 
 
