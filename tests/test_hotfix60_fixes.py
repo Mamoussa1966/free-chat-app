@@ -7,16 +7,22 @@ from providers import ProviderError, call_seat
 
 
 def test_failed_result_exposes_safe_public_classification():
+    # Keep the unit test deterministic and offline: a synthetic 503 response
+    # exercises the public transient-provider classification without making a
+    # real request to DeepSeek or relying on external network state.
     seat = next(s for s in providers.get_seats() if s.key == "deepseek")
-    result = call_seat(
-        seat, "hello", "", 1, False, "TEST_KEY", [],
-        ("deepseek-v4-flash",), request_id="hf60-classification"
-    )
+    with patch(
+        "providers.call_official",
+        side_effect=ProviderError("synthetic upstream server error", 503, "transient_provider_error"),
+    ) as mocked:
+        result = call_seat(
+            seat, "hello", "", 1, False, "TEST_KEY", [],
+            ("deepseek-v4-flash",), request_id="hf60-classification"
+        )
+    assert mocked.call_count == 1
     assert result["status"] == "FAILED"
-    assert result["classification"] in {
-        "API_ERROR", "NETWORK_ERROR", "TIMEOUT", "AUTHENTICATION_ERROR",
-        "QUOTA_EXCEEDED", "RATE_LIMITED", "MODEL_UNAVAILABLE", "UNKNOWN",
-    }
+    assert result["classification"] == "TRANSIENT_PROVIDER_ERROR"
+    assert "TEST_KEY" not in repr(result)
 
 
 def test_missing_credential_is_authentication_classification():
