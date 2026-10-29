@@ -120,6 +120,8 @@ def test_strict_live_audit_rejects_a_conflicting_runtime_cache():
     diagnostic = _strict_live_bridge_request_diagnostic(chat, request)
     assert diagnostic["status"] == "FAIL"
     assert diagnostic["failure_reasons"] == ["CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT"]
+    assert diagnostic["conflicting_cache_fields"] == ["bridge_id_hash"]
+    assert "f" * 64 not in json.dumps(diagnostic)
 
 
 
@@ -133,6 +135,8 @@ def test_strict_live_audit_does_not_ignore_conflicting_cache_safety_flags():
     diagnostic = _strict_live_bridge_request_diagnostic(chat, request)
     assert diagnostic["status"] == "FAIL"
     assert diagnostic["failure_reasons"] == ["CANONICAL_RUNTIME_EVIDENCE_CACHE_CONFLICT"]
+    assert diagnostic["conflicting_cache_fields"] == ["control_plane_identity_leak"]
+    assert "YES" not in json.dumps(diagnostic)
 
 
 def test_supabase_presentation_state_never_persists_raw_legacy_bridge_ids():
