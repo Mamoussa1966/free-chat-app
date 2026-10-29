@@ -115,27 +115,56 @@ def main() -> int:
     # The separate signup phase creates these disposable accounts first. This
     # phase deliberately performs password login and refresh only, so it can be
     # rerun after email confirmation without attempting to register duplicates.
-    try:
-        session_a = auth.sign_in(email_a, password_a)
-    except SupabaseAuthError as exc:
-        # SupabaseAuthError messages are authored safe summaries; they never
-        # include response bodies, passwords, API keys, or session tokens.
-        print(f"LIVE_AUTH_SIGN_IN_A=FAIL ({exc.__class__.__name__}: {exc})", file=sys.stderr)
-        raise
-    except Exception as exc:
-        print(f"LIVE_AUTH_SIGN_IN_A=FAIL ({exc.__class__.__name__})", file=sys.stderr)
-        raise
-    print("LIVE_AUTH_SIGN_IN_A=PASS")
-    try:
-        session_b = auth.sign_in(email_b, password_b)
-    except SupabaseAuthError as exc:
-        # Keep diagnostics actionable without logging raw provider responses.
-        print(f"LIVE_AUTH_SIGN_IN_B=FAIL ({exc.__class__.__name__}: {exc})", file=sys.stderr)
-        raise
-    except Exception as exc:
-        print(f"LIVE_AUTH_SIGN_IN_B=FAIL ({exc.__class__.__name__})", file=sys.stderr)
-        raise
-    print("LIVE_AUTH_SIGN_IN_B=PASS")
+    # Try the declared mapping first. If one login fails, try the other test
+    # password for that same email once; the two test emails are easy to swap,
+    # and this can safely recover that configuration mistake without exposing
+    # either password or changing any account.
+    def safe_sign_in(label: str, email: str, password: str, *, alternate: bool = False):
+        suffix = "_ALTERNATE_PASSWORD" if alternate else ""
+        try:
+            session = auth.sign_in(email, password)
+        except SupabaseAuthError as exc:
+            print(
+                f"LIVE_AUTH_SIGN_IN_{label}{suffix}=FAIL "
+                f"({exc.__class__.__name__}: {exc})",
+                file=sys.stderr,
+            )
+            return None
+        except Exception as exc:
+            print(
+                f"LIVE_AUTH_SIGN_IN_{label}{suffix}=FAIL ({exc.__class__.__name__})",
+                file=sys.stderr,
+            )
+            return None
+        print(f"LIVE_AUTH_SIGN_IN_{label}{suffix}=PASS")
+        return session
+
+    session_a = safe_sign_in("A", email_a, password_a)
+    session_b = safe_sign_in("B", email_b, password_b)
+    used_alternate = False
+
+    # Only retry failed user/email pairs, at most once each, with the other
+    # configured test password. Successful normal sessions are never replaced.
+    if session_a is None and password_b != password_a:
+        session_a = safe_sign_in("A", email_a, password_b, alternate=True)
+        used_alternate = session_a is not None or used_alternate
+    if session_b is None and password_a != password_b:
+        session_b = safe_sign_in("B", email_b, password_a, alternate=True)
+        used_alternate = session_b is not None or used_alternate
+
+    if session_a is None or session_b is None:
+        print(
+            "LIVE_AUTH_CREDENTIAL_MAPPING=FAIL; one or both test email/password "
+            "pairs were rejected, including alternate pairing attempts",
+            file=sys.stderr,
+        )
+        print("LIVE_AUTH_POSTGREST_RLS=FAIL (Auth gate)", file=sys.stderr)
+        return 1
+
+    print(
+        "LIVE_AUTH_CREDENTIAL_MAPPING="
+        + ("ALTERNATE_PASSWORD_USED" if used_alternate else "DECLARED_MAPPING")
+    )
     assert_live(session_a.user_id != session_b.user_id, "Auth returns two distinct verified user identities")
 
     session_a = auth.refresh_session(session_a.refresh_token)
