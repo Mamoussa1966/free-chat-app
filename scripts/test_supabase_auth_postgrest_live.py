@@ -32,7 +32,7 @@ import uuid
 import requests
 
 from conversation_repository import AccountIdentity, OwnedConversationSnapshot
-from supabase_auth import SupabaseAuthClient
+from supabase_auth import SupabaseAuthClient, SupabaseAuthError
 from supabase_conversation_repository import SupabaseConversationRepository, _checksum
 
 
@@ -117,12 +117,21 @@ def main() -> int:
     # rerun after email confirmation without attempting to register duplicates.
     try:
         session_a = auth.sign_in(email_a, password_a)
+    except SupabaseAuthError as exc:
+        # SupabaseAuthError messages are authored safe summaries; they never
+        # include response bodies, passwords, API keys, or session tokens.
+        print(f"LIVE_AUTH_SIGN_IN_A=FAIL ({exc.__class__.__name__}: {exc})", file=sys.stderr)
+        raise
     except Exception as exc:
         print(f"LIVE_AUTH_SIGN_IN_A=FAIL ({exc.__class__.__name__})", file=sys.stderr)
         raise
     print("LIVE_AUTH_SIGN_IN_A=PASS")
     try:
         session_b = auth.sign_in(email_b, password_b)
+    except SupabaseAuthError as exc:
+        # Keep diagnostics actionable without logging raw provider responses.
+        print(f"LIVE_AUTH_SIGN_IN_B=FAIL ({exc.__class__.__name__}: {exc})", file=sys.stderr)
+        raise
     except Exception as exc:
         print(f"LIVE_AUTH_SIGN_IN_B=FAIL ({exc.__class__.__name__})", file=sys.stderr)
         raise
