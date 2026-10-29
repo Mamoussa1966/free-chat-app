@@ -103,7 +103,7 @@ def test_collect_report_uses_only_read_only_metadata_endpoints():
     calls = []
     payloads = {
         "/repos/example/repo/branches/gitops-v0.4-final": _branch(),
-        "/repos/example/repo/actions/workflows/ci.yml/runs?branch=gitops-v0.4-final&per_page=100": {
+        "/repos/example/repo/actions/workflows/ci.yml/runs?branch=gitops-v0.4-final&created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=1": {
             "workflow_runs": [_run(107, PRODUCTION_SHA, conclusion="success")]
         },
         "/repos/example/repo/actions/workflows/hotfix164-30-deployment-commit-closure.yml/runs?per_page=20": {
@@ -124,3 +124,41 @@ def test_collect_report_uses_only_read_only_metadata_endpoints():
     assert len(calls) == 3
     assert all("/branches/" in p or "/actions/workflows/" in p for p in calls)
     assert all("/dispatches" not in p for p in calls)
+
+def test_collect_report_paginates_all_recent_ci_runs():
+    calls = []
+    first_page = [
+        _run(2000 + i, "f" * 40, conclusion="success")
+        for i in range(100)
+    ]
+    second_page = [
+        _run(3001, PRODUCTION_SHA, conclusion="success"),
+        _run(3002, "b" * 40, conclusion="failure"),
+    ]
+    payloads = {
+        "/repos/example/repo/branches/gitops-v0.4-final": _branch(),
+        "/repos/example/repo/actions/workflows/ci.yml/runs?branch=gitops-v0.4-final&created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=1": {
+            "workflow_runs": first_page
+        },
+        "/repos/example/repo/actions/workflows/ci.yml/runs?branch=gitops-v0.4-final&created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=2": {
+            "workflow_runs": second_page
+        },
+        "/repos/example/repo/actions/workflows/hotfix164-30-deployment-commit-closure.yml/runs?per_page=20": {
+            "workflow_runs": []
+        },
+    }
+
+    def fake_get(path):
+        calls.append(path)
+        return payloads[path]
+
+    result = report.collect_report(
+        "example/repo", "not-logged",
+        get_json=fake_get, now=NOW,
+    )
+
+    assert len([p for p in calls if "/actions/workflows/ci.yml/runs?" in p]) == 2
+    assert result["ci"]["current_commit_status"] == "PASS"
+    assert result["ci"]["last_30_days"]["runs_seen"] == 102
+    assert result["ci"]["last_30_days"]["failures"] == 1
+
