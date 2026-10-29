@@ -19,7 +19,7 @@
     "application_release_identity": "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE",
     "commit_binding_status": "SOURCE_BUNDLE_READY",
     "expected_deployment_branch": "gitops-v0.4-final",
-    "generated_at_utc": "2026-10-28T20:15:31+00:00",
+    "generated_at_utc": "2026-10-29T02:26:51+00:00",
     "missing_source_files": [],
     "observed_git_commit_sha": "aa55bd6474b59288f962bb531801aac60e196624",
     "observed_git_commit_source": "git_rev_parse_HEAD",
@@ -68,7 +68,7 @@
   "read_only_live_state_unchanged": true,
   "read_only_side_effects": "NONE_OBSERVED",
   "read_side_effects": "NONE_OBSERVED",
-  "report_generated_at": "2026-10-28T20:15:31+00:00",
+  "report_generated_at": "2026-10-29T02:26:51+00:00",
   "request_created_count": 2,
   "request_diagnostic_count": 2,
   "requests": [
