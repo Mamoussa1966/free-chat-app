@@ -205,7 +205,8 @@ def test_hotfix16430_post_records_http_503_without_claiming_success():
     sent_body = post.call_args.kwargs["data"]
     attestation = providers._take_runtime_payload_attestation()
     assert attestation["payload_sha256"] == hashlib.sha256(sent_body).hexdigest()
-    assert attestation["payload_json"] == payload_json
+    assert attestation["payload_json"].encode("utf-8") == sent_body
+    assert json.loads(attestation["payload_json"]) == payload
     assert attestation["transport_attempt_status"] == "HTTP_ERROR"
     assert attestation["transport_response_received"] is True
     assert attestation["transport_http_status_code"] == 503
