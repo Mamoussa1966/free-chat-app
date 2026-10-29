@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "AI Council CI"
+    types:
+      - completed
+    branches:
+      - gitops-v0.4-final
 
 permissions:
   contents: read
