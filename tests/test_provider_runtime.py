@@ -78,6 +78,9 @@ def test_hotfix16428_transport_sends_only_the_attested_prepared_body():
     assert "json" not in kwargs
     assert hashlib.sha256(body).hexdigest() == attestation["payload_sha256"]
     assert body == attestation["payload_json"].encode("utf-8")
+    assert attestation["transport_attempt_status"] == "HTTP_RESPONSE_RECEIVED"
+    assert attestation["transport_response_received"] is True
+    assert attestation["transport_http_status_code"] == 200
     assert json.loads(body) == payload
 
 def test_hotfix16430_failed_gemini_transport_exports_attempt_metadata_without_passing():
@@ -173,4 +176,40 @@ def test_hotfix16430_failed_gemini_transport_exports_attempt_metadata_without_pa
     serialized = json.dumps(runtime_record, sort_keys=True)
     assert payload_json not in serialized
     assert "safe diagnostic" not in serialized
+
+def test_hotfix16430_post_records_http_503_without_claiming_success():
+    import hashlib
+    import json
+
+    payload = {"contents": [{"parts": [{"text": "sanitized target prompt"}]}]}
+    payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    response = type(
+        "Response",
+        (),
+        {
+            "status_code": 503,
+            "text": '{"error":"temporary unavailable"}',
+            "headers": {},
+            "json": lambda self: {"error": "temporary unavailable"},
+        },
+    )()
+    with patch("providers.requests.post", return_value=response) as post:
+        with unittest.TestCase().assertRaises(ProviderError):
+            _post(
+                "https://example.invalid/v1beta/models/gemini:generateContent",
+                {"Content-Type": "application/json"},
+                payload,
+                5,
+            )
+
+    sent_body = post.call_args.kwargs["data"]
+    attestation = providers._take_runtime_payload_attestation()
+    assert attestation["payload_sha256"] == hashlib.sha256(sent_body).hexdigest()
+    assert attestation["payload_json"] == payload_json
+    assert attestation["transport_attempt_status"] == "HTTP_ERROR"
+    assert attestation["transport_response_received"] is True
+    assert attestation["transport_http_status_code"] == 503
+    assert attestation["transport_error_class"] == "transient_provider_error"
+    assert attestation["prepared_request_verified"] is True
+    assert attestation["transport_boundary"] == "requests.PreparedRequest.body"
 
