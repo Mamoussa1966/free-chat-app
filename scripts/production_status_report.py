@@ -42,6 +42,7 @@ def build_report(
     ci_data: dict[str, Any],
     closure_data: dict[str, Any],
     *,
+    all_workflow_data: dict[str, Any] | None = None,
     production_branch: str = DEFAULT_PRODUCTION_BRANCH,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -60,16 +61,45 @@ def build_report(
     latest_for_head = _run_projection(matching[0]) if matching else None
 
     cutoff = now - timedelta(days=30)
-    recent = []
+    recent_ci_runs = []
     for run in ci_runs:
         created = _parse_time(run.get("created_at"))
         if created is not None and cutoff <= created <= now:
-            recent.append(run)
-    failures = [_run_projection(r) for r in recent
-                if str(r.get("conclusion") or "").lower() in FAILURE_CONCLUSIONS]
-    cancelled = [_run_projection(r) for r in recent
-                 if str(r.get("conclusion") or "").lower() in CANCELLED_CONCLUSIONS]
-    successes = sum(str(r.get("conclusion") or "").lower() == "success" for r in recent)
+            recent_ci_runs.append(run)
+
+    workflow_source = all_workflow_data if isinstance(all_workflow_data, dict) else ci_data
+    raw_workflow_runs = workflow_source.get("workflow_runs", []) if isinstance(workflow_source, dict) else []
+    workflow_runs = [r for r in raw_workflow_runs if isinstance(r, dict)]
+    recent_workflows = []
+    for run in workflow_runs:
+        created = _parse_time(run.get("created_at"))
+        if created is not None and cutoff <= created <= now:
+            recent_workflows.append(run)
+
+    workflow_failures = [
+        _run_projection(r) for r in recent_workflows
+        if str(r.get("conclusion") or "").lower() in FAILURE_CONCLUSIONS
+    ]
+    workflow_cancelled = [
+        _run_projection(r) for r in recent_workflows
+        if str(r.get("conclusion") or "").lower() in CANCELLED_CONCLUSIONS
+    ]
+    workflow_successes = sum(
+        str(r.get("conclusion") or "").lower() == "success" for r in recent_workflows
+    )
+
+    # Latest known run per workflow, so the dashboard describes more than CI.
+    latest_by_workflow: dict[str, dict[str, Any]] = {}
+    for run in sorted(
+        recent_workflows, key=lambda r: str(r.get("created_at") or ""), reverse=True
+    ):
+        workflow_key = str(run.get("path") or run.get("name") or "UNKNOWN")
+        latest_by_workflow.setdefault(workflow_key, _run_projection(run))
+    latest_workflow_statuses = sorted(
+        latest_by_workflow.values(),
+        key=lambda r: str(r.get("created_at") or ""),
+        reverse=True,
+    )
 
     if latest_for_head is None:
         current_ci_status = "NOT_FOUND"
@@ -103,13 +133,29 @@ def build_report(
             "current_commit_status": current_ci_status,
             "latest_run_for_current_commit": latest_for_head,
             "last_30_days": {
-                "runs_seen": len(recent),
-                "successes": successes,
-                "failures": len(failures),
-                "cancelled": len(cancelled),
+                "runs_seen": len(recent_ci_runs),
+                "successes": sum(
+                    str(r.get("conclusion") or "").lower() == "success" for r in recent_ci_runs
+                ),
+                "failures": sum(
+                    str(r.get("conclusion") or "").lower() in FAILURE_CONCLUSIONS for r in recent_ci_runs
+                ),
+                "cancelled": sum(
+                    str(r.get("conclusion") or "").lower() in CANCELLED_CONCLUSIONS for r in recent_ci_runs
+                ),
+            },
+        },
+        "workflows": {
+            "scope": "All GitHub Actions workflow runs in the repository within the last 30 days",
+            "last_30_days": {
+                "runs_seen": len(recent_workflows),
+                "successes": workflow_successes,
+                "failures": len(workflow_failures),
+                "cancelled": len(workflow_cancelled),
                 "latest_failures": sorted(
-                    failures, key=lambda r: str(r.get("created_at") or ""), reverse=True
+                    workflow_failures, key=lambda r: str(r.get("created_at") or ""), reverse=True
                 )[:10],
+                "latest_status_by_workflow": latest_workflow_statuses[:30],
             },
         },
         "deployment_closure": {
@@ -195,18 +241,34 @@ def collect_report(
         raise RuntimeError("More than 10,000 CI runs exist in the 30-day window; report refused to truncate")
 
     ci_data = {"workflow_runs": all_ci_runs}
+    all_workflow_runs: list[dict[str, Any]] = []
+    for page in range(1, 101):
+        workflow_page = get_json(
+            f"{repo_path}/actions/runs?created={created_filter}&per_page=100&page={page}"
+        )
+        page_runs = workflow_page.get("workflow_runs", [])
+        if not isinstance(page_runs, list):
+            raise RuntimeError("GitHub all-workflows response omitted workflow_runs")
+        all_workflow_runs.extend(run for run in page_runs if isinstance(run, dict))
+        if len(page_runs) < 100:
+            break
+    else:
+        raise RuntimeError("More than 10,000 workflow runs exist in the 30-day window; report refused to truncate")
+
     closure_data = get_json(
         f"{repo_path}/actions/workflows/hotfix164-30-deployment-commit-closure.yml/runs?per_page=20"
     )
     return build_report(
         branch_data, ci_data, closure_data,
+        all_workflow_data={"workflow_runs": all_workflow_runs},
         production_branch=production_branch, now=report_now,
     )
 
 
 def _markdown_summary(report: dict[str, Any]) -> str:
     prod, ci = report["production"], report["ci"]
-    recent = ci["last_30_days"]
+    recent_ci = ci["last_30_days"]
+    workflows = report["workflows"]["last_30_days"]
     closure = report["deployment_closure"]["latest_workflow_run"]
     lines = [
         "# AI Council production status",
@@ -215,16 +277,24 @@ def _markdown_summary(report: dict[str, Any]) -> str:
         f"- Production branch: {prod['branch']}",
         f"- Production commit: {prod['commit_sha']}",
         f"- Exact-commit CI status: **{ci['current_commit_status']}**",
-        f"- CI runs in last 30 days: {recent['runs_seen']} (success {recent['successes']}, failures {recent['failures']}, cancelled {recent['cancelled']})",
+        f"- CI runs for production branch in last 30 days: {recent_ci['runs_seen']} (success {recent_ci['successes']}, failures {recent_ci['failures']}, cancelled {recent_ci['cancelled']})",
+        f"- All-workflow runs in last 30 days: {workflows['runs_seen']} (success {workflows['successes']}, failures {workflows['failures']}, cancelled {workflows['cancelled']})",
+        "",
+        "## Latest status by workflow",
     ]
+    for run in workflows["latest_status_by_workflow"]:
+        lines.append(
+            f"- {run.get('name') or run.get('workflow_path')}: {run.get('conclusion') or run.get('status')} "
+            f"— {run.get('created_at')} — {run.get('html_url')}"
+        )
     if prod.get("commit_url"):
         lines.append(f"- Commit link: {prod['commit_url']}")
     exact_run = ci.get("latest_run_for_current_commit")
     if exact_run and exact_run.get("html_url"):
         lines.append(f"- Exact-commit CI run: {exact_run['html_url']}")
-    if recent["latest_failures"]:
-        lines += ["", "## Recent CI failures"]
-        for run in recent["latest_failures"]:
+    if workflows["latest_failures"]:
+        lines += ["", "## Recent workflow failures"]
+        for run in workflows["latest_failures"]:
             lines.append(f"- {run.get('created_at')}: {run.get('name')} — {run.get('conclusion')} — {run.get('html_url')}")
     lines += ["", "## Deployment closure"]
     if closure:
