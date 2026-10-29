@@ -842,6 +842,9 @@ class SharedContextBridge:
             "runtime_payload_bytes": int(payload_attestation.get("payload_bytes_verified") or payload_attestation.get("payload_bytes") or 0),
             "runtime_payload_endpoint_sha256": str(payload_attestation.get("endpoint_sha256") or ""),
             "runtime_payload_executed_model": str(payload_attestation.get("executed_model") or ""),
+            "runtime_payload_transport_attempt_status": str(payload_attestation.get("transport_attempt_status") or "NOT_PROVEN"),
+            "runtime_payload_transport_http_status_code": payload_attestation.get("transport_http_status_code"),
+            "runtime_payload_transport_error_class": str(payload_attestation.get("transport_error_class") or "NOT_PROVEN"),
             "runtime_payload_transport_boundary": str(payload_attestation.get("transport_boundary") or "NOT_PROVEN"),
             "runtime_payload_prepared_request_verified": "YES" if payload_attestation.get("prepared_request_verified") is True else "NOT_PROVEN",
             "runtime_payload_request_binding_status": str(payload_attestation.get("request_identity_binding_status") or "NOT_PROVEN"),
@@ -4160,6 +4163,14 @@ def _hotfix16429_export_runtime_http_attestation(evidence: dict | None, request_
     except (TypeError, ValueError):
         payload_bytes = 0
     payload_hash = str(evidence.get("runtime_payload_sha256") or "").strip().lower()
+    try:
+        transport_http_status_code = (
+            int(evidence.get("runtime_payload_transport_http_status_code"))
+            if evidence.get("runtime_payload_transport_http_status_code") not in (None, "")
+            else None
+        )
+    except (TypeError, ValueError):
+        transport_http_status_code = None
     return {
         "schema": "hotfix164.29-runtime-http-attestation/v1",
         "request_id": str(request_id or ""),
@@ -4176,6 +4187,9 @@ def _hotfix16429_export_runtime_http_attestation(evidence: dict | None, request_
         "payload_bytes": payload_bytes,
         "payload_hash_integrity": str(evidence.get("runtime_http_payload_hash_integrity") or "NOT_PROVEN"),
         "http_payload_attested": str(evidence.get("runtime_http_payload_attested") or "NOT_PROVEN"),
+        "transport_attempt_status": str(evidence.get("runtime_payload_transport_attempt_status") or "NOT_PROVEN"),
+        "transport_http_status_code": transport_http_status_code,
+        "transport_error_class": str(evidence.get("runtime_payload_transport_error_class") or "NOT_PROVEN"),
         "transport_boundary": str(evidence.get("runtime_payload_transport_boundary") or "NOT_PROVEN"),
         "prepared_request_verified": str(evidence.get("runtime_payload_prepared_request_verified") or "NOT_PROVEN"),
         "request_binding_status": str(evidence.get("runtime_payload_request_binding_status") or "NOT_PROVEN"),
