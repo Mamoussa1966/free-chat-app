@@ -60,6 +60,24 @@ def _baseline_manifest() -> dict:
     return json.loads((ROOT / "CLAUDE_GOLDEN_BASELINE_MANIFEST.json").read_text(encoding="utf-8"))
 
 
+def authorized_requirements_profiles() -> set[tuple[str, ...]]:
+    """Return the only exact dependency profiles accepted by the release guard."""
+    return {
+        (
+            "streamlit==1.66.0",
+            "requests>=2.31,<3",
+            "pytest>=8,<10",
+            "cryptography==50.0.2",
+        ),
+        (
+            "streamlit==1.66.1",
+            "requests>=2.31,<3",
+            "pytest>=8,<10",
+            "cryptography==50.0.2",
+        ),
+    }
+
+
 def compare_against_golden_baseline() -> None:
     baseline = _baseline_manifest()
     expected = dict(baseline.get("files_sha256") or {})
@@ -80,22 +98,15 @@ def compare_against_golden_baseline() -> None:
         current = hashlib.sha256(current_paths[rel].read_bytes()).hexdigest()
         if current != digest:
             changed.append(rel)
-    # One narrowly scoped dependency extension is authorized for encrypted
-    # Supabase browser-session recovery. Keep every other frozen requirements.txt
-    # edit blocked; do not widen ALLOWED_BASELINE_CHANGES for this exception.
-    authorized_session_requirements = [
-        "streamlit==1.66.0",
-        "requests>=2.31,<3",
-        "pytest>=8,<10",
-        "cryptography==50.0.2",
-    ]
+    # Only the exact baseline profile and the explicit Streamlit patch update
+    # are authorized. All other frozen requirements.txt edits remain blocked.
     unauthorized = sorted(
         path for path in changed
         if path not in ALLOWED_BASELINE_CHANGES
         and not (
             path == "requirements.txt"
-            and current_paths[path].read_text(encoding="utf-8").splitlines()
-            == authorized_session_requirements
+            and tuple(current_paths[path].read_text(encoding="utf-8").splitlines())
+            in authorized_requirements_profiles()
         )
     )
     if unauthorized:
