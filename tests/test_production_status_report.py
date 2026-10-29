@@ -106,6 +106,9 @@ def test_collect_report_uses_only_read_only_metadata_endpoints():
         "/repos/example/repo/actions/workflows/ci.yml/runs?branch=gitops-v0.4-final&created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=1": {
             "workflow_runs": [_run(107, PRODUCTION_SHA, conclusion="success")]
         },
+        "/repos/example/repo/actions/runs?created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=1": {
+            "workflow_runs": [_run(107, PRODUCTION_SHA, conclusion="success")]
+        },
         "/repos/example/repo/actions/workflows/hotfix164-30-deployment-commit-closure.yml/runs?per_page=20": {
             "workflow_runs": []
         },
@@ -121,9 +124,10 @@ def test_collect_report_uses_only_read_only_metadata_endpoints():
     )
 
     assert result["report_status"] == "PASS"
-    assert len(calls) == 3
-    assert all("/branches/" in p or "/actions/workflows/" in p for p in calls)
+    assert len(calls) == 4
+    assert all("/branches/" in p or "/actions/workflows/" in p or "/actions/runs?" in p for p in calls)
     assert all("/dispatches" not in p for p in calls)
+    assert result["workflows"]["last_30_days"]["runs_seen"] == 1
 
 def test_collect_report_paginates_all_recent_ci_runs():
     calls = []
@@ -143,6 +147,12 @@ def test_collect_report_paginates_all_recent_ci_runs():
         "/repos/example/repo/actions/workflows/ci.yml/runs?branch=gitops-v0.4-final&created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=2": {
             "workflow_runs": second_page
         },
+        "/repos/example/repo/actions/runs?created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=1": {
+            "workflow_runs": first_page
+        },
+        "/repos/example/repo/actions/runs?created=%3E%3D2026-09-29T12%3A00%3A00Z&per_page=100&page=2": {
+            "workflow_runs": second_page
+        },
         "/repos/example/repo/actions/workflows/hotfix164-30-deployment-commit-closure.yml/runs?per_page=20": {
             "workflow_runs": []
         },
@@ -158,7 +168,9 @@ def test_collect_report_paginates_all_recent_ci_runs():
     )
 
     assert len([p for p in calls if "/actions/workflows/ci.yml/runs?" in p]) == 2
+    assert len([p for p in calls if "/actions/runs?" in p]) == 2
     assert result["ci"]["current_commit_status"] == "PASS"
     assert result["ci"]["last_30_days"]["runs_seen"] == 102
-    assert result["ci"]["last_30_days"]["failures"] == 1
+    assert result["workflows"]["last_30_days"]["runs_seen"] == 102
+    assert result["workflows"]["last_30_days"]["failures"] == 1
 
