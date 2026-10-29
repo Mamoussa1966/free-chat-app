@@ -54,7 +54,16 @@ jobs:
           if missing:
               print("LIVE_AUTH_ACCEPTANCE=BLOCKED; missing GitHub Actions repository secrets: " + ", ".join(missing))
               raise SystemExit(2)
+
+          # Safety gate: this workflow is for the dedicated test project only.
+          expected_url = "https://pidcepvwsezdrlhxqksg.supabase.co"
+          actual_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+          if actual_url != expected_url:
+              print("LIVE_AUTH_ACCEPTANCE=BLOCKED; SUPABASE_URL does not match the dedicated test project")
+              raise SystemExit(2)
+
           print("LIVE_AUTH_ACCEPTANCE_CONFIG=PASS")
+          print("LIVE_AUTH_ACCEPTANCE_TARGET=PASS (dedicated test project)")
           PY
 
       - name: Install minimal HTTP dependency
