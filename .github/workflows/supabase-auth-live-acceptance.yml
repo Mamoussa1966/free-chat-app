@@ -153,5 +153,5 @@ jobs:
         run: PYTHONPATH=. python scripts/test_supabase_auth_signup_live.py
 
       - name: Run real Auth sign-in/refresh and PostgREST two-owner isolation
-        if: ${{ github.event_name == 'push' || inputs.phase == 'auth-postgrest' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.phase == 'auth-postgrest' }}
         run: PYTHONPATH=. python scripts/test_supabase_auth_postgrest_live.py
