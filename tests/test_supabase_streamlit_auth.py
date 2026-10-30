@@ -265,7 +265,8 @@ def test_recovery_callback_component_captures_top_level_tokens_without_iframe_me
 
     assert "window.location.hash" in source
     assert "window.location.search" in source
-    assert 'params.get("type") === "recovery"' in source
+    assert 'hashParams.get("type") === "recovery"' in source
+    assert 'queryParams.get("type") === "recovery"' in source
     assert 'setTriggerValue("recovery_payload"' in source
     assert "window.history.replaceState" in source
     assert "window.parent" not in source
