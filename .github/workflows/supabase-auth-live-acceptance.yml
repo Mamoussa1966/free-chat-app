@@ -13,10 +13,11 @@ on:
         required: true
         type: string
       phase:
-        description: "Choose signup first; after confirming both test emails choose auth-postgrest"
+        description: "Request recovery emails, run signup, or run Auth/PostgREST acceptance"
         required: true
         type: choice
         options:
+          - request-recovery
           - signup
           - auth-postgrest
 
@@ -142,6 +143,10 @@ jobs:
           print("PASSWORD_SECRETS_DISTINCT=" + str(password_a != password_b))
           print("LIVE_AUTH_SECRET_DIAGNOSTICS_END")
           PY
+
+      - name: Request recovery emails for the two allowlisted test users
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.phase == 'request-recovery' }}
+        run: PYTHONPATH=. python scripts/request_test_supabase_auth_recovery.py
 
       - name: Run real Auth signup smoke test
         if: ${{ inputs.phase == 'signup' }}
