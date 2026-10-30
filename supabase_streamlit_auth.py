@@ -19,6 +19,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 from streamlit.components.v1 import declare_component
+from streamlit.components.v2 import component as declare_component_v2
 
 from supabase_auth import SupabaseAuthClient, SupabaseAuthError, SupabaseAuthSession
 
@@ -33,108 +34,93 @@ _BROWSER_COMPONENT_KEY = "_supabase_browser_session_bridge"
 _BROWSER_STORAGE_KEY = "ai_council_supabase_session_v1"
 _BROWSER_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 _RECOVERY_STATE_KEY = "_supabase_password_recovery"
-_RECOVERY_ACK_KEY = "_supabase_password_recovery_ack"
 _RECOVERY_SUCCESS_NOTICE_KEY = "_supabase_recovery_success_notice"
 _CLEAR_RECOVERY_WIDGETS_KEY = "_supabase_clear_recovery_widgets"
 _RECOVERY_PASSWORD_WIDGET_KEY = "supabase_recovery_new_password"
 _RECOVERY_CONFIRM_WIDGET_KEY = "supabase_recovery_confirm_password"
+_RECOVERY_CALLBACK_COMPONENT_JS = r"""
+export default function({ setTriggerValue }) {
+  let captured = false;
 
-_RECOVERY_PARENT_BRIDGE_ID = "ai-council-supabase-auth-v1"
-_RECOVERY_PARENT_BRIDGE_HTML = r"""
-<div data-ai-council-supabase-auth-bridge="v1" hidden></div>
-<script>
-(() => {
-  "use strict";
-  const bridgeName = "__aiCouncilSupabaseRecoveryBridgeV1";
-  const bridgeId = "ai-council-supabase-auth-v1";
-  const bridge = window[bridgeName] || (window[bridgeName] = {
-    pending: null,
-    listenerInstalled: false
-  });
+  function captureRecoveryCallback() {
+    if (captured) return;
 
-  // Supabase's implicit recovery callback places the one-time session in the
-  // top-level URL fragment. This script executes in the Streamlit document
-  // itself, so it does not attempt to read the fragment from a sandboxed iframe.
-  const fragment = String(window.location.hash || "");
-  if (fragment && fragment.length <= 16384) {
-    const params = new URLSearchParams(fragment.charAt(0) === "#" ? fragment.slice(1) : fragment);
-    if (params.get("type") === "recovery") {
-      const accessToken = String(params.get("access_token") || "");
-      const refreshToken = String(params.get("refresh_token") || "");
-      if (accessToken && accessToken.length <= 8192 && refreshToken.length <= 8192) {
-        const recoveryId = (window.crypto && crypto.randomUUID)
-          ? crypto.randomUUID()
-          : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
-        bridge.pending = {
-          status: "password_recovery",
-          recovery_id: recoveryId,
-          access_token: accessToken,
-          refresh_token: refreshToken,
-          token_type: String(params.get("token_type") || "bearer"),
-          expires_in: Number(params.get("expires_in") || 1800)
-        };
-        // Remove one-time credentials before any network/render cycle can log the URL.
-        window.history.replaceState(
-          window.history.state,
-          document.title,
-          window.location.pathname + window.location.search
-        );
-      }
+    const hashText = String(window.location.hash || "");
+    const queryText = String(window.location.search || "");
+    const hashParams = new URLSearchParams(hashText.startsWith("#") ? hashText.slice(1) : hashText);
+    const queryParams = new URLSearchParams(queryText.startsWith("?") ? queryText.slice(1) : queryText);
+
+    const isRecovery =
+      hashParams.get("type") === "recovery" ||
+      queryParams.get("type") === "recovery";
+    if (!isRecovery) return;
+
+    const accessToken = String(hashParams.get("access_token") || queryParams.get("access_token") || "");
+    const refreshToken = String(hashParams.get("refresh_token") || queryParams.get("refresh_token") || "");
+    const tokenType = String(hashParams.get("token_type") || queryParams.get("token_type") || "bearer");
+    const expiresIn = Number(hashParams.get("expires_in") || queryParams.get("expires_in") || 1800);
+
+    captured = true;
+
+    // Strip one-time credentials from both query and fragment before notifying Python.
+    try {
+      const safeUrl = new URL(window.location.href);
+      [
+        "access_token",
+        "refresh_token",
+        "token_type",
+        "expires_in",
+        "expires_at",
+        "type"
+      ].forEach((name) => safeUrl.searchParams.delete(name));
+      safeUrl.hash = "";
+      window.history.replaceState(
+        window.history.state,
+        document.title,
+        safeUrl.pathname + safeUrl.search
+      );
+    } catch (_error) {
+      // Token handling still proceeds; the app never logs or displays the URL.
     }
-  }
 
-  function isTrustedRecoveryComponentFrame(source, origin) {
-    return Array.from(document.querySelectorAll("iframe")).some((frame) => {
-      if (frame.contentWindow !== source) return false;
-      try {
-        const frameUrl = new URL(frame.getAttribute("src") || "", window.location.href);
-        const isCouncilFrame = frameUrl.pathname.indexOf(
-          "/component/ai_council_supabase_browser_session"
-        ) !== -1;
-        // Streamlit may serialize a sandboxed component's origin as "null".
-        // In that case, trust only this exact iframe WindowProxy and route.
-        return isCouncilFrame && (origin === "null" || origin === frameUrl.origin);
-      } catch (_error) {
-        return false;
-      }
+    const recoveryId = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+
+    if (!accessToken || accessToken.length > 8192 || refreshToken.length > 8192) {
+      setTriggerValue("recovery_payload", {
+        status: "password_recovery_invalid",
+        message: "رابط الاستعادة وصل دون رمز جلسة صالح. اطلب رسالة استعادة جديدة."
+      });
+      return;
+    }
+
+    setTriggerValue("recovery_payload", {
+      status: "password_recovery",
+      recovery_id: recoveryId,
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      token_type: tokenType,
+      expires_in: Number.isFinite(expiresIn) ? expiresIn : 1800
     });
   }
 
-  if (!bridge.listenerInstalled) {
-    window.addEventListener("message", (event) => {
-      if (
-        !event.source ||
-        event.source === window ||
-        !isTrustedRecoveryComponentFrame(event.source, event.origin)
-      ) {
-        return;
-      }
-      const message = event.data || {};
-      if (message.bridge !== bridgeId) return;
+  captureRecoveryCallback();
+  window.addEventListener("hashchange", captureRecoveryCallback);
+  window.addEventListener("popstate", captureRecoveryCallback);
 
-      if (message.type === "AI_COUNCIL_AUTH_BRIDGE_READY" && bridge.pending) {
-        // Respond only to the exact registered recovery component iframe.
-        // A sandboxed iframe can have an opaque ("null") origin, so use "*"
-        // only with the WindowProxy obtained from this trusted source event.
-        event.source.postMessage({
-          type: "AI_COUNCIL_RECOVERY_PAYLOAD",
-          bridge: bridgeId,
-          payload: bridge.pending
-        }, event.origin === "null" ? "*" : event.origin);
-      } else if (
-        message.type === "AI_COUNCIL_RECOVERY_ACK" &&
-        bridge.pending &&
-        message.recovery_id === bridge.pending.recovery_id
-      ) {
-        // Python has already verified the token with the issuing Supabase project.
-        bridge.pending = null;
-      }
-    });
-    bridge.listenerInstalled = true;
-  }
-})();
-</script>
+  return () => {
+    window.removeEventListener("hashchange", captureRecoveryCallback);
+    window.removeEventListener("popstate", captureRecoveryCallback);
+  };
+}
 """
+_RECOVERY_CALLBACK_COMPONENT = declare_component_v2(
+    "ai_council_supabase_recovery_callback_v2",
+    html="<span aria-hidden='true'></span>",
+    css="span { display: none !important; }",
+    js=_RECOVERY_CALLBACK_COMPONENT_JS,
+)
 
 # Publishable key is intentionally public by Supabase design. It is used only
 # to validate recovery sessions issued by the isolated test project. No admin
@@ -249,30 +235,23 @@ def _browser_payload_from_result(value: Any) -> str:
     return ""
 
 
-def _render_top_level_recovery_bridge(st: Any) -> bool:
-    """Capture Supabase's recovery fragment from the top-level Streamlit document.
-
-    The custom-component iframe cannot reliably inspect window.parent.location
-    because browser origin/sandbox rules may block that access. A static script
-    injected with st.html runs in the page itself, strips the one-time fragment,
-    and passes the token only to the exact component frame that handshakes back.
-    """
-    renderer = getattr(st, "html", None)
-    if not callable(renderer):
-        st.error(
-            "تعذّر تشغيل جسر استعادة كلمة المرور: يتطلب هذا الإصدار دعم "
-            "st.html مع unsafe_allow_javascript."
-        )
-        return False
+def _render_recovery_callback_component(st: Any) -> dict[str, Any] | None:
+    """Read a recovery callback directly from the top-level page via Streamlit Components v2."""
     try:
-        renderer(_RECOVERY_PARENT_BRIDGE_HTML, unsafe_allow_javascript=True)
-    except Exception:
-        st.error(
-            "تعذّر تهيئة استقبال رابط الاستعادة داخل صفحة التطبيق. "
-            "أعد فتح التطبيق بعد تحديثه ثم اطلب رابط استعادة جديدًا."
+        result = _RECOVERY_CALLBACK_COMPONENT(
+            on_recovery_payload_change=lambda: None,
         )
-        return False
-    return True
+    except Exception:
+        st.session_state[_AUTH_NOTICE_KEY] = (
+            "تعذّر تشغيل مستقبِل رابط الاستعادة داخل التطبيق. "
+            "حدّث صفحة التطبيق واطلب رسالة استعادة جديدة."
+        )
+        return None
+
+    payload = getattr(result, "recovery_payload", None)
+    if not isinstance(payload, dict) and isinstance(result, dict):
+        payload = result.get("recovery_payload")
+    return payload if isinstance(payload, dict) else None
 
 
 def _render_browser_session_bridge(st: Any) -> Any:
@@ -287,7 +266,6 @@ def _render_browser_session_bridge(st: Any) -> Any:
             clear=clear_pending,
             clear_id=clear_id,
             storage_key=_BROWSER_STORAGE_KEY,
-            recovery_ack=str(state.get(_RECOVERY_ACK_KEY) or ""),
             default=None,
             key=_BROWSER_COMPONENT_KEY,
         )
@@ -431,12 +409,16 @@ def _client_for_recovery_token(st: Any, access_token: str) -> tuple[SupabaseAuth
 def _capture_password_recovery(st: Any, browser_result: Any) -> bool:
     """Verify a one-time browser recovery callback with the token's own project."""
     state = st.session_state
-    if not isinstance(browser_result, dict) or browser_result.get("status") != "password_recovery":
+    if not isinstance(browser_result, dict):
         return False
-
-    recovery_id = str(browser_result.get("recovery_id") or "")
-    if recovery_id:
-        state[_RECOVERY_ACK_KEY] = recovery_id
+    if browser_result.get("status") == "password_recovery_invalid":
+        state[_AUTH_NOTICE_KEY] = str(
+            browser_result.get("message")
+            or "تعذّر قراءة رمز الاستعادة. اطلب رابط استعادة جديدًا."
+        )
+        return True
+    if browser_result.get("status") != "password_recovery":
+        return False
 
     access_token = str(browser_result.get("access_token") or "").strip()
     refresh_token = str(browser_result.get("refresh_token") or "").strip()
@@ -593,8 +575,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
         return False
 
     cipher, cipher_status = _session_fernet(st)
-    if not _render_top_level_recovery_bridge(st):
-        return False
+    recovery_payload = _render_recovery_callback_component(st)
     browser_result = _render_browser_session_bridge(st)
     success_notice = st.session_state.pop(_RECOVERY_SUCCESS_NOTICE_KEY, "")
     if success_notice:
@@ -604,7 +585,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
         st.warning(str(notice))
 
     if not isinstance(st.session_state.get(_RECOVERY_STATE_KEY), dict):
-        recovery_handled = _capture_password_recovery(st, browser_result)
+        recovery_handled = _capture_password_recovery(st, recovery_payload)
         if recovery_handled and not isinstance(st.session_state.get(_RECOVERY_STATE_KEY), dict):
             callback_notice = st.session_state.pop(_AUTH_NOTICE_KEY, "")
             if callback_notice:
