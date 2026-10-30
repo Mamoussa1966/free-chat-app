@@ -404,7 +404,7 @@ def _render_password_recovery(st: Any) -> None:
             st.error("كلمتا المرور غير متطابقتين.")
             return
         try:
-            if len(new_password) < 8 or len(new_password) > 1024 or "\\x00" in new_password:
+            if len(new_password) < 8 or len(new_password) > 1024:
                 raise ValueError("كلمة المرور يجب أن تكون بين 8 و1024 حرفًا.")
             if project_kind == "test":
                 client = SupabaseAuthClient(
@@ -429,19 +429,25 @@ def _render_password_recovery(st: Any) -> None:
                 "بنفس كلمة المرور الجديدة، ثم أعد اختبار Auth وPostgREST."
             )
         else:
-            expires_at = int(time.time()) + 1800
-            session = SupabaseAuthSession(
-                access_token=str(recovery.get("access_token") or ""),
-                refresh_token=str(recovery.get("refresh_token") or ""),
-                expires_at=expires_at,
-                user_id=str(user["id"]),
-                email=str(user.get("email") or recovery.get("email") or ""),
-                issuer=client.issuer,
-                verified_at=int(time.time()),
-            )
-            _activate_session(st, session)
-            _schedule_browser_write(st, session.to_state())
-            state[_RECOVERY_SUCCESS_NOTICE_KEY] = "تم تحديث كلمة مرور حسابك وتأكيد الجلسة بنجاح."
+            refresh_token = str(recovery.get("refresh_token") or "").strip()
+            if refresh_token:
+                expires_at = int(time.time()) + 1800
+                session = SupabaseAuthSession(
+                    access_token=str(recovery.get("access_token") or ""),
+                    refresh_token=refresh_token,
+                    expires_at=expires_at,
+                    user_id=str(user["id"]),
+                    email=str(user.get("email") or recovery.get("email") or ""),
+                    issuer=client.issuer,
+                    verified_at=int(time.time()),
+                )
+                _activate_session(st, session)
+                _schedule_browser_write(st, session.to_state())
+                state[_RECOVERY_SUCCESS_NOTICE_KEY] = "تم تحديث كلمة مرور حسابك وتأكيد الجلسة بنجاح."
+            else:
+                state[_RECOVERY_SUCCESS_NOTICE_KEY] = (
+                    "تم تحديث كلمة المرور بنجاح. سجّل الدخول مجددًا بكلمة المرور الجديدة."
+                )
         st.rerun()
 
 
@@ -473,7 +479,11 @@ def ensure_supabase_auth(st: Any) -> bool | None:
         st.warning(str(notice))
 
     if not isinstance(st.session_state.get(_RECOVERY_STATE_KEY), dict):
-        _capture_password_recovery(st, browser_result)
+        recovery_handled = _capture_password_recovery(st, browser_result)
+        if recovery_handled and not isinstance(st.session_state.get(_RECOVERY_STATE_KEY), dict):
+            callback_notice = st.session_state.pop(_AUTH_NOTICE_KEY, "")
+            if callback_notice:
+                st.warning(str(callback_notice))
     if isinstance(st.session_state.get(_RECOVERY_STATE_KEY), dict):
         _render_password_recovery(st)
         return False
