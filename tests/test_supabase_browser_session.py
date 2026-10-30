@@ -104,7 +104,14 @@ def test_new_streamlit_session_recovers_and_revalidates_browser_session(monkeypa
             return session
 
     client = FakeClient()
+    from types import SimpleNamespace
+
     monkeypatch.setattr(browser_auth, "_client", lambda _st: client)
+    monkeypatch.setattr(
+        browser_auth,
+        "_RECOVERY_CALLBACK_COMPONENT",
+        lambda **_kwargs: SimpleNamespace(recovery_checked=True, recovery_payload=None),
+    )
     monkeypatch.setattr(
         browser_auth,
         "_BROWSER_SESSION_COMPONENT",
