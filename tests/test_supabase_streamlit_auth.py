@@ -291,4 +291,17 @@ def test_browser_component_no_longer_reads_parent_url_directly():
     assert "AI_COUNCIL_RECOVERY_PAYLOAD" in component
     assert "AI_COUNCIL_RECOVERY_ACK" in component
     assert "event.source !== window.parent" in component
-    assert "event.origin !== window.location.origin" in component
+    assert "PARENT_ORIGIN" in component
+    assert 'window.parent.postMessage(message, PARENT_ORIGIN || "*")' in component
+    assert "event.origin !== window.location.origin" not in component
+
+
+def test_parent_bridge_accepts_only_the_registered_component_window_and_opaque_origin():
+    source = auth._RECOVERY_PARENT_BRIDGE_HTML
+
+    assert "isTrustedRecoveryComponentFrame" in source
+    assert "frame.contentWindow !== source" in source
+    assert '"/component/ai_council_supabase_browser_session"' in source
+    assert 'origin === "null"' in source
+    assert 'event.origin === "null" ? "*" : event.origin' in source
+    assert "event.origin !== window.location.origin" not in source
