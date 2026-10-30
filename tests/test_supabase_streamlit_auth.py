@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -258,3 +259,36 @@ def test_test_password_recovery_updates_only_with_recovery_session_and_does_not_
     assert auth._RECOVERY_STATE_KEY not in st.session_state
     assert auth.AUTH_SESSION_KEY not in st.session_state
     assert "SUPABASE_TEST_USER_A_PASSWORD" in st.session_state[auth._RECOVERY_SUCCESS_NOTICE_KEY]
+
+
+
+def test_top_level_recovery_bridge_runs_in_main_document_and_captures_only_static_code(monkeypatch):
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    calls = {}
+
+    def fake_html(body, *, unsafe_allow_javascript=False):
+        calls["body"] = body
+        calls["unsafe_allow_javascript"] = unsafe_allow_javascript
+
+    monkeypatch.setattr(st, "html", fake_html, raising=False)
+
+    assert auth._render_top_level_recovery_bridge(st) is True
+    assert calls["unsafe_allow_javascript"] is True
+    assert "window.location.hash" in calls["body"]
+    assert "window.history.replaceState" in calls["body"]
+    assert "AI_COUNCIL_AUTH_BRIDGE_READY" in calls["body"]
+    assert "AI_COUNCIL_RECOVERY_PAYLOAD" in calls["body"]
+    assert "AI_COUNCIL_RECOVERY_ACK" in calls["body"]
+    assert "window.parent.location" not in calls["body"]
+
+
+def test_browser_component_no_longer_reads_parent_url_directly():
+    component_path = Path(__file__).resolve().parents[1] / "supabase_browser_session_component" / "index.html"
+    component = component_path.read_text(encoding="utf-8")
+
+    assert "window.parent.location" not in component
+    assert "AI_COUNCIL_AUTH_BRIDGE_READY" in component
+    assert "AI_COUNCIL_RECOVERY_PAYLOAD" in component
+    assert "AI_COUNCIL_RECOVERY_ACK" in component
+    assert "event.source !== window.parent" in component
+    assert "event.origin !== window.location.origin" in component
