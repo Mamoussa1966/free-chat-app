@@ -83,21 +83,44 @@ _RECOVERY_PARENT_BRIDGE_HTML = r"""
     }
   }
 
+  function isTrustedRecoveryComponentFrame(source, origin) {
+    return Array.from(document.querySelectorAll("iframe")).some((frame) => {
+      if (frame.contentWindow !== source) return false;
+      try {
+        const frameUrl = new URL(frame.getAttribute("src") || "", window.location.href);
+        const isCouncilFrame = frameUrl.pathname.indexOf(
+          "/component/ai_council_supabase_browser_session"
+        ) !== -1;
+        // Streamlit may serialize a sandboxed component's origin as "null".
+        // In that case, trust only this exact iframe WindowProxy and route.
+        return isCouncilFrame && (origin === "null" || origin === frameUrl.origin);
+      } catch (_error) {
+        return false;
+      }
+    });
+  }
+
   if (!bridge.listenerInstalled) {
     window.addEventListener("message", (event) => {
-      if (event.origin !== window.location.origin || !event.source || event.source === window) {
+      if (
+        !event.source ||
+        event.source === window ||
+        !isTrustedRecoveryComponentFrame(event.source, event.origin)
+      ) {
         return;
       }
       const message = event.data || {};
       if (message.bridge !== bridgeId) return;
 
       if (message.type === "AI_COUNCIL_AUTH_BRIDGE_READY" && bridge.pending) {
-        // Respond only to the exact component frame that initiated the handshake.
+        // Respond only to the exact registered recovery component iframe.
+        // A sandboxed iframe can have an opaque ("null") origin, so use "*"
+        // only with the WindowProxy obtained from this trusted source event.
         event.source.postMessage({
           type: "AI_COUNCIL_RECOVERY_PAYLOAD",
           bridge: bridgeId,
           payload: bridge.pending
-        }, event.origin);
+        }, event.origin === "null" ? "*" : event.origin);
       } else if (
         message.type === "AI_COUNCIL_RECOVERY_ACK" &&
         bridge.pending &&
