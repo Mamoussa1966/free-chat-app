@@ -35,25 +35,44 @@
 
   const RECOVERY_BRIDGE_ID = "ai-council-supabase-auth-v1";
 
+  function getParentOrigin() {
+    try {
+      if (document.referrer) return new URL(document.referrer).origin;
+      const ancestors = window.location.ancestorOrigins;
+      if (ancestors && ancestors.length) return String(ancestors[0]);
+    } catch (_error) {
+      // The source-window check below remains mandatory even without a referrer.
+    }
+    return "";
+  }
+
+  const PARENT_ORIGIN = getParentOrigin();
+
+  function sendParentMessage(message) {
+    // A known parent origin is preferred; "*" is only a fallback for browsers
+    // that suppress referrer metadata inside a sandboxed component iframe.
+    window.parent.postMessage(message, PARENT_ORIGIN || "*");
+  }
+
   function sendBridgeReady() {
-    // The parent page owns the URL fragment and responds only to this exact frame.
-    window.parent.postMessage({
+    sendParentMessage({
       type: "AI_COUNCIL_AUTH_BRIDGE_READY",
       bridge: RECOVERY_BRIDGE_ID
-    }, window.location.origin);
+    });
   }
 
   function acknowledgeParentRecovery(recoveryId) {
     if (!recoveryId) return;
-    window.parent.postMessage({
+    sendParentMessage({
       type: "AI_COUNCIL_RECOVERY_ACK",
       bridge: RECOVERY_BRIDGE_ID,
       recovery_id: recoveryId
-    }, window.location.origin);
+    });
   }
 
   function receiveParentRecovery(event) {
-    if (event.source !== window.parent || event.origin !== window.location.origin) return;
+    if (event.source !== window.parent) return;
+    if (PARENT_ORIGIN && event.origin !== PARENT_ORIGIN) return;
     const message = event.data || {};
     if (
       message.type !== "AI_COUNCIL_RECOVERY_PAYLOAD" ||
