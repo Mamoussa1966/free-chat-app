@@ -546,6 +546,33 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             else:
                 st.rerun()
 
+        with st.form("supabase_password_recovery_request"):
+            recovery_email = st.text_input(
+                "استعادة كلمة المرور — البريد الإلكتروني",
+                key="supabase_recovery_request_email",
+            )
+            recovery_requested = st.form_submit_button(
+                "إرسال رابط استعادة كلمة المرور",
+                use_container_width=True,
+            )
+        if recovery_requested:
+            recovery_redirect = (
+                _secret(st, "SUPABASE_AUTH_RECOVERY_REDIRECT_URL")
+                or "https://free-chat-app-qmqyxzh2oe2n3qwcvqvpdh.streamlit.app/"
+            )
+            try:
+                client.send_password_recovery(recovery_email, recovery_redirect)
+            except (ValueError, SupabaseAuthError) as exc:
+                st.error(
+                    str(exc) if isinstance(exc, SupabaseAuthError)
+                    else "راجع عنوان البريد الإلكتروني ورابط الاستعادة."
+                )
+            else:
+                st.success(
+                    "تم إرسال طلب الاستعادة إن كان البريد مرتبطًا بحساب. "
+                    "افتح رسالة Supabase واتبع الرابط لتعيين كلمة مرور جديدة."
+                )
+
     with sign_up_tab:
         with st.form("supabase_email_password_signup"):
             new_email = st.text_input("البريد الإلكتروني", key="supabase_signup_email")
