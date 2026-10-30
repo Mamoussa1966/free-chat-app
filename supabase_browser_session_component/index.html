@@ -10,8 +10,8 @@
 (() => {
   "use strict";
 
-  // Only encrypted opaque session envelopes are persisted. Recovery tokens
-  // are handed directly to Streamlit memory once, never written to localStorage.
+  // Only encrypted opaque session envelopes are persisted here.
+  // Recovery callbacks are handled separately by a same-page Components v2 bridge.
   const DEFAULT_STORAGE_KEY = "ai_council_supabase_session_v1";
   let lastSent = "";
 
