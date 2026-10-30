@@ -39,12 +39,13 @@ _CLEAR_RECOVERY_WIDGETS_KEY = "_supabase_clear_recovery_widgets"
 _RECOVERY_PASSWORD_WIDGET_KEY = "supabase_recovery_new_password"
 _RECOVERY_CONFIRM_WIDGET_KEY = "supabase_recovery_confirm_password"
 _RECOVERY_CALLBACK_COMPONENT_JS = r"""
-export default function({ setTriggerValue }) {
+export default function({ setStateValue, setTriggerValue }) {
   let captured = false;
+  let initializationReported = false;
 
   function captureRecoveryCallback() {
-    if (captured) return;
-
+    // Components v2 shares the main app page (unlike the v1 iframe). Read the
+    // callback from this page before mounting the legacy localStorage bridge.
     const hashText = String(window.location.hash || "");
     const queryText = String(window.location.search || "");
     const hashParams = new URLSearchParams(hashText.startsWith("#") ? hashText.slice(1) : hashText);
@@ -53,14 +54,31 @@ export default function({ setTriggerValue }) {
     const isRecovery =
       hashParams.get("type") === "recovery" ||
       queryParams.get("type") === "recovery";
-    if (!isRecovery) return;
 
+    if (!isRecovery) {
+      if (!initializationReported) {
+        initializationReported = true;
+        // This persistent state causes one rerun only after the callback
+        // listener is mounted. Python can then safely mount the v1 storage
+        // component without racing a recovery callback.
+        setStateValue("recovery_checked", true);
+      }
+      return;
+    }
+    if (captured) return;
+
+    captured = true;
     const accessToken = String(hashParams.get("access_token") || queryParams.get("access_token") || "");
     const refreshToken = String(hashParams.get("refresh_token") || queryParams.get("refresh_token") || "");
     const tokenType = String(hashParams.get("token_type") || queryParams.get("token_type") || "bearer");
     const expiresIn = Number(hashParams.get("expires_in") || queryParams.get("expires_in") || 1800);
 
-    captured = true;
+    // The callback listener is ready. Send both the persistent readiness state
+    // and the one-time recovery event in this same component update cycle.
+    if (!initializationReported) {
+      initializationReported = true;
+      setStateValue("recovery_checked", true);
+    }
 
     // Strip one-time credentials from both query and fragment before notifying Python.
     try {
@@ -235,23 +253,36 @@ def _browser_payload_from_result(value: Any) -> str:
     return ""
 
 
-def _render_recovery_callback_component(st: Any) -> dict[str, Any] | None:
-    """Read a recovery callback directly from the top-level page via Streamlit Components v2."""
+def _render_recovery_callback_component(st: Any) -> tuple[dict[str, Any] | None, bool, bool]:
+    """Mount the top-level recovery listener before the legacy browser-storage iframe.
+
+    Returns (recovery_payload, callback_listener_ready, component_ok). The
+    readiness state intentionally causes one initial rerun on ordinary page
+    loads; only after that signal may the v1 localStorage bridge be mounted.
+    """
     try:
         result = _RECOVERY_CALLBACK_COMPONENT(
+            on_recovery_checked_change=lambda: None,
             on_recovery_payload_change=lambda: None,
         )
     except Exception:
         st.session_state[_AUTH_NOTICE_KEY] = (
             "تعذّر تشغيل مستقبِل رابط الاستعادة داخل التطبيق. "
-            "حدّث صفحة التطبيق واطلب رسالة استعادة جديدة."
+            "أعد تحميل التطبيق واطلب رسالة استعادة جديدة."
         )
-        return None
+        return None, False, False
 
     payload = getattr(result, "recovery_payload", None)
-    if not isinstance(payload, dict) and isinstance(result, dict):
-        payload = result.get("recovery_payload")
-    return payload if isinstance(payload, dict) else None
+    checked = getattr(result, "recovery_checked", False)
+    if isinstance(result, dict):
+        if not isinstance(payload, dict):
+            payload = result.get("recovery_payload")
+        checked = result.get("recovery_checked", checked)
+    return (
+        payload if isinstance(payload, dict) else None,
+        bool(checked),
+        True,
+    )
 
 
 def _render_browser_session_bridge(st: Any) -> Any:
@@ -575,8 +606,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
         return False
 
     cipher, cipher_status = _session_fernet(st)
-    recovery_payload = _render_recovery_callback_component(st)
-    browser_result = _render_browser_session_bridge(st)
+    recovery_payload, recovery_checked, recovery_component_ok = _render_recovery_callback_component(st)
     success_notice = st.session_state.pop(_RECOVERY_SUCCESS_NOTICE_KEY, "")
     if success_notice:
         st.success(str(success_notice))
@@ -590,9 +620,21 @@ def ensure_supabase_auth(st: Any) -> bool | None:
             callback_notice = st.session_state.pop(_AUTH_NOTICE_KEY, "")
             if callback_notice:
                 st.warning(str(callback_notice))
+            # Do not mount the v1 storage iframe in the same run that handles
+            # a recovery callback; it must not compete for the rerun or payload.
+            return False
     if isinstance(st.session_state.get(_RECOVERY_STATE_KEY), dict):
         _render_password_recovery(st)
         return False
+    if not recovery_component_ok:
+        return False
+    if not recovery_checked:
+        st.info("جارٍ تهيئة استقبال رابط الاستعادة بأمان…")
+        return False
+
+    # Mount the legacy localStorage bridge only after the v2 page-level
+    # callback listener has confirmed that it inspected the current URL.
+    browser_result = _render_browser_session_bridge(st)
     if cipher_status != "READY":
         st.warning(
             "استعادة الدخول عند فتح اتصال جديد غير مفعّلة بعد. أضف سر "
