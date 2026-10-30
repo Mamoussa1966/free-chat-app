@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import re
 import time
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 import uuid
 
 import requests
@@ -257,6 +257,49 @@ class SupabaseAuthClient:
         if not access or not refresh:
             return None
         return self._session_from_tokens(session_data, access, refresh)
+
+    @staticmethod
+    def _validated_recovery_redirect(redirect_to: str) -> str:
+        value = str(redirect_to or "").strip()
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            raise ValueError("رابط استعادة كلمة المرور يجب أن يكون HTTPS صالحًا.")
+        return value
+
+    def send_password_recovery(self, email: str, redirect_to: str) -> None:
+        """Send a recovery email that returns to an HTTPS page able to set a new password."""
+        normalized_email = self._normalized_email(email)
+        redirect = self._validated_recovery_redirect(redirect_to)
+        encoded_redirect = quote(redirect, safe="")
+        self._request(
+            "POST",
+            f"recover?redirect_to={encoded_redirect}",
+            payload={"email": normalized_email},
+        )
+
+    def update_password(self, access_token: str, password: str) -> dict[str, Any]:
+        """Set a new password using the short-lived authenticated recovery session."""
+        token = str(access_token or "").strip()
+        if not token:
+            raise SupabaseAuthError("انتهت جلسة استعادة كلمة المرور؛ اطلب رابطًا جديدًا.")
+        validated_password = self._validate_password(password)
+        updated = self._request(
+            "PUT",
+            "user",
+            payload={"password": validated_password},
+            access_token=token,
+        )
+        updated_id = str(updated.get("id") or "").strip()
+        verified = self.get_verified_user(token)
+        if updated_id and updated_id.lower() != verified["id"]:
+            raise SupabaseAuthError("لم تتطابق هوية الحساب بعد تحديث كلمة المرور.")
+        return verified
 
     def sign_in(self, email: str, password: str) -> SupabaseAuthSession:
         email = self._normalized_email(email)
