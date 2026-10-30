@@ -39,6 +39,80 @@ _CLEAR_RECOVERY_WIDGETS_KEY = "_supabase_clear_recovery_widgets"
 _RECOVERY_PASSWORD_WIDGET_KEY = "supabase_recovery_new_password"
 _RECOVERY_CONFIRM_WIDGET_KEY = "supabase_recovery_confirm_password"
 
+_RECOVERY_PARENT_BRIDGE_ID = "ai-council-supabase-auth-v1"
+_RECOVERY_PARENT_BRIDGE_HTML = r"""
+<div data-ai-council-supabase-auth-bridge="v1" hidden></div>
+<script>
+(() => {
+  "use strict";
+  const bridgeName = "__aiCouncilSupabaseRecoveryBridgeV1";
+  const bridgeId = "ai-council-supabase-auth-v1";
+  const bridge = window[bridgeName] || (window[bridgeName] = {
+    pending: null,
+    listenerInstalled: false
+  });
+
+  // Supabase's implicit recovery callback places the one-time session in the
+  // top-level URL fragment. This script executes in the Streamlit document
+  // itself, so it does not attempt to read the fragment from a sandboxed iframe.
+  const fragment = String(window.location.hash || "");
+  if (fragment && fragment.length <= 16384) {
+    const params = new URLSearchParams(fragment.charAt(0) === "#" ? fragment.slice(1) : fragment);
+    if (params.get("type") === "recovery") {
+      const accessToken = String(params.get("access_token") || "");
+      const refreshToken = String(params.get("refresh_token") || "");
+      if (accessToken && accessToken.length <= 8192 && refreshToken.length <= 8192) {
+        const recoveryId = (window.crypto && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+        bridge.pending = {
+          status: "password_recovery",
+          recovery_id: recoveryId,
+          access_token: accessToken,
+          refresh_token: refreshToken,
+          token_type: String(params.get("token_type") || "bearer"),
+          expires_in: Number(params.get("expires_in") || 1800)
+        };
+        // Remove one-time credentials before any network/render cycle can log the URL.
+        window.history.replaceState(
+          window.history.state,
+          document.title,
+          window.location.pathname + window.location.search
+        );
+      }
+    }
+  }
+
+  if (!bridge.listenerInstalled) {
+    window.addEventListener("message", (event) => {
+      if (event.origin !== window.location.origin || !event.source || event.source === window) {
+        return;
+      }
+      const message = event.data || {};
+      if (message.bridge !== bridgeId) return;
+
+      if (message.type === "AI_COUNCIL_AUTH_BRIDGE_READY" && bridge.pending) {
+        // Respond only to the exact component frame that initiated the handshake.
+        event.source.postMessage({
+          type: "AI_COUNCIL_RECOVERY_PAYLOAD",
+          bridge: bridgeId,
+          payload: bridge.pending
+        }, event.origin);
+      } else if (
+        message.type === "AI_COUNCIL_RECOVERY_ACK" &&
+        bridge.pending &&
+        message.recovery_id === bridge.pending.recovery_id
+      ) {
+        // Python has already verified the token with the issuing Supabase project.
+        bridge.pending = null;
+      }
+    });
+    bridge.listenerInstalled = true;
+  }
+})();
+</script>
+"""
+
 # Publishable key is intentionally public by Supabase design. It is used only
 # to validate recovery sessions issued by the isolated test project. No admin
 # or service-role credential is embedded in this application.
@@ -150,6 +224,32 @@ def _browser_payload_from_result(value: Any) -> str:
         payload = value.get("payload")
         return payload if isinstance(payload, str) else ""
     return ""
+
+
+def _render_top_level_recovery_bridge(st: Any) -> bool:
+    """Capture Supabase's recovery fragment from the top-level Streamlit document.
+
+    The custom-component iframe cannot reliably inspect window.parent.location
+    because browser origin/sandbox rules may block that access. A static script
+    injected with st.html runs in the page itself, strips the one-time fragment,
+    and passes the token only to the exact component frame that handshakes back.
+    """
+    renderer = getattr(st, "html", None)
+    if not callable(renderer):
+        st.error(
+            "تعذّر تشغيل جسر استعادة كلمة المرور: يتطلب هذا الإصدار دعم "
+            "st.html مع unsafe_allow_javascript."
+        )
+        return False
+    try:
+        renderer(_RECOVERY_PARENT_BRIDGE_HTML, unsafe_allow_javascript=True)
+    except Exception:
+        st.error(
+            "تعذّر تهيئة استقبال رابط الاستعادة داخل صفحة التطبيق. "
+            "أعد فتح التطبيق بعد تحديثه ثم اطلب رابط استعادة جديدًا."
+        )
+        return False
+    return True
 
 
 def _render_browser_session_bridge(st: Any) -> Any:
@@ -470,6 +570,8 @@ def ensure_supabase_auth(st: Any) -> bool | None:
         return False
 
     cipher, cipher_status = _session_fernet(st)
+    if not _render_top_level_recovery_bridge(st):
+        return False
     browser_result = _render_browser_session_bridge(st)
     success_notice = st.session_state.pop(_RECOVERY_SUCCESS_NOTICE_KEY, "")
     if success_notice:
