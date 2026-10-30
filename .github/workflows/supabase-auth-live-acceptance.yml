@@ -86,6 +86,21 @@ jobs:
                   raise SystemExit(2)
               print(f"LIVE_AUTH_{label}_PUBLISHABLE_KEY_MATCH=PASS")
 
+          # Compare normalized email fingerprints with the two Auth identities
+          # observed in this dedicated test project. Never print email values.
+          expected_email_fingerprints = {
+              "SUPABASE_TEST_USER_A_EMAIL": "f6cfaac879514b2d2f5ace8c2fe076d14c08639d669d40eb2f8cf3af87273d31",
+              "SUPABASE_TEST_USER_B_EMAIL": "6c53ece92c5e1dcbe3785e183b66ee39f96e61f9b10ff8b4ee497baa54ae3e68",
+          }
+          for secret_name, expected_sha256 in expected_email_fingerprints.items():
+              supplied = os.environ.get(secret_name, "").strip().casefold()
+              actual_sha256 = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
+              label = "A" if secret_name.endswith("_A_EMAIL") else "B"
+              if actual_sha256 != expected_sha256:
+                  print(f"LIVE_AUTH_EMAIL_{label}_MATCH=FAIL; GitHub email Secret does not exactly match its Auth user")
+                  raise SystemExit(2)
+              print(f"LIVE_AUTH_EMAIL_{label}_MATCH=PASS")
+
           print("LIVE_AUTH_ACCEPTANCE_CONFIG=PASS")
           print("LIVE_AUTH_ACCEPTANCE_TARGET=PASS (dedicated test project)")
           PY
