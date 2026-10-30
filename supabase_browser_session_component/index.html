@@ -10,10 +10,11 @@
 (() => {
   "use strict";
 
-  // Only encrypted opaque session envelopes are accepted here. The Fernet key
-  // never leaves Streamlit Secrets and is never sent to this component.
+  // Only encrypted opaque session envelopes are persisted. Recovery tokens
+  // are handed directly to Streamlit memory once, never written to localStorage.
   const DEFAULT_STORAGE_KEY = "ai_council_supabase_session_v1";
   let lastSent = "";
+  let pendingRecoveryId = "";
 
   function sendToStreamlit(type, data) {
     window.parent.postMessage(
@@ -32,12 +33,57 @@
     });
   }
 
+  function takeRecoveryFromParent(recoveryAck) {
+    if (pendingRecoveryId && recoveryAck === pendingRecoveryId) {
+      pendingRecoveryId = "";
+      sendValue({ status: "empty", clear_id: "" });
+      return true;
+    }
+
+    try {
+      const parentUrl = new URL(window.parent.location.href);
+      const hash = parentUrl.hash || "";
+      if (!hash || hash.length > 8192) return false;
+
+      const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+      if (params.get("type") !== "recovery") return false;
+
+      const accessToken = params.get("access_token") || "";
+      const refreshToken = params.get("refresh_token") || "";
+      if (!accessToken || accessToken.length > 8192) return false;
+
+      // Remove the one-time recovery material from the visible URL immediately.
+      window.parent.history.replaceState(
+        {},
+        window.parent.document.title,
+        parentUrl.pathname + parentUrl.search
+      );
+
+      pendingRecoveryId = crypto.randomUUID();
+      sendValue({
+        status: "password_recovery",
+        recovery_id: pendingRecoveryId,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        token_type: params.get("token_type") || "bearer",
+        expires_in: Number(params.get("expires_in") || 0)
+      });
+      return true;
+    } catch (_error) {
+      // Cross-origin access or an unavailable History API must fail closed.
+      return false;
+    }
+  }
+
   function onRender(args) {
     const storageKey = typeof args.storage_key === "string" && args.storage_key
       ? args.storage_key : DEFAULT_STORAGE_KEY;
     const persistedPayload = typeof args.persisted_payload === "string"
       ? args.persisted_payload : "";
     const clearId = typeof args.clear_id === "string" ? args.clear_id : "";
+    const recoveryAck = typeof args.recovery_ack === "string" ? args.recovery_ack : "";
+
+    if (takeRecoveryFromParent(recoveryAck)) return;
 
     try {
       if (args.clear === true) {

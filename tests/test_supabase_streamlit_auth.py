@@ -104,3 +104,157 @@ def test_missing_or_invalid_key_disables_browser_persistence():
     st = FakeStreamlit("not-a-fernet-key")
     assert auth._seal_browser_session_state(st, session_state()) == ""
     assert auth._unseal_browser_session_state(st, "not-a-token") is None
+
+
+def _make_test_recovery_jwt(issuer: str) -> str:
+    import base64
+
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"iss": issuer}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    return "header." + payload + ".signature"
+
+
+def test_test_project_recovery_token_selects_only_allowlisted_test_client(monkeypatch):
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    st.secrets["SUPABASE_TEST_PUBLISHABLE_KEY"] = "sb_publishable_test_only"
+    created = []
+
+    class FakeClient:
+        def __init__(self, *, supabase_url, publishable_key):
+            created.append((supabase_url, publishable_key))
+
+    monkeypatch.setattr(auth, "SupabaseAuthClient", FakeClient)
+    token = _make_test_recovery_jwt("https://pidcepvwsezdrlhxqksg.supabase.co/auth/v1")
+
+    client, project_kind = auth._client_for_recovery_token(st, token)
+
+    assert project_kind == "test"
+    assert isinstance(client, FakeClient)
+    assert created == [(
+        "https://pidcepvwsezdrlhxqksg.supabase.co",
+        "sb_publishable_test_only",
+    )]
+
+
+def test_recovery_issuer_rejects_unknown_project_before_network(monkeypatch):
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    token = _make_test_recovery_jwt("https://unapproved.supabase.co/auth/v1")
+
+    with pytest.raises(auth.SupabaseAuthError, match="لا يتبع"):
+        auth._client_for_recovery_token(st, token)
+
+
+def test_recovery_callback_is_verified_with_project_user_endpoint_and_scoped_to_test_account(monkeypatch):
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    calls = []
+
+    class FakeClient:
+        issuer = "https://pidcepvwsezdrlhxqksg.supabase.co/auth/v1"
+
+        def get_verified_user(self, token):
+            calls.append(token)
+            return {
+                "id": USER_ID,
+                "email": "verified-test-user@example.invalid",
+            }
+
+    monkeypatch.setattr(
+        auth,
+        "_client_for_recovery_token",
+        lambda _st, token: (FakeClient(), "test"),
+    )
+    monkeypatch.setattr(auth, "_recovery_account_label", lambda _email: "A")
+
+    handled = auth._capture_password_recovery(st, {
+        "status": "password_recovery",
+        "recovery_id": "one-time-recovery-id",
+        "access_token": "recovery-access-token",
+        "refresh_token": "recovery-refresh-token",
+        "expires_in": 900,
+    })
+
+    assert handled is True
+    assert calls == ["recovery-access-token"]
+    recovered = st.session_state[auth._RECOVERY_STATE_KEY]
+    assert recovered["user_id"] == USER_ID
+    assert recovered["project_kind"] == "test"
+    assert recovered["account_label"] == "A"
+    assert recovered["access_token"] == "recovery-access-token"
+    assert st.session_state[auth._RECOVERY_ACK_KEY] == "one-time-recovery-id"
+
+
+def test_recovery_callback_never_trusts_email_or_identity_before_auth_user_verification(monkeypatch):
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+
+    class RejectingClient:
+        issuer = "https://pidcepvwsezdrlhxqksg.supabase.co/auth/v1"
+
+        def get_verified_user(self, _token):
+            raise auth.SupabaseAuthError("invalid recovery token")
+
+    monkeypatch.setattr(
+        auth,
+        "_client_for_recovery_token",
+        lambda _st, _token: (RejectingClient(), "test"),
+    )
+
+    handled = auth._capture_password_recovery(st, {
+        "status": "password_recovery",
+        "recovery_id": "bad-recovery",
+        "access_token": "unverified-access-token",
+        "refresh_token": "unverified-refresh-token",
+    })
+
+    assert handled is True
+    assert auth._RECOVERY_STATE_KEY not in st.session_state
+    assert st.session_state[auth._AUTH_NOTICE_KEY]
+    assert st.session_state[auth._RECOVERY_ACK_KEY] == "bad-recovery"
+
+
+def test_test_password_recovery_updates_only_with_recovery_session_and_does_not_activate_test_session(monkeypatch):
+    from contextlib import nullcontext
+
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    st.session_state[auth._RECOVERY_STATE_KEY] = {
+        "access_token": "test-recovery-access",
+        "refresh_token": "test-recovery-refresh",
+        "expires_at": int(time.time()) + 900,
+        "user_id": USER_ID,
+        "email": "verified-test-user@example.invalid",
+        "issuer": "https://pidcepvwsezdrlhxqksg.supabase.co/auth/v1",
+        "project_kind": "test",
+        "account_label": "A",
+    }
+    updates = []
+
+    class FakeClient:
+        def __init__(self, *, supabase_url, publishable_key):
+            assert supabase_url == "https://pidcepvwsezdrlhxqksg.supabase.co"
+            assert publishable_key == auth._TEST_PROJECT_PUBLISHABLE_KEY
+
+        def update_password(self, access_token, password):
+            updates.append((access_token, password))
+            return {"id": USER_ID, "email": "verified-test-user@example.invalid"}
+
+    monkeypatch.setattr(auth, "SupabaseAuthClient", FakeClient)
+    monkeypatch.setattr(st, "form", lambda *_args, **_kwargs: nullcontext(), raising=False)
+    monkeypatch.setattr(st, "title", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(st, "info", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(st, "error", lambda *_args, **_kwargs: None, raising=False)
+    values = iter(["New-Test-Password-2026", "New-Test-Password-2026"])
+    monkeypatch.setattr(st, "text_input", lambda *_args, **_kwargs: next(values), raising=False)
+    monkeypatch.setattr(st, "form_submit_button", lambda *_args, **_kwargs: True, raising=False)
+
+    class RerunCalled(Exception):
+        pass
+
+    monkeypatch.setattr(st, "rerun", lambda: (_ for _ in ()).throw(RerunCalled()), raising=False)
+
+    with pytest.raises(RerunCalled):
+        auth._render_password_recovery(st)
+
+    assert updates == [("test-recovery-access", "New-Test-Password-2026")]
+    assert auth._RECOVERY_STATE_KEY not in st.session_state
+    assert auth.AUTH_SESSION_KEY not in st.session_state
+    assert "SUPABASE_TEST_USER_A_PASSWORD" in st.session_state[auth._RECOVERY_SUCCESS_NOTICE_KEY]
