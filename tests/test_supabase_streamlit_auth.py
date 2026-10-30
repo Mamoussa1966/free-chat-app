@@ -267,6 +267,7 @@ def test_recovery_callback_component_captures_top_level_tokens_without_iframe_me
     assert "window.location.search" in source
     assert 'hashParams.get("type") === "recovery"' in source
     assert 'queryParams.get("type") === "recovery"' in source
+    assert 'setStateValue("recovery_checked", true)' in source
     assert 'setTriggerValue("recovery_payload"' in source
     assert "window.history.replaceState" in source
     assert "window.parent" not in source
@@ -284,8 +285,9 @@ def test_recovery_callback_component_result_is_returned_to_python(monkeypatch):
 
     class FakeComponent:
         def __call__(self, **kwargs):
+            assert callable(kwargs["on_recovery_checked_change"])
             assert callable(kwargs["on_recovery_payload_change"])
-            return SimpleNamespace(recovery_payload=payload)
+            return SimpleNamespace(recovery_payload=payload, recovery_checked=True)
 
     monkeypatch.setattr(auth, "_RECOVERY_CALLBACK_COMPONENT", FakeComponent())
 
@@ -293,7 +295,7 @@ def test_recovery_callback_component_result_is_returned_to_python(monkeypatch):
         FakeStreamlit(Fernet.generate_key().decode("ascii"))
     )
 
-    assert result == payload
+    assert result == (payload, True, True)
 
 
 def test_recovery_callback_with_missing_access_token_shows_actionable_notice():
@@ -318,3 +320,92 @@ def test_browser_storage_component_no_longer_contains_recovery_message_bridge():
     assert "AI_COUNCIL_RECOVERY_PAYLOAD" not in component
     assert "AI_COUNCIL_RECOVERY_ACK" not in component
     assert "PARENT_ORIGIN" not in component
+
+
+def test_recovery_callback_is_processed_before_legacy_browser_storage_bridge(monkeypatch):
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    st.success = lambda *_args, **_kwargs: None
+    st.warning = lambda *_args, **_kwargs: None
+    st.info = lambda *_args, **_kwargs: None
+
+    payload = {
+        "status": "password_recovery",
+        "recovery_id": "ordered-recovery-id",
+        "access_token": "ordered-access-token",
+        "refresh_token": "ordered-refresh-token",
+        "expires_in": 900,
+    }
+    calls = []
+
+    monkeypatch.setattr(
+        auth,
+        "get_supabase_config",
+        lambda _st: (PROJECT_URL, "sb_publishable_unit_test_key", True),
+    )
+    monkeypatch.setattr(auth, "_client", lambda _st: object())
+    monkeypatch.setattr(auth, "_session_fernet", lambda _st: (None, "MISSING"))
+    monkeypatch.setattr(
+        auth,
+        "_render_recovery_callback_component",
+        lambda _st: (payload, True, True),
+    )
+
+    def capture(_st, supplied):
+        assert supplied == payload
+        calls.append("capture")
+        _st.session_state[auth._RECOVERY_STATE_KEY] = {
+            "access_token": "ordered-access-token",
+            "refresh_token": "ordered-refresh-token",
+            "expires_at": int(time.time()) + 900,
+            "user_id": USER_ID,
+            "email": "a@example.org",
+            "issuer": ISSUER,
+            "project_kind": "test",
+            "account_label": "A",
+        }
+        return True
+
+    monkeypatch.setattr(auth, "_capture_password_recovery", capture)
+    monkeypatch.setattr(
+        auth,
+        "_render_password_recovery",
+        lambda _st: calls.append("password-form"),
+    )
+    monkeypatch.setattr(
+        auth,
+        "_render_browser_session_bridge",
+        lambda _st: calls.append("legacy-browser-bridge"),
+    )
+
+    assert auth.ensure_supabase_auth(st) is False
+    assert calls == ["capture", "password-form"]
+    assert "legacy-browser-bridge" not in calls
+
+
+def test_legacy_browser_storage_bridge_waits_until_recovery_listener_is_ready(monkeypatch):
+    st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    st.success = lambda *_args, **_kwargs: None
+    st.warning = lambda *_args, **_kwargs: None
+    st.info = lambda *_args, **_kwargs: None
+
+    monkeypatch.setattr(
+        auth,
+        "get_supabase_config",
+        lambda _st: (PROJECT_URL, "sb_publishable_unit_test_key", True),
+    )
+    monkeypatch.setattr(auth, "_client", lambda _st: object())
+    monkeypatch.setattr(auth, "_session_fernet", lambda _st: (None, "MISSING"))
+    monkeypatch.setattr(
+        auth,
+        "_render_recovery_callback_component",
+        lambda _st: (None, False, True),
+    )
+    browser_calls = []
+    monkeypatch.setattr(
+        auth,
+        "_render_browser_session_bridge",
+        lambda _st: browser_calls.append("mounted"),
+    )
+
+    assert auth.ensure_supabase_auth(st) is False
+    assert browser_calls == []
