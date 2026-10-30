@@ -32,6 +32,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_PROD_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PROD_PUBLISHABLE_KEY }}
       SUPABASE_TEST_USER_A_EMAIL: ${{ secrets.SUPABASE_TEST_USER_A_EMAIL }}
       SUPABASE_TEST_USER_A_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_A_PASSWORD }}
       SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
@@ -42,7 +43,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate required secrets and exact test-project key fingerprint
+      - name: Validate required secrets and exact project key fingerprints
         shell: bash
         run: |
           python - <<'PY'
@@ -52,6 +53,7 @@ jobs:
           names = (
               "SUPABASE_URL",
               "SUPABASE_PUBLISHABLE_KEY",
+              "SUPABASE_PROD_PUBLISHABLE_KEY",
               "SUPABASE_TEST_USER_A_EMAIL",
               "SUPABASE_TEST_USER_A_PASSWORD",
               "SUPABASE_TEST_USER_B_EMAIL",
@@ -69,18 +71,24 @@ jobs:
               print("LIVE_AUTH_ACCEPTANCE=BLOCKED; SUPABASE_URL does not match the dedicated test project")
               raise SystemExit(2)
 
-          # Compare a SHA-256 fingerprint with the active publishable key
-          # returned by the dedicated Supabase test project. Never print the key.
-          expected_key_sha256 = "4466db377d54ad52d16b78002fa97e0cadfff82cd3691b143ecd93ffb0377b32"
-          actual_key = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")
-          actual_key_sha256 = hashlib.sha256(actual_key.encode("utf-8")).hexdigest()
-          if actual_key_sha256 != expected_key_sha256:
-              print("LIVE_AUTH_PUBLISHABLE_KEY_MATCH=FAIL; GitHub Secret does not match the active test-project publishable key")
-              raise SystemExit(2)
+          # Fingerprints were calculated from the active keys returned by the
+          # corresponding Supabase projects. Never print either key or its hash.
+          expected_fingerprints = {
+              "SUPABASE_PUBLISHABLE_KEY": "4466db377d54ad52d16b78002fa97e0cadfff82cd3691b143ecd93ffb0377b32",
+              "SUPABASE_PROD_PUBLISHABLE_KEY": "0bc1ae2476f8070a5ff1a4010892f27b78238ddcda24a6645f7a07eb7afaf81c",
+          }
+          for secret_name, expected_sha256 in expected_fingerprints.items():
+              supplied = os.environ.get(secret_name, "")
+              actual_sha256 = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
+              label = "TEST" if secret_name == "SUPABASE_PUBLISHABLE_KEY" else "PROD"
+              if actual_sha256 != expected_sha256:
+                  print(f"LIVE_AUTH_{label}_PUBLISHABLE_KEY_MATCH=FAIL")
+                  raise SystemExit(2)
+              print(f"LIVE_AUTH_{label}_PUBLISHABLE_KEY_MATCH=PASS")
 
           print("LIVE_AUTH_ACCEPTANCE_CONFIG=PASS")
           print("LIVE_AUTH_ACCEPTANCE_TARGET=PASS (dedicated test project)")
-          print("LIVE_AUTH_PUBLISHABLE_KEY_MATCH=PASS")
+          PY
 
       - name: Install minimal HTTP dependency
         run: python -m pip install "requests>=2.31,<3"
