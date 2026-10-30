@@ -66,9 +66,13 @@ class FakeAuthTransport:
                 "expires_in": 3600,
                 "expires_at": int(time.time()) + 3600,
             })
+        if "/auth/v1/recover?redirect_to=" in url:
+            return FakeResponse(200, {})
+        if method == "PUT" and url.endswith("/auth/v1/user"):
+            return FakeResponse(200, {"id": USER_ID, "email": "a@gmail.com"})
         if "/auth/v1/logout?scope=local" in url:
             return FakeResponse(204, {})
-        if url.endswith("/auth/v1/user"):
+        if method == "GET" and url.endswith("/auth/v1/user"):
             token = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
             user = self.users.get(token)
             if user:
@@ -252,3 +256,51 @@ def test_sign_out_revokes_only_the_current_supabase_session():
     assert logout["method"] == "POST"
     assert logout["headers"]["Authorization"] == f"Bearer {ACCESS_A}"
     assert logout["headers"]["apikey"] == PUBLISHABLE_KEY
+
+
+def test_password_recovery_request_uses_validated_https_redirect_and_publishable_key():
+    client, transport = make_client()
+    client.send_password_recovery(
+        "a@gmail.com",
+        "https://free-chat-app.example.streamlit.app/",
+    )
+    call = next(c for c in transport.calls if "/auth/v1/recover?" in c["url"])
+    assert call["method"] == "POST"
+    assert call["json"] == {"email": "a@gmail.com"}
+    assert "redirect_to=https%3A%2F%2Ffree-chat-app.example.streamlit.app%2F" in call["url"]
+    assert call["headers"]["apikey"] == PUBLISHABLE_KEY
+    assert "Authorization" not in call["headers"]
+
+
+@pytest.mark.parametrize("redirect", [
+    "http://free-chat-app.example.streamlit.app/",
+    "https://user:pass@free-chat-app.example.streamlit.app/",
+    "https://free-chat-app.example.streamlit.app/#fragment",
+])
+def test_password_recovery_rejects_unsafe_redirect_before_network(redirect):
+    client, transport = make_client()
+    with pytest.raises(ValueError, match="HTTPS"):
+        client.send_password_recovery("a@gmail.com", redirect)
+    assert transport.calls == []
+
+
+def test_password_update_requires_recovery_access_token_and_revalidates_identity():
+    client, transport = make_client()
+    user = client.update_password(ACCESS_A, "New-Test-Password-2026")
+    assert user["id"] == USER_ID
+    update = next(c for c in transport.calls if c["method"] == "PUT")
+    assert update["url"].endswith("/auth/v1/user")
+    assert update["json"] == {"password": "New-Test-Password-2026"}
+    assert update["headers"]["Authorization"] == f"Bearer {ACCESS_A}"
+    assert update["headers"]["apikey"] == PUBLISHABLE_KEY
+    assert any(
+        c["method"] == "GET" and c["url"].endswith("/auth/v1/user")
+        for c in transport.calls
+    )
+
+
+def test_password_update_rejects_missing_access_token_without_network():
+    client, transport = make_client()
+    with pytest.raises(SupabaseAuthError, match="جلسة استعادة"):
+        client.update_password("", "New-Test-Password-2026")
+    assert transport.calls == []
