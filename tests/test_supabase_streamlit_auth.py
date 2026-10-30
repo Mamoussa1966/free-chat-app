@@ -238,15 +238,18 @@ def test_test_password_recovery_updates_only_with_recovery_session_and_does_not_
             return {"id": USER_ID, "email": "verified-test-user@example.invalid"}
 
     monkeypatch.setattr(auth, "SupabaseAuthClient", FakeClient)
-    monkeypatch.setattr(st, "form", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(st, "form", lambda *_args, **_kwargs: nullcontext(), raising=False)
+    monkeypatch.setattr(st, "title", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(st, "info", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(st, "error", lambda *_args, **_kwargs: None, raising=False)
     values = iter(["New-Test-Password-2026", "New-Test-Password-2026"])
-    monkeypatch.setattr(st, "text_input", lambda *_args, **_kwargs: next(values))
-    monkeypatch.setattr(st, "form_submit_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(st, "text_input", lambda *_args, **_kwargs: next(values), raising=False)
+    monkeypatch.setattr(st, "form_submit_button", lambda *_args, **_kwargs: True, raising=False)
 
     class RerunCalled(Exception):
         pass
 
-    monkeypatch.setattr(st, "rerun", lambda: (_ for _ in ()).throw(RerunCalled()))
+    monkeypatch.setattr(st, "rerun", lambda: (_ for _ in ()).throw(RerunCalled()), raising=False)
 
     with pytest.raises(RerunCalled):
         auth._render_password_recovery(st)
