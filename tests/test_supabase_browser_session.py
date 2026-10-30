@@ -31,6 +31,10 @@ class FakeStreamlit:
     def error(self, _message):
         raise AssertionError("unexpected error during a configured restore")
 
+    def html(self, _body, *, unsafe_allow_javascript=False):
+        # The test double models Streamlit >=1.66, whose st.html supports this flag.
+        assert unsafe_allow_javascript is True
+
 
 def make_session() -> SupabaseAuthSession:
     return SupabaseAuthSession(
