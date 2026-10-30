@@ -182,7 +182,6 @@ def test_recovery_callback_is_verified_with_project_user_endpoint_and_scoped_to_
     assert recovered["project_kind"] == "test"
     assert recovered["account_label"] == "A"
     assert recovered["access_token"] == "recovery-access-token"
-    assert st.session_state[auth._RECOVERY_ACK_KEY] == "one-time-recovery-id"
 
 
 def test_recovery_callback_never_trusts_email_or_identity_before_auth_user_verification(monkeypatch):
@@ -210,7 +209,6 @@ def test_recovery_callback_never_trusts_email_or_identity_before_auth_user_verif
     assert handled is True
     assert auth._RECOVERY_STATE_KEY not in st.session_state
     assert st.session_state[auth._AUTH_NOTICE_KEY]
-    assert st.session_state[auth._RECOVERY_ACK_KEY] == "bad-recovery"
 
 
 def test_test_password_recovery_updates_only_with_recovery_session_and_does_not_activate_test_session(monkeypatch):
@@ -262,46 +260,61 @@ def test_test_password_recovery_updates_only_with_recovery_session_and_does_not_
 
 
 
-def test_top_level_recovery_bridge_runs_in_main_document_and_captures_only_static_code(monkeypatch):
+def test_recovery_callback_component_captures_top_level_tokens_without_iframe_messaging():
+    source = auth._RECOVERY_CALLBACK_COMPONENT_JS
+
+    assert "window.location.hash" in source
+    assert "window.location.search" in source
+    assert 'hashParams.get("type") === "recovery"' in source
+    assert 'queryParams.get("type") === "recovery"' in source
+    assert 'setTriggerValue("recovery_payload"' in source
+    assert "window.history.replaceState" in source
+    assert "window.parent" not in source
+    assert "postMessage" not in source
+
+
+def test_recovery_callback_component_result_is_returned_to_python(monkeypatch):
+    from types import SimpleNamespace
+
+    payload = {
+        "status": "password_recovery",
+        "recovery_id": "v2-callback-id",
+        "access_token": "callback-access-token",
+    }
+
+    class FakeComponent:
+        def __call__(self, **kwargs):
+            assert callable(kwargs["on_recovery_payload_change"])
+            return SimpleNamespace(recovery_payload=payload)
+
+    monkeypatch.setattr(auth, "_RECOVERY_CALLBACK_COMPONENT", FakeComponent())
+
+    result = auth._render_recovery_callback_component(
+        FakeStreamlit(Fernet.generate_key().decode("ascii"))
+    )
+
+    assert result == payload
+
+
+def test_recovery_callback_with_missing_access_token_shows_actionable_notice():
     st = FakeStreamlit(Fernet.generate_key().decode("ascii"))
-    calls = {}
 
-    def fake_html(body, *, unsafe_allow_javascript=False):
-        calls["body"] = body
-        calls["unsafe_allow_javascript"] = unsafe_allow_javascript
+    handled = auth._capture_password_recovery(st, {
+        "status": "password_recovery_invalid",
+        "message": "رابط الاستعادة وصل دون رمز جلسة صالح. اطلب رسالة استعادة جديدة.",
+    })
 
-    monkeypatch.setattr(st, "html", fake_html, raising=False)
-
-    assert auth._render_top_level_recovery_bridge(st) is True
-    assert calls["unsafe_allow_javascript"] is True
-    assert "window.location.hash" in calls["body"]
-    assert "window.history.replaceState" in calls["body"]
-    assert "AI_COUNCIL_AUTH_BRIDGE_READY" in calls["body"]
-    assert "AI_COUNCIL_RECOVERY_PAYLOAD" in calls["body"]
-    assert "AI_COUNCIL_RECOVERY_ACK" in calls["body"]
-    assert "window.parent.location" not in calls["body"]
+    assert handled is True
+    assert "اطلب رسالة استعادة جديدة" in st.session_state[auth._AUTH_NOTICE_KEY]
 
 
-def test_browser_component_no_longer_reads_parent_url_directly():
+def test_browser_storage_component_no_longer_contains_recovery_message_bridge():
     component_path = Path(__file__).resolve().parents[1] / "supabase_browser_session_component" / "index.html"
     component = component_path.read_text(encoding="utf-8")
 
-    assert "window.parent.location" not in component
-    assert "AI_COUNCIL_AUTH_BRIDGE_READY" in component
-    assert "AI_COUNCIL_RECOVERY_PAYLOAD" in component
-    assert "AI_COUNCIL_RECOVERY_ACK" in component
-    assert "event.source !== window.parent" in component
-    assert "PARENT_ORIGIN" in component
-    assert 'window.parent.postMessage(message, PARENT_ORIGIN || "*")' in component
-    assert "event.origin !== window.location.origin" not in component
-
-
-def test_parent_bridge_accepts_only_the_registered_component_window_and_opaque_origin():
-    source = auth._RECOVERY_PARENT_BRIDGE_HTML
-
-    assert "isTrustedRecoveryComponentFrame" in source
-    assert "frame.contentWindow !== source" in source
-    assert '"/component/ai_council_supabase_browser_session"' in source
-    assert 'origin === "null"' in source
-    assert 'event.origin === "null" ? "*" : event.origin' in source
-    assert "event.origin !== window.location.origin" not in source
+    assert "localStorage.getItem" in component
+    assert "localStorage.setItem" in component
+    assert "AI_COUNCIL_AUTH_BRIDGE_READY" not in component
+    assert "AI_COUNCIL_RECOVERY_PAYLOAD" not in component
+    assert "AI_COUNCIL_RECOVERY_ACK" not in component
+    assert "PARENT_ORIGIN" not in component

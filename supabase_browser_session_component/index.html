@@ -10,11 +10,10 @@
 (() => {
   "use strict";
 
-  // Only encrypted opaque session envelopes are persisted. Recovery tokens
-  // are handed directly to Streamlit memory once, never written to localStorage.
+  // Only encrypted opaque session envelopes are persisted here.
+  // Recovery callbacks are handled separately by a same-page Components v2 bridge.
   const DEFAULT_STORAGE_KEY = "ai_council_supabase_session_v1";
   let lastSent = "";
-  let pendingRecoveryId = "";
 
   function sendToStreamlit(type, data) {
     window.parent.postMessage(
@@ -33,96 +32,12 @@
     });
   }
 
-  const RECOVERY_BRIDGE_ID = "ai-council-supabase-auth-v1";
-
-  function getParentOrigin() {
-    try {
-      if (document.referrer) return new URL(document.referrer).origin;
-      const ancestors = window.location.ancestorOrigins;
-      if (ancestors && ancestors.length) return String(ancestors[0]);
-    } catch (_error) {
-      // The source-window check below remains mandatory even without a referrer.
-    }
-    return "";
-  }
-
-  const PARENT_ORIGIN = getParentOrigin();
-
-  function sendParentMessage(message) {
-    // A known parent origin is preferred; "*" is only a fallback for browsers
-    // that suppress referrer metadata inside a sandboxed component iframe.
-    window.parent.postMessage(message, PARENT_ORIGIN || "*");
-  }
-
-  function sendBridgeReady() {
-    sendParentMessage({
-      type: "AI_COUNCIL_AUTH_BRIDGE_READY",
-      bridge: RECOVERY_BRIDGE_ID
-    });
-  }
-
-  function acknowledgeParentRecovery(recoveryId) {
-    if (!recoveryId) return;
-    sendParentMessage({
-      type: "AI_COUNCIL_RECOVERY_ACK",
-      bridge: RECOVERY_BRIDGE_ID,
-      recovery_id: recoveryId
-    });
-  }
-
-  function receiveParentRecovery(event) {
-    if (event.source !== window.parent) return;
-    if (PARENT_ORIGIN && event.origin !== PARENT_ORIGIN) return;
-    const message = event.data || {};
-    if (
-      message.type !== "AI_COUNCIL_RECOVERY_PAYLOAD" ||
-      message.bridge !== RECOVERY_BRIDGE_ID
-    ) return;
-
-    const payload = message.payload;
-    if (
-      !payload ||
-      payload.status !== "password_recovery" ||
-      typeof payload.recovery_id !== "string" ||
-      !payload.recovery_id ||
-      typeof payload.access_token !== "string" ||
-      !payload.access_token ||
-      payload.access_token.length > 8192 ||
-      typeof payload.refresh_token !== "string" ||
-      payload.refresh_token.length > 8192
-    ) return;
-
-    pendingRecoveryId = payload.recovery_id;
-    sendValue({
-      status: "password_recovery",
-      recovery_id: pendingRecoveryId,
-      access_token: payload.access_token,
-      refresh_token: payload.refresh_token,
-      token_type: payload.token_type || "bearer",
-      expires_in: Number(payload.expires_in || 1800)
-    });
-  }
-
   function onRender(args) {
     const storageKey = typeof args.storage_key === "string" && args.storage_key
       ? args.storage_key : DEFAULT_STORAGE_KEY;
     const persistedPayload = typeof args.persisted_payload === "string"
       ? args.persisted_payload : "";
     const clearId = typeof args.clear_id === "string" ? args.clear_id : "";
-    const recoveryAck = typeof args.recovery_ack === "string" ? args.recovery_ack : "";
-
-    if (pendingRecoveryId && recoveryAck === pendingRecoveryId) {
-      const acknowledgedId = pendingRecoveryId;
-      pendingRecoveryId = "";
-      sendValue({ status: "empty", clear_id: "" });
-      acknowledgeParentRecovery(acknowledgedId);
-      return;
-    }
-
-    // Re-handshake on every Streamlit render so ordering/reruns cannot lose a
-    // recovery callback that was captured before this iframe became ready.
-    sendBridgeReady();
-
     try {
       if (args.clear === true) {
         localStorage.removeItem(storageKey);
@@ -152,12 +67,9 @@
       onRender(event.data.args || {});
       return;
     }
-    receiveParentRecovery(event);
   });
 
-  window.addEventListener("load", sendBridgeReady);
   sendToStreamlit("streamlit:componentReady", { apiVersion: 1 });
-  sendBridgeReady();
   sendToStreamlit("streamlit:setFrameHeight", { height: 0 });
 })();
 </script>
