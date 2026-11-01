@@ -3383,6 +3383,16 @@ def _seat_result_has_message(chat: dict, seat, result: dict) -> bool:
     return False
 
 
+def _display_safe_agent_content(content: str) -> str:
+    """Translate internal control-prose suppression markers only at render time."""
+    value = str(content or "")
+    marker = "[AGENT_CONTROL_PROSE_SUPPRESSED]"
+    if marker not in value:
+        return value
+    notice = "لم ينتج الوكيل نصًا مستقلًا للمستخدم؛ حُجبت تعليمات التحكم الداخلية."
+    return value.replace(marker, notice)
+
+
 def _historical_not_configured_with_current_setup(latest_status: dict, current_models: tuple | list) -> bool:
     """Identify a historical NOT_CONFIGURED result when the current session is now ready."""
     status = str((latest_status or {}).get("status") or "").strip().upper()
@@ -3503,7 +3513,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
             if message.get("provider_reported_model"):
                 st.caption(f"Provider model: `{message.get('provider_reported_model')}`")
-            st.markdown(message.get("content", ""))
+            st.markdown(_display_safe_agent_content(message.get("content", "")))
             _voice_player(message.get("content", ""))
             st.divider()
 
