@@ -194,3 +194,24 @@ def test_saved_success_is_marked_when_current_first_free_model_was_not_attempted
         {"status": "PROVIDER_ERROR", "executed_model": "gemini-3.6-flash"},
         ("gemini-3.8-flash",)
     ) is False
+
+
+
+def test_internal_control_suppression_marker_is_translated_only_for_display():
+    from main import _display_safe_agent_content
+
+    stored = "[AGENT_CONTROL_PROSE_SUPPRESSED]"
+    displayed = _display_safe_agent_content(stored)
+    assert "[AGENT_CONTROL_PROSE_SUPPRESSED]" not in displayed
+    assert "حُجبت تعليمات التحكم الداخلية" in displayed
+    assert stored == "[AGENT_CONTROL_PROSE_SUPPRESSED]"
+
+
+def test_control_suppression_marker_does_not_hide_surrounding_agent_prose():
+    from main import _display_safe_agent_content
+
+    displayed = _display_safe_agent_content(
+        "[AGENT_CONTROL_PROSE_SUPPRESSED]\nThe agent has no separate user-facing text."
+    )
+    assert "حُجبت تعليمات التحكم الداخلية" in displayed
+    assert "The agent has no separate user-facing text." in displayed
