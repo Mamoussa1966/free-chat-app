@@ -3398,6 +3398,20 @@ def _runtime_commit_summary(attestation: dict) -> tuple[str, str, bool]:
     return (commit if valid else "NOT_PROVEN", source, valid)
 
 
+def _saved_result_uses_different_current_first_model(result: dict, current_models: tuple | list) -> bool:
+    """Detect when a saved successful response did not attempt today's first configured model."""
+    models = tuple(str(item).strip() for item in (current_models or ()) if str(item).strip())
+    if not models or str((result or {}).get("status") or "").strip().upper() != "SUCCESS":
+        return False
+    executed = str((result or {}).get("executed_model") or (result or {}).get("model") or "").strip()
+    attempted = {
+        str(item).strip()
+        for item in ((result or {}).get("attempted_models") or [])
+        if str(item).strip()
+    }
+    return bool(executed and executed != models[0] and models[0] not in attempted)
+
+
 def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
         st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
@@ -3407,6 +3421,12 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
         latest_result = _latest_seat_execution_result(chat, seat.key)
         if latest_result is not None:
             latest_status = _seat_execution_status(latest_result)
+            if _saved_result_uses_different_current_first_model(latest_result, models):
+                executed_model = str(latest_result.get("executed_model") or latest_result.get("model") or "").strip()
+                st.caption(
+                    f"الرد المحفوظ نُفّذ باستخدام `{executed_model}`؛ أول مرشح Free في الإعداد الحالي "
+                    f"هو `{models[0]}`. هذا وصف للنتيجة المحفوظة وليس تنفيذًا جديدًا."
+                )
             has_response_message = (
                 latest_status["status"] == "SUCCESS"
                 and _seat_result_has_message(chat, seat, latest_result)
