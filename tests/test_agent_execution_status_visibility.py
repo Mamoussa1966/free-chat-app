@@ -142,3 +142,76 @@ def test_malformed_round_values_do_not_break_message_lookup():
 def test_missing_result_does_not_invent_a_provider_failure():
     assert _latest_seat_execution_result({"request_records": []}, "kimi") is None
     assert _latest_seat_execution_result({}, "kimi") is None
+
+
+
+def test_historical_not_configured_result_is_distinguished_when_current_setup_exists():
+    from main import _historical_not_configured_with_current_setup
+
+    old_result = {"status": "NOT_CONFIGURED", "dispatch_reason": "CREDENTIAL_MISSING"}
+    assert _historical_not_configured_with_current_setup(old_result, ("claude-sonnet-4-6",)) is True
+    assert _historical_not_configured_with_current_setup(old_result, ()) is False
+    assert _historical_not_configured_with_current_setup(
+        {"status": "PROVIDER_ERROR"}, ("claude-sonnet-4-6",)
+    ) is False
+
+
+def test_runtime_commit_summary_requires_exact_git_sha_and_source():
+    from main import _runtime_commit_summary
+
+    commit = "e5d0d054572e69c2f42990e2ecb2bfb88bf310fa"
+    assert _runtime_commit_summary({
+        "observed_git_commit_sha": commit,
+        "observed_git_commit_source": "git_rev_parse_HEAD",
+    }) == (commit, "git_rev_parse_HEAD", True)
+    assert _runtime_commit_summary({
+        "observed_git_commit_sha": "NOT_AVAILABLE",
+        "observed_git_commit_source": "commit_metadata_unavailable",
+    }) == ("NOT_PROVEN", "commit_metadata_unavailable", False)
+    assert _runtime_commit_summary({
+        "observed_git_commit_sha": "abc",
+        "observed_git_commit_source": "environment:SOURCE_VERSION",
+    }) == ("NOT_PROVEN", "environment:SOURCE_VERSION", False)
+
+
+
+def test_saved_success_is_marked_when_current_first_free_model_was_not_attempted():
+    from main import _saved_result_uses_different_current_first_model
+
+    saved = {
+        "status": "SUCCESS",
+        "executed_model": "gemini-3.6-flash",
+        "attempted_models": ["gemini-3.6-flash"],
+    }
+    assert _saved_result_uses_different_current_first_model(
+        saved, ("gemini-3.8-flash", "gemini-3.7-flash")
+    ) is True
+    assert _saved_result_uses_different_current_first_model(
+        {**saved, "attempted_models": ["gemini-3.8-flash", "gemini-3.6-flash"]},
+        ("gemini-3.8-flash", "gemini-3.7-flash")
+    ) is False
+    assert _saved_result_uses_different_current_first_model(
+        {"status": "PROVIDER_ERROR", "executed_model": "gemini-3.6-flash"},
+        ("gemini-3.8-flash",)
+    ) is False
+
+
+
+def test_internal_control_suppression_marker_is_translated_only_for_display():
+    from main import _display_safe_agent_content
+
+    stored = "[AGENT_CONTROL_PROSE_SUPPRESSED]"
+    displayed = _display_safe_agent_content(stored)
+    assert "[AGENT_CONTROL_PROSE_SUPPRESSED]" not in displayed
+    assert "حُجبت تعليمات التحكم الداخلية" in displayed
+    assert stored == "[AGENT_CONTROL_PROSE_SUPPRESSED]"
+
+
+def test_control_suppression_marker_does_not_hide_surrounding_agent_prose():
+    from main import _display_safe_agent_content
+
+    displayed = _display_safe_agent_content(
+        "[AGENT_CONTROL_PROSE_SUPPRESSED]\nThe agent has no separate user-facing text."
+    )
+    assert "حُجبت تعليمات التحكم الداخلية" in displayed
+    assert "The agent has no separate user-facing text." in displayed

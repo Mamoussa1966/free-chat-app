@@ -3383,6 +3383,45 @@ def _seat_result_has_message(chat: dict, seat, result: dict) -> bool:
     return False
 
 
+def _display_safe_agent_content(content: str) -> str:
+    """Translate internal control-prose suppression markers only at render time."""
+    value = str(content or "")
+    marker = "[AGENT_CONTROL_PROSE_SUPPRESSED]"
+    if marker not in value:
+        return value
+    notice = "لم ينتج الوكيل نصًا مستقلًا للمستخدم؛ حُجبت تعليمات التحكم الداخلية."
+    return value.replace(marker, notice)
+
+
+def _historical_not_configured_with_current_setup(latest_status: dict, current_models: tuple | list) -> bool:
+    """Identify a historical NOT_CONFIGURED result when the current session is now ready."""
+    status = str((latest_status or {}).get("status") or "").strip().upper()
+    return status == "NOT_CONFIGURED" and bool(tuple(current_models or ()))
+
+
+def _runtime_commit_summary(attestation: dict) -> tuple[str, str, bool]:
+    """Return a safe runtime commit identity for display without claiming unavailable proof."""
+    data = attestation if isinstance(attestation, dict) else {}
+    commit = str(data.get("observed_git_commit_sha") or "").strip().lower()
+    source = str(data.get("observed_git_commit_source") or "commit_metadata_unavailable").strip()
+    valid = bool(re.fullmatch(r"[0-9a-f]{40}", commit)) and source != "commit_metadata_unavailable"
+    return (commit if valid else "NOT_PROVEN", source, valid)
+
+
+def _saved_result_uses_different_current_first_model(result: dict, current_models: tuple | list) -> bool:
+    """Detect when a saved successful response did not attempt today's first configured model."""
+    models = tuple(str(item).strip() for item in (current_models or ()) if str(item).strip())
+    if not models or str((result or {}).get("status") or "").strip().upper() != "SUCCESS":
+        return False
+    executed = str((result or {}).get("executed_model") or (result or {}).get("model") or "").strip()
+    attempted = {
+        str(item).strip()
+        for item in ((result or {}).get("attempted_models") or [])
+        if str(item).strip()
+    }
+    return bool(executed and executed != models[0] and models[0] not in attempted)
+
+
 def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
         st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
@@ -3392,6 +3431,12 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
         latest_result = _latest_seat_execution_result(chat, seat.key)
         if latest_result is not None:
             latest_status = _seat_execution_status(latest_result)
+            if _saved_result_uses_different_current_first_model(latest_result, models):
+                executed_model = str(latest_result.get("executed_model") or latest_result.get("model") or "").strip()
+                st.caption(
+                    f"الرد المحفوظ نُفّذ باستخدام `{executed_model}`؛ أول مرشح Free في الإعداد الحالي "
+                    f"هو `{models[0]}`. هذا وصف للنتيجة المحفوظة وليس تنفيذًا جديدًا."
+                )
             has_response_message = (
                 latest_status["status"] == "SUCCESS"
                 and _seat_result_has_message(chat, seat, latest_result)
@@ -3401,7 +3446,14 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             # rendered from canonical chat messages below, not duplicated here.
             if not has_response_message:
                 if latest_status["status"] == "NOT_CONFIGURED":
-                    st.info(f"حالة آخر تنفيذ: {latest_status['label']}")
+                    if _historical_not_configured_with_current_setup(latest_status, models):
+                        st.info(
+                            "آخر نتيجة محفوظة لهذا الوكيل كانت «غير مهيأ»، لكن الاعتماد "
+                            "وقائمة Free متاحان الآن في إعدادات الجلسة. هذه نتيجة تاريخية "
+                            "ولا تصف جاهزية الإعداد الحالي؛ لم يُعَد تنفيذ الطلب القديم."
+                        )
+                    else:
+                        st.info(f"حالة آخر تنفيذ: {latest_status['label']}")
                 elif latest_status["status"] == "SUCCESS":
                     st.warning("سُجّل نجاح طلب المزوّد، لكن لم تُعثر على رسالة رد مرتبطة به في سجل المحادثة.")
                     # Read-only fallback from the authoritative saved RequestRecord.
@@ -3461,7 +3513,7 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
             st.caption(f"Executed model: `{executed_model or displayed_model}`")
             if message.get("provider_reported_model"):
                 st.caption(f"Provider model: `{message.get('provider_reported_model')}`")
-            st.markdown(message.get("content", ""))
+            st.markdown(_display_safe_agent_content(message.get("content", "")))
             _voice_player(message.get("content", ""))
             st.divider()
 
@@ -5221,6 +5273,19 @@ def run_app() -> None:
     auth_gate = ensure_supabase_auth(st)
     if auth_gate is False:
         return
+    # Capture the running checkout identity once per Streamlit session. This is
+    # read-only and lets the operator compare the actual Cloud runtime SHA with
+    # the production branch, instead of inferring deployment from a release label.
+    runtime_attestation = st.session_state.get("_hotfix16430_runtime_attestation")
+    if not isinstance(runtime_attestation, dict):
+        try:
+            runtime_attestation = build_runtime_deployment_attestation()
+        except Exception:
+            runtime_attestation = {
+                "observed_git_commit_sha": "NOT_AVAILABLE",
+                "observed_git_commit_source": "runtime_attestation_error",
+            }
+        st.session_state["_hotfix16430_runtime_attestation"] = runtime_attestation
     # HOTFIX164.19: intercept the forensic page before normal state hydration,
     # health checks, provider configuration, context rebuilding, or audit tests.
     if st.session_state.get("_hotfix16422_read_only_mode"):
@@ -5258,6 +5323,19 @@ def run_app() -> None:
     _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    runtime_commit, runtime_commit_source, runtime_commit_proven = _runtime_commit_summary(
+        st.session_state.get("_hotfix16430_runtime_attestation", {})
+    )
+    if runtime_commit_proven:
+        st.caption(
+            f"Runtime checkout commit: `{runtime_commit}` · source: `{runtime_commit_source}` "
+            "· قارن SHA مع رأس فرع gitops-v0.4-final في GitHub."
+        )
+    else:
+        st.warning(
+            "Runtime checkout commit: NOT_PROVEN — لم تتوفر هوية Git موثوقة من نسخة Streamlit الحالية؛ "
+            "لا يُعد رقم HOTFIX وحده إثباتًا للنشر."
+        )
     st.caption(f"HOTFIX123 Release Identity Gate: {release_identity.get('gate', 'FAIL')} • Frozen Provider={release_identity.get('observed', {}).get('provider_core', 'NOT_PROVEN')} • Runtime Match={release_identity.get('runtime_matches_frozen_identity', False)}")
     st.caption("V26.3: Authoritative Conversation Persistence · Message→Request→Round Chain · HOTFIX145 Core Preserved")
     st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
