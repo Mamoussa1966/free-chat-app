@@ -142,3 +142,33 @@ def test_malformed_round_values_do_not_break_message_lookup():
 def test_missing_result_does_not_invent_a_provider_failure():
     assert _latest_seat_execution_result({"request_records": []}, "kimi") is None
     assert _latest_seat_execution_result({}, "kimi") is None
+
+
+
+def test_historical_not_configured_result_is_distinguished_when_current_setup_exists():
+    from main import _historical_not_configured_with_current_setup
+
+    old_result = {"status": "NOT_CONFIGURED", "dispatch_reason": "CREDENTIAL_MISSING"}
+    assert _historical_not_configured_with_current_setup(old_result, ("claude-sonnet-4-6",)) is True
+    assert _historical_not_configured_with_current_setup(old_result, ()) is False
+    assert _historical_not_configured_with_current_setup(
+        {"status": "PROVIDER_ERROR"}, ("claude-sonnet-4-6",)
+    ) is False
+
+
+def test_runtime_commit_summary_requires_exact_git_sha_and_source():
+    from main import _runtime_commit_summary
+
+    commit = "e5d0d054572e69c2f42990e2ecb2bfb88bf310fa"
+    assert _runtime_commit_summary({
+        "observed_git_commit_sha": commit,
+        "observed_git_commit_source": "git_rev_parse_HEAD",
+    }) == (commit, "git_rev_parse_HEAD", True)
+    assert _runtime_commit_summary({
+        "observed_git_commit_sha": "NOT_AVAILABLE",
+        "observed_git_commit_source": "commit_metadata_unavailable",
+    }) == ("NOT_PROVEN", "commit_metadata_unavailable", False)
+    assert _runtime_commit_summary({
+        "observed_git_commit_sha": "abc",
+        "observed_git_commit_source": "environment:SOURCE_VERSION",
+    }) == ("NOT_PROVEN", "environment:SOURCE_VERSION", False)
