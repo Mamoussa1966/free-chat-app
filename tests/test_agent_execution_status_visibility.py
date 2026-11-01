@@ -172,3 +172,25 @@ def test_runtime_commit_summary_requires_exact_git_sha_and_source():
         "observed_git_commit_sha": "abc",
         "observed_git_commit_source": "environment:SOURCE_VERSION",
     }) == ("NOT_PROVEN", "environment:SOURCE_VERSION", False)
+
+
+
+def test_saved_success_is_marked_when_current_first_free_model_was_not_attempted():
+    from main import _saved_result_uses_different_current_first_model
+
+    saved = {
+        "status": "SUCCESS",
+        "executed_model": "gemini-3.6-flash",
+        "attempted_models": ["gemini-3.6-flash"],
+    }
+    assert _saved_result_uses_different_current_first_model(
+        saved, ("gemini-3.8-flash", "gemini-3.7-flash")
+    ) is True
+    assert _saved_result_uses_different_current_first_model(
+        {**saved, "attempted_models": ["gemini-3.8-flash", "gemini-3.6-flash"]},
+        ("gemini-3.8-flash", "gemini-3.7-flash")
+    ) is False
+    assert _saved_result_uses_different_current_first_model(
+        {"status": "PROVIDER_ERROR", "executed_model": "gemini-3.6-flash"},
+        ("gemini-3.8-flash",)
+    ) is False
