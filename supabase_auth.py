@@ -175,7 +175,7 @@ class SupabaseAuthClient:
                     wait_seconds = None
                 if wait_seconds is None:
                     wait_match = re.search(
-                        r"only request this after\s+(\\d{1,5})\s+seconds?",
+                        r"only request this after +([0-9]{1,5}) +seconds?",
                         provider_message,
                     )
                     if wait_match:
