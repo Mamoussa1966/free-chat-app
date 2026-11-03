@@ -160,7 +160,40 @@ class SupabaseAuthClient:
             elif status in (401, 403):
                 message = "بيانات الدخول غير صحيحة أو انتهت الجلسة."
             elif status == 429:
-                message = "طلبات تسجيل الدخول كثيرة. انتظر قليلًا ثم أعد المحاولة."
+                # Supabase Auth returns a structured minimum-wait message for
+                # recovery throttling. Extract only the integer duration; never
+                # echo the provider body, which may contain private values.
+                wait_seconds = None
+                response_headers = getattr(response, "headers", {}) or {}
+                try:
+                    retry_after = response_headers.get("Retry-After")
+                    if retry_after is not None and re.fullmatch(r"\d{1,5}", str(retry_after).strip()):
+                        candidate_wait = int(str(retry_after).strip())
+                        if 1 <= candidate_wait <= 3600:
+                            wait_seconds = candidate_wait
+                except (AttributeError, TypeError, ValueError):
+                    wait_seconds = None
+                if wait_seconds is None:
+                    wait_match = re.search(
+                        r"only request this after +([0-9]{1,5}) +seconds?",
+                        provider_message,
+                    )
+                    if wait_match:
+                        candidate_wait = int(wait_match.group(1))
+                        if 1 <= candidate_wait <= 3600:
+                            wait_seconds = candidate_wait
+
+                is_recovery_request = path.split("?", 1)[0].rstrip("/").lower() == "recover"
+                if is_recovery_request:
+                    message = "تم تقييد إرسال رابط استعادة كلمة المرور مؤقتًا."
+                else:
+                    message = "تم تجاوز الحد المؤقت لطلبات المصادقة."
+                if wait_seconds is not None:
+                    message += f" انتظر {wait_seconds} ثانية قبل المحاولة التالية."
+                else:
+                    message += " انتظر قليلًا قبل المحاولة التالية."
+                if is_recovery_request:
+                    message += " لا تضغط زر إرسال رابط الاستعادة مرة أخرى خلال هذه المدة."
             elif status in (400, 422):
                 message = "تعذر قبول بيانات المصادقة. راجع البريد الإلكتروني وكلمة المرور."
             elif status == 409:
