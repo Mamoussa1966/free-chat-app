@@ -47,7 +47,7 @@ def test_recovery_rate_limit_names_the_recovery_action_and_wait_duration():
 
     with pytest.raises(SupabaseAuthError) as caught:
         client.send_password_recovery(
-            "person@example.com",
+            "a@gmail.com",
             "https://council-auth-test.streamlit.app/",
         )
 
@@ -84,7 +84,7 @@ def test_recovery_rate_limit_rejects_unsafe_wait_values(raw_wait):
 
     with pytest.raises(SupabaseAuthError) as caught:
         client.send_password_recovery(
-            "person@example.com",
+            "a@gmail.com",
             "https://council-auth-test.streamlit.app/",
         )
 
