@@ -167,7 +167,7 @@ class SupabaseAuthClient:
                 response_headers = getattr(response, "headers", {}) or {}
                 try:
                     retry_after = response_headers.get("Retry-After")
-                    if retry_after is not None and re.fullmatch(r"\\d{1,5}", str(retry_after).strip()):
+                    if retry_after is not None and re.fullmatch(r"\d{1,5}", str(retry_after).strip()):
                         candidate_wait = int(str(retry_after).strip())
                         if 1 <= candidate_wait <= 3600:
                             wait_seconds = candidate_wait
@@ -175,7 +175,7 @@ class SupabaseAuthClient:
                     wait_seconds = None
                 if wait_seconds is None:
                     wait_match = re.search(
-                        r"only request this after\\s+(\\d{1,5})\\s+seconds?",
+                        r"only request this after\s+(\\d{1,5})\s+seconds?",
                         provider_message,
                     )
                     if wait_match:
