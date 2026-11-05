@@ -87,6 +87,7 @@ def make_client(fake=None):
         supabase_url=PROJECT_URL,
         publishable_key=PUBLISHABLE_KEY,
         session=transport,
+        password_breach_checker=lambda _password: False,
     ), transport
 
 
