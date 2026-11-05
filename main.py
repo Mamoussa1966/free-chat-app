@@ -2943,7 +2943,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.caption("المقاعد: ChatGPT 1 · Gemini 2 · Claude 3 · Grok 4 · Kimi 5 · أنت 6 · DeepSeek 7 · وكلاء إضافيون من 8")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
         st.session_state.rounds = rounds
-        st.caption("🆓 سياسة عدم التكلفة: Gemini Free Tier أو GroqCloud Free Plan فقط بعد تأكيد مستقل لكل حساب؛ مقعد Groq/xAI ليس GroqCloud. بقية واجهات API موقوفة. لا Local Engine ولا Paid fallback.")
+        st.caption("🆓 سياسة عدم التكلفة: Gemini Free Tier فقط بعد التأكيد، أو GroqCloud Free Plan بعد تأكيد مستقل للحساب؛ مقعد Grok/xAI ليس GroqCloud. بقية واجهات API موقوفة. لا Local Engine ولا Paid fallback.")
         if not gemini_free_tier_is_confirmed():
             st.warning("إرسال Gemini API متوقف حتى تأكيد أن مشروع Google AI Studio على Free Tier وغير مرتبط بالفوترة.")
         if any(seat.key == "groqcloud" for seat in seats) and not groqcloud_free_plan_is_confirmed():
