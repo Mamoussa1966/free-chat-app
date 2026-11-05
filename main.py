@@ -3638,9 +3638,17 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
     elif status == "NOT_EXECUTED":
         st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم يتم تنفيذ أي محاولة API.")
         st.caption("Classification: NOT_EXECUTED · Provider error not proven")
-    elif status == "NO_FREE_MODEL_CONFIGURED":
-        st.warning(f"🟡 {result['label']} — لا يوجد Free API model مُكوّن؛ لم يتم إرسال أي طلب.")
-        st.caption("Classification: NOT_CONFIGURED")
+    elif status in {"NOT_CONFIGURED", "NO_FREE_MODEL_CONFIGURED"}:
+        dispatch_reason = str(result.get("dispatch_reason") or "").strip().upper()
+        if dispatch_reason == "ZERO_COST_API_POLICY_BLOCKED":
+            st.warning(f"⛔ {result.get('label', result.get('name', 'Provider'))} — موقوف بسياسة عدم التكلفة؛ لم يتم إرسال أي طلب API.")
+            st.caption("Zero-cost policy gate: BLOCKED before network dispatch · no provider execution event")
+        elif dispatch_reason == "ZERO_COST_MODEL_NOT_CONFIGURED":
+            st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لا يوجد نموذج ضمن قائمة Free Tier المعتمدة؛ لم يتم إرسال أي طلب.")
+            st.caption("Zero-cost model allowlist: no eligible model configured")
+        else:
+            st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لا يوجد Free API model مؤهل؛ لم يتم إرسال أي طلب.")
+            st.caption("Classification: NOT_CONFIGURED")
     elif status == PUBLIC_NO_RESPONSE:
         st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم تصل استجابة سريعة من المزود.")
         if summaries:
