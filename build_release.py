@@ -53,6 +53,8 @@ ALLOWED_BASELINE_CHANGES = {
     "tests/test_hotfix14_error_classification.py", "tests/test_provider_runtime.py",
     "tests/test_hotfix76_main_identity_guard.py", "tests/test_hotfix80_identity_surface.py", "tests/test_gemini_latency_hardening.py", "tests/test_hotfix88_bridge_transaction.py", "tests/test_hotfix89_bridge_read.py", "tests/test_hotfix91_transactional_proof.py",
     "tests/test_deepseek_integration.py", "tests/test_hotfix84_shared_context_bridge.py",
+    # Narrow regression coverage for the zero-cost dispatch gate and voice policy.
+    "tests/test_hotfix156_mobile_ui.py", "tests/test_v214_voice.py", "tests/test_v215_resilience.py",
 }
 
 
