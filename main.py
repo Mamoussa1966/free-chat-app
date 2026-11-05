@@ -15,7 +15,7 @@ import os
 import streamlit as st
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, get_secret, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, get_secret, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION, provider_zero_cost_policy_block_reason, gemini_free_tier_is_confirmed
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit as _base_read_only_existing_records_audit, _strict_live_bridge_evidence_complete
 from v23_final_closure_audit import build_v23_final_closure_audit
@@ -2943,7 +2943,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.caption("المقاعد: ChatGPT 1 · Gemini 2 · Claude 3 · Grok 4 · Kimi 5 · أنت 6 · DeepSeek 7 · وكلاء إضافيون من 8")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
         st.session_state.rounds = rounds
-        st.caption("🆓 Free API Cascade: Free #1 → Free #10 لكل مزود. لا Local Engine ولا Paid fallback.")
+        st.caption("🆓 سياسة عدم التكلفة: Gemini Free Tier فقط بعد تأكيد مشروع Google AI Studio؛ بقية واجهات API موقوفة احترازيًا. لا Local Engine ولا Paid fallback.")
+        if not gemini_free_tier_is_confirmed():
+            st.warning("إرسال Gemini API متوقف حاليًا حتى تأكيد أن مشروع Google AI Studio على Free Tier وغير مربوط بالفوترة.")
         st.divider()
         st.subheader("🔬 تشخيص المزودين")
         st.caption("API رسمي فقط؛ لا Local Engine ولا نموذج تلقائي.")
@@ -3073,8 +3075,16 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         for seat in seats:
             models = tuple(model_candidates.get(seat.key) or ())
             st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}** · المقعد {seat.room_slot}")
-            st.caption("Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)) if models else "Free cascade: غير مُكوّن — أضف *_FREE_MODELS")
-        st.caption(f"اعتمادات موجودة: {configured_count(credentials)}/{len(seats)} وكلاء API · المقعد 6 محجوز للمستخدم")
+            block_reason = provider_zero_cost_policy_block_reason(seat)
+            if block_reason:
+                st.caption("Free cascade: موقوف بسياسة عدم الفوترة — " + block_reason)
+            elif models:
+                st.caption("Verified Free cascade: " + " → ".join(f"#{i+1} `{m}`" for i, m in enumerate(models)))
+            elif credentials.get(seat.key):
+                st.caption("Free cascade: لم يتم العثور على نموذج ضمن قائمة النماذج المجانية المعتمدة.")
+            else:
+                st.caption("Free cascade: غير مُهيأ — لا يوجد اعتماد مؤهل للإرسال.")
+        st.caption(f"مفاتيح اعتماد محفوظة: {configured_count(credentials)}/{len(seats)} · عدد وكلاء API المسموح بإرسالهم وفق سياسة عدم التكلفة: {sum(bool(model_candidates.get(seat.key)) for seat in seats)} · المقعد 6 للمستخدم")
         st.caption(f"Model config fingerprint: `{model_config_fingerprint(model_candidates)}`")
         credential_source_map = credential_sources()
         credential_source_text = " • ".join(f"{seat.name}: {credential_source_map.get(seat.key, 'missing')}" for seat in seats)
@@ -3424,8 +3434,17 @@ def _render_ai_room(chat: dict, seat, model_candidates: dict) -> None:
     with st.container(height=500, border=True):
         st.subheader(f"{seat.label} · المقعد {seat.room_slot}")
         models = tuple(model_candidates.get(seat.key) or ())
-        st.caption("Configured Free #1 → " + f"`{models[0]}`" if models else "لا يوجد Free API model مُكوّن")
+        block_reason = provider_zero_cost_policy_block_reason(seat)
+        if block_reason:
+            st.warning(block_reason)
+            st.caption("لم يتم إرسال أي طلب إلى هذا المزود وفق سياسة عدم التكلفة.")
+        elif models:
+            st.caption("Verified zero-cost Free #1 → " + f"`{models[0]}`")
+        else:
+            st.caption("لا يوجد نموذج Gemini Free Tier معتمد أو لم يتم تأكيد طبقة المشروع المجانية.")
         messages = [m for m in chat.get("messages", []) if m.get("seat") == seat.name]
+        if block_reason and messages:
+            st.caption("الردود الظاهرة أدناه تاريخية؛ هذا المزود غير مؤهل للتنفيذ الحالي وفق سياسة عدم التكلفة.")
         latest_result = _latest_seat_execution_result(chat, seat.key)
         if latest_result is not None:
             latest_status = _seat_execution_status(latest_result)
@@ -5320,7 +5339,7 @@ def run_app() -> None:
     chat = _active_chat()
     _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
-    st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} وكلاء API • DeepSeek (المقعد 7) • Free Cascade #1→#10 • Provider: {PROVIDER_VERSION}")
+    st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini Free Tier فقط بعد التأكيد • Provider: {PROVIDER_VERSION}")
     runtime_commit, runtime_commit_source, runtime_commit_proven = _runtime_commit_summary(
         st.session_state.get("_hotfix16430_runtime_attestation", {})
     )
@@ -5336,7 +5355,7 @@ def run_app() -> None:
         )
     st.caption(f"HOTFIX123 Release Identity Gate: {release_identity.get('gate', 'FAIL')} • Frozen Provider={release_identity.get('observed', {}).get('provider_core', 'NOT_PROVEN')} • Runtime Match={release_identity.get('runtime_matches_frozen_identity', False)}")
     st.caption("V26.3: Authoritative Conversation Persistence · Message→Request→Round Chain · HOTFIX145 Core Preserved")
-    st.markdown("**العقد:** لا Local Engine، لا Paid fallback، ولا نموذج تلقائي. كل طلب رسمي يستخدم فقط النماذج الموجودة صراحةً في `*_FREE_MODELS`.")
+    st.markdown("**العقد:** لا Local Engine ولا Paid fallback ولا نموذج تلقائي. وجود اسم داخل `*_FREE_MODELS` لا يثبت المجانية؛ يسمح التشغيل فقط بموديلات Gemini Free Tier المعتمدة وبعد تأكيد أن مشروع Google نفسه غير مربوط بالفوترة. بقية واجهات API مقفولة احترازيًا.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
 
