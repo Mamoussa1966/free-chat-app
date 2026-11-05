@@ -33,11 +33,12 @@ RETRIES = 1
 # cascade attempt in production.
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 
-# Zero-cost API policy: explicit *_FREE_MODELS names are user configuration,
-# not proof that a provider's API is free. Only Gemini models with a published
-# Free Tier are eligible, and only after the operator confirms the Google
-# project itself is using the Free Tier (rather than a billed project).
-ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini"})
+# Zero-cost API policy: explicit *_FREE_MODELS names are not proof of free usage.
+# Gemini requires a reviewed model allowlist and project-tier confirmation.
+# OpenRouter is allowed only via its exact OpenAI-compatible endpoint and
+# individually selected model IDs that end in :free; automatic openrouter/free
+# routing and every non-free model ID are forbidden.
+ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini", "openrouter"})
 GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.8-flash",
     "gemini-3.6-flash",
@@ -46,6 +47,10 @@ GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.1-flash-lite",
 })
 GEMINI_FREE_TIER_CONFIRMATION_SETTING = "GEMINI_API_ZERO_COST_CONFIRMED"
+OPENROUTER_ZERO_COST_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_FREE_CREDENTIAL_NAMES = ("OPENROUTER_API_KEY",)
+OPENROUTER_FREE_MODEL_NAMES = ("OPENROUTER_FREE_MODELS",)
+OPENROUTER_MAX_FREE_MODELS_PER_REQUEST = 3
 
 
 
@@ -490,24 +495,36 @@ def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
     """Return a user-safe reason when policy forbids dispatching this provider."""
     if seat.key not in ZERO_COST_API_PROVIDER_KEYS:
         return (
-            "موقوف احترازيًا: واجهة API لهذا المزود ليست مجانية بصورة دائمة "
-            "وفق صفحة التسعير الرسمية؛ لن يُرسل إليه أي طلب."
+            "موقوف احترازيًا: واجهة API لهذا المزود ليست ضمن قائمة الخدمات المجانية "
+            "المعتمدة؛ لن يُرسل إليه أي طلب."
         )
     if seat.key == "gemini" and not gemini_free_tier_is_confirmed():
         return (
             "موقوف احترازيًا: يجب تأكيد أن مشروع Google AI Studio يعمل على Free Tier "
             "ولا يرتبط بميزة فوترة مدفوعة؛ لم يُرسل أي طلب."
         )
+    if seat.key == "openrouter":
+        configuration_is_exact = (
+            str(getattr(seat, "endpoint", "") or "").strip() == OPENROUTER_ZERO_COST_ENDPOINT
+            and str(getattr(seat, "kind", "") or "").strip() == "chat_completions"
+            and tuple(getattr(seat, "env_names", ()) or ()) == OPENROUTER_FREE_CREDENTIAL_NAMES
+            and tuple(getattr(seat, "model_env", ()) or ()) == OPENROUTER_FREE_MODEL_NAMES
+        )
+        if not configuration_is_exact:
+            return (
+                "موقوف احترازيًا: إعداد OpenRouter لا يطابق عنوان API وقوائم الأسرار "
+                "المعتمدة للنسخة المجانية؛ لم يُرسل أي طلب."
+            )
     return ""
 
 
 def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
     """Return only explicitly configured, verified zero-cost candidates.
 
-    A provider's *_FREE_MODELS setting is not proof of free API billing. The
-    default policy allows only Gemini, requires an explicit Free Tier project
-    confirmation, and filters model IDs against the published free-tier list.
-    No other provider or dynamic seat can reach an API through this resolver.
+    Gemini uses a reviewed model allowlist and explicit project-tier confirmation.
+    OpenRouter is accepted only through the exact chat-completions endpoint and
+    explicit per-model :free variants. No automatic router, paid model, custom
+    provider endpoint, or dynamic catalog can reach the network.
     """
     if provider_zero_cost_policy_block_reason(seat):
         return ()
@@ -520,7 +537,14 @@ def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
             model for model in configured_models
             if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST
         )
+    if seat.key == "openrouter":
+        approved = tuple(
+            model for model in configured_models
+            if model.endswith(":free") and model.lower() != "openrouter/free"
+        )
+        return approved[:OPENROUTER_MAX_FREE_MODELS_PER_REQUEST]
     return ()
+
 
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
