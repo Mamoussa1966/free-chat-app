@@ -42,6 +42,7 @@ def test_gemini_dispatch_filters_only_officially_listed_free_models(monkeypatch)
 
     assert providers.get_model_candidates_for_dispatch(SEATS["gemini"]) == (
         "gemini-3.8-flash",
+        "gemini-3.7-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
