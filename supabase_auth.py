@@ -6,6 +6,7 @@ are used. Never put a service-role or sb_secret key in this module.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import re
 import time
 from typing import Any
@@ -13,6 +14,55 @@ from urllib.parse import quote, urlsplit
 import uuid
 
 import requests
+
+
+
+def _check_pwned_passwords_range(password: str) -> bool:
+    """Check a password against HIBP using only its five-character SHA-1 prefix.
+
+    The full password and full hash stay local. HIBP's free Pwned Passwords
+    endpoint returns suffixes for the supplied prefix (k-anonymity).
+    """
+    digest = hashlib.sha1(str(password).encode("utf-8")).hexdigest().upper()
+    prefix, suffix = digest[:5], digest[5:]
+    try:
+        response = requests.get(
+            f"https://api.pwnedpasswords.com/range/{prefix}",
+            headers={
+                "User-Agent": "AI-Council-Password-Screen/1.0",
+                "Add-Padding": "true",
+            },
+            timeout=5.0,
+        )
+    except requests.RequestException:
+        raise SupabaseAuthError(
+            "تعذر الاتصال بخدمة التحقق من كلمات المرور المسربة؛ "
+            "لم يتم إنشاء الحساب أو تغيير كلمة المرور. أعد المحاولة لاحقًا."
+        ) from None
+
+    if int(getattr(response, "status_code", 0) or 0) != 200:
+        raise SupabaseAuthError(
+            "تعذّر إكمال فحص أمان كلمة المرور؛ لم يتم حفظ التغيير. أعد المحاولة لاحقًا."
+        )
+
+    body = getattr(response, "text", None)
+    if not isinstance(body, str):
+        raise SupabaseAuthError("استجابة خدمة فحص كلمات المرور غير صالحة؛ لم يتم حفظ التغيير.")
+
+    for line in body.splitlines():
+        candidate, separator, raw_count = line.strip().partition(":")
+        if not separator:
+            continue
+        if candidate.strip().upper() != suffix:
+            continue
+        try:
+            count = int(raw_count.strip())
+        except (TypeError, ValueError):
+            raise SupabaseAuthError(
+                "استجابة خدمة فحص كلمات المرور غير صالحة؛ لم يتم حفظ التغيير."
+            ) from None
+        return count > 0
+    return False
 
 
 class SupabaseAuthError(RuntimeError):
@@ -94,6 +144,7 @@ class SupabaseAuthClient:
         publishable_key: str,
         timeout_seconds: float = 10.0,
         session: Any | None = None,
+        password_breach_checker: Any | None = None,
     ) -> None:
         self.base_url = _validate_project_url(supabase_url)
         self.publishable_key = _validate_publishable_key(publishable_key)
@@ -105,6 +156,22 @@ class SupabaseAuthClient:
         if not 0 < self.timeout <= 30:
             raise ValueError("timeout_seconds must be between 0 and 30")
         self._session = session if session is not None else requests.Session()
+        self._password_breach_checker = password_breach_checker or _check_pwned_passwords_range
+
+    def _reject_compromised_password(self, password: str) -> None:
+        try:
+            compromised = bool(self._password_breach_checker(password))
+        except SupabaseAuthError:
+            raise
+        except Exception:
+            raise SupabaseAuthError(
+                "تعذّر إكمال فحص أمان كلمة المرور؛ لم يتم حفظ التغيير. أعد المحاولة لاحقًا."
+            ) from None
+        if compromised:
+            raise SupabaseAuthError(
+                "كلمة المرور التي اخترتها ظهرت في تسريبات معروفة؛ "
+                "اختر كلمة مرور جديدة وفريدة لم تستخدمها من قبل."
+            )
 
     def _request(
         self,
@@ -283,6 +350,7 @@ class SupabaseAuthClient:
         """
         email = self._normalized_email(email)
         password = self._validate_password(password)
+        self._reject_compromised_password(password)
         data = self._request("POST", "signup", payload={"email": email, "password": password})
         session_data = data.get("session") if isinstance(data.get("session"), dict) else data
         access = str(session_data.get("access_token") or "").strip()
@@ -322,6 +390,7 @@ class SupabaseAuthClient:
         if not token:
             raise SupabaseAuthError("انتهت جلسة استعادة كلمة المرور؛ اطلب رابطًا جديدًا.")
         validated_password = self._validate_password(password)
+        self._reject_compromised_password(validated_password)
         updated = self._request(
             "PUT",
             "user",
