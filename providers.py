@@ -37,7 +37,7 @@ TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 # not proof that a provider's API is free. Only Gemini models with a published
 # Free Tier are eligible, and only after the operator confirms the Google
 # project itself is using the Free Tier (rather than a billed project).
-ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini"})
+ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini", "groqcloud"})
 GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.8-flash",
     "gemini-3.6-flash",
@@ -45,6 +45,13 @@ GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.1-flash-lite",
 })
 GEMINI_FREE_TIER_CONFIRMATION_SETTING = "GEMINI_API_ZERO_COST_CONFIRMED"
+# The existing xAI "Grok" seat is not GroqCloud and remains blocked. Only these
+# two model IDs are currently present in the published Groq Free Plan limits.
+GROQCLOUD_ZERO_COST_MODEL_ALLOWLIST = frozenset({
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+})
+GROQCLOUD_FREE_PLAN_CONFIRMATION_SETTING = "GROQ_CLOUD_FREE_PLAN_CONFIRMED"
 
 
 
@@ -485,6 +492,12 @@ def gemini_free_tier_is_confirmed() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def groqcloud_free_plan_is_confirmed() -> bool:
+    """True only after the operator confirms the GroqCloud account remains on Free Plan."""
+    value = str(_setting((GROQCLOUD_FREE_PLAN_CONFIRMATION_SETTING,)) or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
     """Return a user-safe reason when policy forbids dispatching this provider."""
     if seat.key not in ZERO_COST_API_PROVIDER_KEYS:
@@ -497,16 +510,20 @@ def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
             "موقوف احترازيًا: يجب تأكيد أن مشروع Google AI Studio يعمل على Free Tier "
             "ولا يرتبط بميزة فوترة مدفوعة؛ لم يُرسل أي طلب."
         )
+    if seat.key == "groqcloud" and not groqcloud_free_plan_is_confirmed():
+        return (
+            "موقوف احترازيًا: يجب تأكيد أن حساب GroqCloud ما زال على Free Plan "
+            "ولم تتم ترقيته إلى Developer؛ لم يُرسل أي طلب."
+        )
     return ""
 
 
 def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
     """Return only explicitly configured, verified zero-cost candidates.
 
-    A provider's *_FREE_MODELS setting is not proof of free API billing. The
-    default policy allows only Gemini, requires an explicit Free Tier project
-    confirmation, and filters model IDs against the published free-tier list.
-    No other provider or dynamic seat can reach an API through this resolver.
+    A provider's *_FREE_MODELS setting is not proof that the vendor's API is free.
+    Gemini and the optional GroqCloud seat require separate operator confirmations
+    and exact model allowlists. No other provider or dynamic seat can dispatch.
     """
     if provider_zero_cost_policy_block_reason(seat):
         return ()
@@ -515,11 +532,12 @@ def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
         return ()
     configured_models = get_model_candidates(seat)
     if seat.key == "gemini":
-        return tuple(
-            model for model in configured_models
-            if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST
-        )
-    return ()
+        allowlist = GEMINI_ZERO_COST_MODEL_ALLOWLIST
+    elif seat.key == "groqcloud":
+        allowlist = GROQCLOUD_ZERO_COST_MODEL_ALLOWLIST
+    else:
+        return ()
+    return tuple(model for model in configured_models if model in allowlist)
 
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
