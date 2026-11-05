@@ -1761,11 +1761,11 @@ def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Opti
     key = (credential or "").strip()
     if not key:
         return {"status": "FAILED", "text": "", "error": "class=not_configured; Gemini credential is required for voice transcription.", "model": "", "latency": 0, "attempted_models": []}
+    mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    if not re.fullmatch(r"audio/[a-z0-9!#$&^_.+\\-]+", mime):
+        return {"status": "FAILED", "text": "", "error": "class=invalid_audio_mime; Audio MIME type is not supported.", "model": "", "latency": 0, "attempted_models": []}
     if not gemini_free_tier_is_confirmed():
         return {"status": "FAILED", "text": "", "error": "class=zero_cost_policy_blocked; Confirm that the Google AI Studio project uses the Free Tier before voice transcription.", "model": "", "latency": 0, "attempted_models": []}
-    mime = str(mime_type or "").split(";", 1)[0].strip().lower()
-    if not re.fullmatch(r"audio/[a-z0-9!#$&^_.+\-]+", mime):
-        return {"status": "FAILED", "text": "", "error": "class=invalid_audio_mime; Audio MIME type is not supported.", "model": "", "latency": 0, "attempted_models": []}
     configured_transcription_models = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
     candidates = tuple(
         model for model in configured_transcription_models
