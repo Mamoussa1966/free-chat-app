@@ -33,7 +33,8 @@ def test_gemini_dispatch_filters_only_officially_listed_free_models(monkeypatch)
         "GEMINI_API_KEY": "fake-gemini-key",
         "GEMINI_FREE_MODELS": (
             "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,"
-            "gemini-2.5-flash,gemini-2.0-flash,gemini-3.5-flash-lite"
+            "gemini-3.5-flash,gemini-2.5-flash,gemini-2.0-flash,"
+            "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
         ),
         "GEMINI_API_ZERO_COST_CONFIRMED": "true",
     }
@@ -43,7 +44,11 @@ def test_gemini_dispatch_filters_only_officially_listed_free_models(monkeypatch)
         "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
     )
+    # The deprecated gemini-3.5-flash alias must not be sent because Google
+    # automatically redirects it to gemini-3.6-flash.
+    assert "gemini-3.5-flash" not in providers.get_model_candidates_for_dispatch(SEATS["gemini"])
     assert providers.provider_zero_cost_policy_block_reason(SEATS["gemini"]) == ""
 
 
