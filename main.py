@@ -3074,8 +3074,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.subheader("🔌 الاعتمادات والنماذج")
         for seat in seats:
             models = tuple(model_candidates.get(seat.key) or ())
-            st.markdown(f"{'🟢' if credentials.get(seat.key) else '⚪'} **{seat.name}** · المقعد {seat.room_slot}")
             block_reason = provider_zero_cost_policy_block_reason(seat)
+            status_icon = "⛔" if block_reason else ("🟢" if models else "⚪")
+            st.markdown(f"{status_icon} **{seat.name}** · المقعد {seat.room_slot}")
             if block_reason:
                 st.caption("Free cascade: موقوف بسياسة عدم الفوترة — " + block_reason)
             elif models:
