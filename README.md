@@ -10,8 +10,8 @@ No Local Engine, no paid fallback, and no implicit model selection. A setting na
 
 - Only Gemini is currently eligible for zero-cost API dispatch.
 - The operator must explicitly set `GEMINI_API_ZERO_COST_CONFIRMED=true` after verifying that the Google AI Studio project uses the Free Tier and is not attached to paid billing. Until then, **all Gemini text and voice API requests are blocked before network dispatch**.
-- The only currently approved Gemini model IDs are `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, and `gemini-3.1-flash-lite`.
-- OpenAI, Claude, Grok, Kimi, DeepSeek, and unverified dynamic agents are blocked from production API dispatch by default. Their adapters and offline tests remain in the repository, but configured keys or a `*_FREE_MODELS` string cannot unlock them.
+- The only currently approved Gemini model IDs are `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`, and `gemini-3.1-flash-lite`.
+- The deprecated `gemini-3.5-flash` alias is excluded because Google automatically routes it to `gemini-3.6-flash`; the council uses the current model ID explicitly. OpenAI, Claude, Grok, Kimi, DeepSeek, and unverified dynamic agents are blocked from production API dispatch by default. Their adapters and offline tests remain in the repository, but configured keys or a `*_FREE_MODELS` string cannot unlock them.
 - A model is added to the allowlist only after its provider publishes a no-cost API tier for that exact model and the project's account tier is checked. Promotional credits, free chat-app subscriptions, playground access, and trial credits do not count as a permanent free API tier.
 
 This is a fail-closed billing safeguard. It intentionally prioritizes preventing accidental API charges over showing every configured provider as available.
