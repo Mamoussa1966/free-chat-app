@@ -13,7 +13,6 @@ import threading
 import os
 
 import streamlit as st
-from streamlit.components.v1 import html as components_html
 
 from attachment_utils import normalize_uploaded_files, public_metadata
 from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, get_secret, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION
@@ -1820,7 +1819,7 @@ def _render_section_actions(title: str, payload, key: str, download_name: str | 
     }})();
     </script>
     """
-    components_html(copy_html, height=48, scrolling=False)
+    st.iframe(copy_html, height=48)
     st.download_button(
         "⬇️ Download",
         data=export_text,
@@ -1893,7 +1892,7 @@ def _render_temporary_attempt_diagnostic(detail: dict) -> None:
     element_id = "attempt-error-" + uuid.uuid4().hex
     safe_id = html.escape(element_id, quote=True)
     height = 32
-    components_html(
+    st.iframe(
         f"""<div id=\"{safe_id}\" style=\"font-family:sans-serif;font-size:13px;padding:4px 0;\">{safe_text}</div>
 <script>
 const el=document.getElementById('{safe_id}');
@@ -3091,10 +3090,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
 
 
 def _voice_player(text: str, label: str = "🔊 استمع") -> None:
-    from streamlit.components.v1 import html as components_html
     safe_text = json.dumps(str(text or ""), ensure_ascii=False)
     safe_label = html.escape(label, quote=True)
-    components_html(f"<button id='speakBtn' style='padding:6px 10px'>{safe_label}</button><script>const b=document.getElementById('speakBtn'),t={safe_text};b.onclick=()=>{{if(!('speechSynthesis' in window))return;window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang=/[\\u0600-\\u06FF]/.test(t)?'ar-SA':'en-US';window.speechSynthesis.speak(u);}};</script>", height=44)
+    st.iframe(f"<button id='speakBtn' style='padding:6px 10px'>{safe_label}</button><script>const b=document.getElementById('speakBtn'),t={safe_text};b.onclick=()=>{{if(!('speechSynthesis' in window))return;window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang=/[\\u0600-\\u06FF]/.test(t)?'ar-SA':'en-US';window.speechSynthesis.speak(u);}};</script>", height=44)
 
 
 def _render_user_room(chat: dict, credentials: dict, model_candidates: dict):
@@ -5821,7 +5819,7 @@ def run_app() -> None:
                 }})();
                 </script>
                 """
-                components_html(copy_html, height=58, scrolling=False)
+                st.iframe(copy_html, height=58)
             else:
                 st.button("📋 Copy Full V23 Audit Report", disabled=True, use_container_width=True, key="v23_full_audit_copy_disabled_151_3")
 
@@ -5845,7 +5843,7 @@ def run_app() -> None:
                 }})();
                 </script>
                 """
-                components_html(print_html, height=58, scrolling=False)
+                st.iframe(print_html, height=58)
             else:
                 st.button("🖨️ Print", disabled=True, use_container_width=True, key="v23_full_audit_print_disabled_156")
 
