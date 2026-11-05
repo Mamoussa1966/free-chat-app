@@ -138,3 +138,92 @@ def test_voice_transcription_rejects_unapproved_model_ids_without_network(monkey
     assert result["status"] == "FAILED"
     assert "transcriber_model_not_configured" in result["error"]
     assert result["attempted_models"] == []
+
+
+def _openrouter_seat(
+    *,
+    endpoint=providers.OPENROUTER_ZERO_COST_ENDPOINT,
+    kind="chat_completions",
+    credential_names=("OPENROUTER_API_KEY",),
+    model_names=("OPENROUTER_FREE_MODELS",),
+):
+    return providers.Seat(
+        "openrouter",
+        "OpenRouter Free",
+        "🔑 OpenRouter Free",
+        tuple(credential_names),
+        tuple(model_names),
+        endpoint,
+        kind,
+        8,
+    )
+
+
+def test_openrouter_only_accepts_explicit_free_variant_model_ids(monkeypatch):
+    values = {
+        "OPENROUTER_API_KEY": "fake-openrouter-key",
+        "OPENROUTER_FREE_MODELS": (
+            "openai/gpt-oss-20b:free,"
+            "nvidia/nemotron-3-ultra:free,"
+            "google/gemma-4-26b-a4b:free,"
+            "openai/gpt-oss-120b,"
+            "openrouter/free"
+        ),
+    }
+    monkeypatch.setattr(providers, "_setting", _setting(values))
+    seat = _openrouter_seat()
+
+    assert providers.provider_zero_cost_policy_block_reason(seat) == ""
+    assert providers.get_model_candidates_for_dispatch(seat) == (
+        "openai/gpt-oss-20b:free",
+        "nvidia/nemotron-3-ultra:free",
+        "google/gemma-4-26b-a4b:free",
+    )
+
+
+def test_openrouter_rejects_automatic_router_and_paid_candidates(monkeypatch):
+    values = {
+        "OPENROUTER_API_KEY": "fake-openrouter-key",
+        "OPENROUTER_FREE_MODELS": "openrouter/free,openai/gpt-oss-120b",
+    }
+    monkeypatch.setattr(providers, "_setting", _setting(values))
+
+    assert providers.get_model_candidates_for_dispatch(_openrouter_seat()) == ()
+
+
+def test_openrouter_rejects_noncanonical_endpoint_adapter_and_secret_names():
+    bad_seats = [
+        _openrouter_seat(endpoint="https://attacker.invalid/api/v1/chat/completions"),
+        _openrouter_seat(kind="openai_responses"),
+        _openrouter_seat(credential_names=("OPENAI_API_KEY",)),
+        _openrouter_seat(model_names=("OPENAI_FREE_MODELS",)),
+    ]
+    for seat in bad_seats:
+        reason = providers.provider_zero_cost_policy_block_reason(seat)
+        assert "إعداد OpenRouter" in reason
+        assert providers.get_model_candidates_for_dispatch(seat) == ()
+
+
+def test_openrouter_diagnostic_never_dispatches_paid_or_automatic_model_ids(monkeypatch):
+    values = {
+        "OPENROUTER_API_KEY": "fake-openrouter-key",
+        "OPENROUTER_FREE_MODELS": "openai/gpt-oss-20b:free",
+    }
+    monkeypatch.setattr(providers, "_setting", _setting(values))
+    monkeypatch.setattr(
+        providers,
+        "call_seat",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("non-free diagnostic must not call API")),
+    )
+
+    seat = _openrouter_seat()
+    result = providers.diagnostic_seat(
+        seat,
+        "fake-openrouter-key",
+        ("openai/gpt-oss-120b", "openrouter/free"),
+    )
+
+    assert result["status"] == "NO_FREE_MODEL_CONFIGURED"
+    assert result["dispatch_reason"] == "ZERO_COST_MODEL_NOT_CONFIGURED"
+    assert result["attempted_models"] == []
+    assert result["runtime_execution_events"] == []
