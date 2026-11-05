@@ -40,6 +40,7 @@ TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini", "groqcloud"})
 GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.8-flash",
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
