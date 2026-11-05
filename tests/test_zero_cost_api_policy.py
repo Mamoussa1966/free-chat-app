@@ -143,3 +143,126 @@ def test_voice_transcription_rejects_unapproved_model_ids_without_network(monkey
     assert result["status"] == "FAILED"
     assert "transcriber_model_not_configured" in result["error"]
     assert result["attempted_models"] == []
+
+
+def _groqcloud_seat(monkeypatch, values):
+    import json
+
+    extras = [{
+        "key": "groqcloud",
+        "name": "GroqCloud",
+        "credential_names": ["GROQ_CLOUD_API_KEY"],
+        "model_names": ["GROQ_CLOUD_FREE_MODELS"],
+        "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+        "kind": "chat_completions",
+    }]
+    read_values = _setting(values)
+
+    def read(names):
+        names = tuple(names)
+        if "AI_COUNCIL_EXTRA_AGENTS" in names:
+            return json.dumps(extras)
+        return read_values(names)
+
+    monkeypatch.setattr(providers, "_setting", read)
+    return next(seat for seat in providers.get_seats() if seat.key == "groqcloud")
+
+
+def test_groqcloud_dispatch_requires_explicit_free_plan_confirmation(monkeypatch):
+    seat = _groqcloud_seat(monkeypatch, {
+        "GROQ_CLOUD_API_KEY": "fake-groqcloud-key",
+        "GROQ_CLOUD_FREE_MODELS": "openai/gpt-oss-20b",
+    })
+
+    assert providers.get_model_candidates_for_dispatch(seat) == ()
+    assert "Free Plan" in providers.provider_zero_cost_policy_block_reason(seat)
+
+
+def test_groqcloud_dispatch_filters_to_only_current_free_plan_model_ids(monkeypatch):
+    seat = _groqcloud_seat(monkeypatch, {
+        "GROQ_CLOUD_API_KEY": "fake-groqcloud-key",
+        "GROQ_CLOUD_FREE_PLAN_CONFIRMED": "true",
+        "GROQ_CLOUD_FREE_MODELS": (
+            "openai/gpt-oss-120b,openai/gpt-oss-20b,"
+            "llama-3.1-8b-instant,llama-3.3-70b-versatile,"
+            "qwen/qwen3.6-27b,groq/compound"
+        ),
+    })
+
+    assert providers.get_model_candidates_for_dispatch(seat) == (
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+    )
+    assert providers.provider_zero_cost_policy_block_reason(seat) == ""
+
+
+def test_groqcloud_diagnostic_does_not_call_provider_when_free_plan_is_unconfirmed(monkeypatch):
+    seat = _groqcloud_seat(monkeypatch, {
+        "GROQ_CLOUD_API_KEY": "fake-groqcloud-key",
+        "GROQ_CLOUD_FREE_MODELS": "openai/gpt-oss-20b",
+    })
+    monkeypatch.setattr(
+        providers.requests,
+        "post",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unconfirmed GroqCloud API must not run")),
+    )
+    monkeypatch.setattr(
+        providers,
+        "call_seat",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unconfirmed GroqCloud call must not run")),
+    )
+
+    result = providers.diagnostic_seat(
+        seat,
+        "fake-groqcloud-key",
+        ("openai/gpt-oss-20b",),
+    )
+
+    assert result["status"] == "NO_FREE_MODEL_CONFIGURED"
+    assert result["dispatch_reason"] == "ZERO_COST_API_POLICY_BLOCKED"
+    assert result["attempted_models"] == []
+    assert result["runtime_execution_events"] == []
+
+
+def test_groqcloud_uses_openai_compatible_chat_adapter_with_an_explicit_free_model(monkeypatch):
+    seat = _groqcloud_seat(monkeypatch, {
+        "GROQ_CLOUD_API_KEY": "fake-groqcloud-key",
+        "GROQ_CLOUD_FREE_PLAN_CONFIRMED": "true",
+        "GROQ_CLOUD_FREE_MODELS": "openai/gpt-oss-20b",
+    })
+    candidates = providers.get_model_candidates_for_dispatch(seat)
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "model": "openai/gpt-oss-20b",
+                "choices": [{"message": {"content": "GROQCLOUD_FREE_ADAPTER_OK"}}],
+            }
+
+    def fake_post(url, *, headers, data, timeout):
+        captured.update({"url": url, "headers": headers, "data": data})
+        return FakeResponse()
+
+    monkeypatch.setattr(providers.requests, "post", fake_post)
+
+    result = providers.call_seat(
+        seat,
+        "Return exactly: GROQCLOUD_FREE_ADAPTER_OK",
+        "",
+        1,
+        False,
+        "fake-groqcloud-key",
+        [],
+        candidates,
+    )
+
+    assert captured["url"] == "https://api.groq.com/openai/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer fake-groqcloud-key"
+    assert result["status"] == "SUCCESS"
+    assert result["model"] == "openai/gpt-oss-20b"
+    assert result["content"] == "GROQCLOUD_FREE_ADAPTER_OK"
