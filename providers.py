@@ -33,6 +33,22 @@ RETRIES = 1
 # cascade attempt in production.
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 
+# Zero-cost API policy: explicit *_FREE_MODELS names are user configuration,
+# not proof that a provider's API is free. Only Gemini models with a published
+# Free Tier are eligible, and only after the operator confirms the Google
+# project itself is using the Free Tier (rather than a billed project).
+ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini"})
+GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+})
+GEMINI_FREE_TIER_CONFIRMATION_SETTING = "GEMINI_API_ZERO_COST_CONFIRMED"
+
+
+
 
 def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
@@ -464,18 +480,47 @@ def get_model_candidates(seat: Seat) -> Tuple[str, ...]:
     return _parse_models(_setting(seat.model_env) or "")
 
 
-def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
-    """Return Free-model candidates eligible for actual provider dispatch.
+def gemini_free_tier_is_confirmed() -> bool:
+    """True only after the operator explicitly confirms Google AI Studio Free Tier."""
+    value = str(_setting((GEMINI_FREE_TIER_CONFIRMATION_SETTING,)) or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
-    Contract: no provider credential means no dispatch candidates, even when a
-    model list exists in configuration. With a credential, only the explicitly
-    configured Free-model list is eligible. No discovery, default catalog, paid
-    fallback, or automatic model selection is permitted.
+
+def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
+    """Return a user-safe reason when policy forbids dispatching this provider."""
+    if seat.key not in ZERO_COST_API_PROVIDER_KEYS:
+        return (
+            "موقوف احترازيًا: واجهة API لهذا المزود ليست مجانية بصورة دائمة "
+            "وفق صفحة التسعير الرسمية؛ لن يُرسل إليه أي طلب."
+        )
+    if seat.key == "gemini" and not gemini_free_tier_is_confirmed():
+        return (
+            "موقوف احترازيًا: يجب تأكيد أن مشروع Google AI Studio يعمل على Free Tier "
+            "ولا يرتبط بميزة فوترة مدفوعة؛ لم يُرسل أي طلب."
+        )
+    return ""
+
+
+def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
+    """Return only explicitly configured, verified zero-cost candidates.
+
+    A provider's *_FREE_MODELS setting is not proof of free API billing. The
+    default policy allows only Gemini, requires an explicit Free Tier project
+    confirmation, and filters model IDs against the published free-tier list.
+    No other provider or dynamic seat can reach an API through this resolver.
     """
+    if provider_zero_cost_policy_block_reason(seat):
+        return ()
     credential = _setting(seat.env_names)
     if not credential:
         return ()
-    return get_model_candidates(seat)
+    configured_models = get_model_candidates(seat)
+    if seat.key == "gemini":
+        return tuple(
+            model for model in configured_models
+            if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST
+        )
+    return ()
 
 
 def capture_model_candidates() -> Dict[str, Tuple[str, ...]]:
@@ -1644,24 +1689,63 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
 
 def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Optional[Tuple[str, ...]] = None) -> dict:
     started = time.perf_counter()
+    block_reason = provider_zero_cost_policy_block_reason(seat)
+    if block_reason:
+        result = _result(
+            seat,
+            "NO_FREE_MODEL_CONFIGURED",
+            "",
+            "",
+            "class=zero_cost_policy_blocked; " + block_reason,
+            started,
+            [],
+            authenticated=bool(credential),
+        )
+        result["dispatch_reason"] = "ZERO_COST_API_POLICY_BLOCKED"
+        result["model_candidates_configured"] = False
+        return result
+    # Even direct diagnostic callers cannot bypass the same model allowlist
+    # enforced by capture_model_candidates().
+    approved_candidates = get_model_candidates_for_dispatch(seat)
+    supplied_candidates = tuple(model_candidates or ())
+    candidates = tuple(model for model in (supplied_candidates or approved_candidates) if model in approved_candidates)
+    if not candidates:
+        result = _result(
+            seat,
+            "NO_FREE_MODEL_CONFIGURED",
+            "",
+            "",
+            "class=no_free_models_configured; No explicitly approved zero-cost Free API model is eligible.",
+            started,
+            [],
+            authenticated=bool(credential),
+        )
+        result["dispatch_reason"] = "ZERO_COST_MODEL_NOT_CONFIGURED"
+        result["model_candidates_configured"] = False
+        return result
     if seat.key == "openai":
         try:
             _openai_models_probe(credential)
         except ProviderError as exc:
             return _result(seat, "FAILED", "", "", _diagnostic(exc, credential), started, [])
-        candidates = tuple(model_candidates if model_candidates is not None else get_model_candidates_for_dispatch(seat))
-        if not candidates:
-            return _result(seat, "AUTHENTICATION_OK_NO_FREE_MODEL", "", "", "class=authentication_ok_no_free_model; Authentication endpoint accepted the credential, but no Free model was explicitly configured.", started, [], authenticated=True)
-    return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], model_candidates)
+        # The endpoint probe above is reachable only after zero-cost policy and
+        # candidate approval. It never runs for disabled paid API providers.
+        pass
+    return call_seat(seat, "Reply with exactly: DIAGNOSTIC_OK", "", 0, False, credential, [], candidates)
 
 
 def get_gemini_transcriber_model(model_candidates: Optional[Tuple[str, ...]] = None) -> str:
-    """Return the explicitly configured Gemini transcription model, or the first explicit Free candidate."""
-    configured_model = _setting(("GEMINI_TRANSCRIBE_MODEL",))
-    candidates = _parse_models(configured_model or "")
-    if candidates:
-        return candidates[0]
-    fallback = tuple(model_candidates or ())
+    """Return only a verified zero-cost Gemini transcription model."""
+    if not gemini_free_tier_is_confirmed():
+        return ""
+    configured_model = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
+    allowed = tuple(model for model in configured_model if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST)
+    if allowed:
+        return allowed[0]
+    fallback = tuple(
+        model for model in (model_candidates or ())
+        if str(model).strip() in GEMINI_ZERO_COST_MODEL_ALLOWLIST
+    )
     return fallback[0] if fallback else ""
 
 
@@ -1678,13 +1762,22 @@ def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Opti
     if not key:
         return {"status": "FAILED", "text": "", "error": "class=not_configured; Gemini credential is required for voice transcription.", "model": "", "latency": 0, "attempted_models": []}
     mime = str(mime_type or "").split(";", 1)[0].strip().lower()
-    if not re.fullmatch(r"audio/[a-z0-9!#$&^_.+\-]+", mime):
+    if not re.fullmatch(r"audio/[a-z0-9!#$&^_.+\\-]+", mime):
         return {"status": "FAILED", "text": "", "error": "class=invalid_audio_mime; Audio MIME type is not supported.", "model": "", "latency": 0, "attempted_models": []}
-    candidates = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
+    if not gemini_free_tier_is_confirmed():
+        return {"status": "FAILED", "text": "", "error": "class=zero_cost_policy_blocked; Confirm that the Google AI Studio project uses the Free Tier before voice transcription.", "model": "", "latency": 0, "attempted_models": []}
+    configured_transcription_models = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
+    candidates = tuple(
+        model for model in configured_transcription_models
+        if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST
+    )
     if not candidates and model_candidates:
-        candidates = _parse_models(",".join(model_candidates))[:MAX_MODELS_PER_SEAT]
+        candidates = tuple(
+            model for model in model_candidates
+            if str(model).strip() in GEMINI_ZERO_COST_MODEL_ALLOWLIST
+        )[:MAX_MODELS_PER_SEAT]
     if not candidates:
-        return {"status": "FAILED", "text": "", "error": "class=transcriber_model_not_configured; Set GEMINI_TRANSCRIBE_MODEL explicitly or pass an explicitly configured Gemini Free candidate.", "model": "", "latency": round(time.perf_counter() - started, 3), "attempted_models": []}
+        return {"status": "FAILED", "text": "", "error": "class=transcriber_model_not_configured; Set GEMINI_TRANSCRIBE_MODEL to a verified Gemini Free Tier model or pass an explicitly approved Gemini Free candidate.", "model": "", "latency": round(time.perf_counter() - started, 3), "attempted_models": []}
     encoded = base64.b64encode(audio).decode("ascii")
     attempted: list[str] = []
     last_error: Optional[ProviderError] = None

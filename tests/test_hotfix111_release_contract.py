@@ -21,11 +21,15 @@ def test_hotfix111_required_tree_is_intact():
     assert not missing, missing
 
 
-def test_hotfix111_free_only_contract_remains_explicit():
+def test_hotfix111_zero_cost_contract_is_explicit_and_fail_closed():
     providers = Path("providers.py").read_text(encoding="utf-8")
     main = Path("main.py").read_text(encoding="utf-8")
     assert "MAX_MODELS_PER_SEAT = 10" in providers
-    assert "Free #1" in main and "Free #10" in main
+    assert "GEMINI_API_ZERO_COST_CONFIRMED" in providers
+    assert "GEMINI_ZERO_COST_MODEL_ALLOWLIST" in providers
+    assert "ZERO_COST_API_POLICY_BLOCKED" in providers
+    assert "provider_zero_cost_policy_block_reason" in main
+    assert "لا Local Engine ولا Paid fallback" in main
     assert "local_engine" not in main
     assert "generate_local" not in main
 

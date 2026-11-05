@@ -11,10 +11,13 @@ class VoiceResilienceTests(unittest.TestCase):
         self.assertIn("invalid_audio_mime", result["error"])
     def test_explicit_model_is_used(self):
         fake = {"candidates": [{"content": {"parts": [{"text": "hello"}]}}]}
-        with patch("providers._post", return_value=fake) as post:
-            result = transcribe_audio_gemini(b"audio", "audio/webm; codecs=opus", "dummy", ("free-transcriber",))
+        def setting(names):
+            return "true" if "GEMINI_API_ZERO_COST_CONFIRMED" in tuple(names) else None
+        with patch("providers._setting", side_effect=setting):
+            with patch("providers._post", return_value=fake) as post:
+                result = transcribe_audio_gemini(b"audio", "audio/webm; codecs=opus", "dummy", ("gemini-3.8-flash",))
         self.assertEqual(result["status"], "SUCCESS")
-        self.assertEqual(result["model"], "free-transcriber")
+        self.assertEqual(result["model"], "gemini-3.8-flash")
         self.assertEqual(post.call_args.args[2]["contents"][0]["parts"][1]["inlineData"]["mimeType"], "audio/webm")
 
 if __name__ == "__main__": unittest.main()

@@ -31,9 +31,10 @@ def test_hotfix156_v23_action_bar_has_print_and_download():
     assert "v23_full_audit_download_151_3" in TEXT
 
 
-def test_hotfix156_does_not_change_provider_contract_literals():
-    assert "لا Local Engine، لا Paid fallback" in TEXT
-    assert "Free Cascade #1→#10" in TEXT
+def test_hotfix156_preserves_free_only_provider_contract():
+    assert "لا Local Engine ولا Paid fallback" in TEXT
+    assert "Gemini Free Tier فقط بعد التأكيد" in TEXT
+    assert "provider_zero_cost_policy_block_reason" in TEXT
     assert "capture_credentials" in TEXT
     assert "capture_model_candidates" in TEXT
 
