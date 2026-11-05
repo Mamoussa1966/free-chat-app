@@ -1735,12 +1735,17 @@ def diagnostic_seat(seat: Seat, credential: Optional[str], model_candidates: Opt
 
 
 def get_gemini_transcriber_model(model_candidates: Optional[Tuple[str, ...]] = None) -> str:
-    """Return the explicitly configured Gemini transcription model, or the first explicit Free candidate."""
-    configured_model = _setting(("GEMINI_TRANSCRIBE_MODEL",))
-    candidates = _parse_models(configured_model or "")
-    if candidates:
-        return candidates[0]
-    fallback = tuple(model_candidates or ())
+    """Return only a verified zero-cost Gemini transcription model."""
+    if not gemini_free_tier_is_confirmed():
+        return ""
+    configured_model = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
+    allowed = tuple(model for model in configured_model if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST)
+    if allowed:
+        return allowed[0]
+    fallback = tuple(
+        model for model in (model_candidates or ())
+        if str(model).strip() in GEMINI_ZERO_COST_MODEL_ALLOWLIST
+    )
     return fallback[0] if fallback else ""
 
 
@@ -1756,14 +1761,23 @@ def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str, credential: Opti
     key = (credential or "").strip()
     if not key:
         return {"status": "FAILED", "text": "", "error": "class=not_configured; Gemini credential is required for voice transcription.", "model": "", "latency": 0, "attempted_models": []}
+    if not gemini_free_tier_is_confirmed():
+        return {"status": "FAILED", "text": "", "error": "class=zero_cost_policy_blocked; Confirm that the Google AI Studio project uses the Free Tier before voice transcription.", "model": "", "latency": 0, "attempted_models": []}
     mime = str(mime_type or "").split(";", 1)[0].strip().lower()
     if not re.fullmatch(r"audio/[a-z0-9!#$&^_.+\-]+", mime):
         return {"status": "FAILED", "text": "", "error": "class=invalid_audio_mime; Audio MIME type is not supported.", "model": "", "latency": 0, "attempted_models": []}
-    candidates = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
+    configured_transcription_models = _parse_models(_setting(("GEMINI_TRANSCRIBE_MODEL",)) or "")
+    candidates = tuple(
+        model for model in configured_transcription_models
+        if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST
+    )
     if not candidates and model_candidates:
-        candidates = _parse_models(",".join(model_candidates))[:MAX_MODELS_PER_SEAT]
+        candidates = tuple(
+            model for model in model_candidates
+            if str(model).strip() in GEMINI_ZERO_COST_MODEL_ALLOWLIST
+        )[:MAX_MODELS_PER_SEAT]
     if not candidates:
-        return {"status": "FAILED", "text": "", "error": "class=transcriber_model_not_configured; Set GEMINI_TRANSCRIBE_MODEL explicitly or pass an explicitly configured Gemini Free candidate.", "model": "", "latency": round(time.perf_counter() - started, 3), "attempted_models": []}
+        return {"status": "FAILED", "text": "", "error": "class=transcriber_model_not_configured; Set GEMINI_TRANSCRIBE_MODEL to a verified Gemini Free Tier model or pass an explicitly approved Gemini Free candidate.", "model": "", "latency": round(time.perf_counter() - started, 3), "attempted_models": []}
     encoded = base64.b64encode(audio).decode("ascii")
     attempted: list[str] = []
     last_error: Optional[ProviderError] = None
