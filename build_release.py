@@ -55,6 +55,7 @@ ALLOWED_BASELINE_CHANGES = {
     "tests/test_deepseek_integration.py", "tests/test_hotfix84_shared_context_bridge.py",
     # Narrow regression coverage for the zero-cost dispatch gate and voice policy.
     "tests/test_hotfix156_mobile_ui.py", "tests/test_v214_voice.py", "tests/test_v215_resilience.py",
+    "tests/test_hardening.py", "tests/test_v216_hardening.py",
 }
 
 
