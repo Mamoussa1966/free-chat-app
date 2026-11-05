@@ -6,11 +6,15 @@ class V216CompatibilityTests(unittest.TestCase):
             source = f.read()
         self.assertNotIn("generate_local", source)
         self.assertNotIn("from local_engine import", source)
-    def test_free_only_contract_is_visible(self):
+    def test_zero_cost_api_contract_is_visible(self):
         with open("main.py", encoding="utf-8") as f:
             source = f.read()
-        self.assertIn("Free API Cascade", source)
-        self.assertIn("Free #1", source)
-        self.assertIn("Free #10", source)
+        with open("providers.py", encoding="utf-8") as f:
+            providers = f.read()
+        self.assertIn("Gemini Free Tier فقط بعد التأكيد", source)
+        self.assertIn("لا Local Engine ولا Paid fallback", source)
+        self.assertIn("provider_zero_cost_policy_block_reason", source)
+        self.assertIn("GEMINI_API_ZERO_COST_CONFIRMED", providers)
+        self.assertIn("GEMINI_ZERO_COST_MODEL_ALLOWLIST", providers)
 
 if __name__ == "__main__": unittest.main()
