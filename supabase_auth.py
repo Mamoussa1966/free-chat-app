@@ -23,7 +23,7 @@ def _check_pwned_passwords_range(password: str) -> bool:
     The full password and full hash stay local. HIBP's free Pwned Passwords
     endpoint returns suffixes for the supplied prefix (k-anonymity).
     """
-    digest = hashlib.sha1(str(password).encode("utf-8")).hexdigest().upper()
+    digest = hashlib.sha1(str(password).encode("utf-8"), usedforsecurity=False).hexdigest().upper()
     prefix, suffix = digest[:5], digest[5:]
     try:
         response = requests.get(
