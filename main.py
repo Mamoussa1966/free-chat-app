@@ -15,7 +15,7 @@ import os
 import streamlit as st
 
 from attachment_utils import normalize_uploaded_files, public_metadata
-from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, get_secret, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION, provider_zero_cost_policy_block_reason, gemini_free_tier_is_confirmed
+from providers import get_seats, VERSION as PROVIDER_VERSION, ProviderError, _canonical_error_classification, call_seat, capture_credentials, capture_model_candidates, configured_count, credential_sources, diagnostic_seat, get_model_candidates, get_secret, model_config_fingerprint, model_config_sources, transcribe_audio_gemini, _deepseek_model_identity_matches, HOTFIX_RELEASE_VERSION, CURRENT_HOTFIX_RELEASE_VERSION, PLATFORM_RELEASE_VERSION, provider_zero_cost_policy_block_reason, gemini_free_tier_is_confirmed, groqcloud_free_plan_is_confirmed
 from production_core import RequestLifecycle, ProviderExecutionContract, SeatExecutionLedger, RequestRoundExecutionRegistry
 from production_platform import PLATFORM_VERSION, compact_context, synthesize_council_results, provider_health_snapshot, security_audit, build_v23_platform_audit, multi_request_regression_audit, read_only_existing_records_audit as _base_read_only_existing_records_audit, _strict_live_bridge_evidence_complete
 from v23_final_closure_audit import build_v23_final_closure_audit
@@ -2943,9 +2943,11 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.caption("المقاعد: ChatGPT 1 · Gemini 2 · Claude 3 · Grok 4 · Kimi 5 · أنت 6 · DeepSeek 7 · وكلاء إضافيون من 8")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
         st.session_state.rounds = rounds
-        st.caption("🆓 سياسة عدم التكلفة: Gemini Free Tier فقط بعد تأكيد مشروع Google AI Studio؛ بقية واجهات API موقوفة احترازيًا. لا Local Engine ولا Paid fallback.")
+        st.caption("🆓 سياسة عدم التكلفة: Gemini Free Tier أو GroqCloud Free Plan فقط بعد تأكيد مستقل لكل حساب؛ مقعد Groq/xAI ليس GroqCloud. بقية واجهات API موقوفة. لا Local Engine ولا Paid fallback.")
         if not gemini_free_tier_is_confirmed():
-            st.warning("إرسال Gemini API متوقف حاليًا حتى تأكيد أن مشروع Google AI Studio على Free Tier وغير مربوط بالفوترة.")
+            st.warning("إرسال Gemini API متوقف حتى تأكيد أن مشروع Google AI Studio على Free Tier وغير مرتبط بالفوترة.")
+        if any(seat.key == "groqcloud" for seat in seats) and not groqcloud_free_plan_is_confirmed():
+            st.warning("وكيل GroqCloud متوقف حتى تأكيد بقاء الحساب على Free Plan وعدم ترقيته إلى Developer.")
         st.divider()
         st.subheader("🔬 تشخيص المزودين")
         st.caption("API رسمي فقط؛ لا Local Engine ولا نموذج تلقائي.")
@@ -5347,7 +5349,7 @@ def run_app() -> None:
     chat = _active_chat()
     _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
-    st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini Free Tier فقط بعد التأكيد • Provider: {PROVIDER_VERSION}")
+    st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini / GroqCloud Free فقط بعد تأكيد الخطة • Provider: {PROVIDER_VERSION}")
     runtime_commit, runtime_commit_source, runtime_commit_proven = _runtime_commit_summary(
         st.session_state.get("_hotfix16430_runtime_attestation", {})
     )
