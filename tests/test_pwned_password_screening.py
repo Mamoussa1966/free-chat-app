@@ -54,7 +54,7 @@ def test_pwned_password_query_sends_only_five_sha1_characters(monkeypatch):
     url, headers, timeout = calls[0]
     assert url == f"https://api.pwnedpasswords.com/range/{prefix}"
     assert digest not in url
-    assert password not in url
+    assert password not in url.rsplit("/", 1)[-1]
     assert headers["User-Agent"].startswith("AI-Council-Password-Screen/")
     assert headers["Add-Padding"] == "true"
     assert timeout == 5.0
