@@ -14,6 +14,12 @@ on:
         default: ""
         type: string
 
+  push:
+    branches:
+      - gitops-v0.4-final
+    paths:
+      - evidence/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json
+
 permissions:
   contents: read
 
@@ -35,8 +41,8 @@ jobs:
       - name: Save fresh app-exported report before checking out deployed source
         id: report
         env:
-          EVIDENCE_PATH: ${{ inputs.evidence_path }}
-          FALLBACK_COMMIT: ${{ inputs.deployed_commit_sha }}
+          EVIDENCE_PATH: ${{ inputs.evidence_path || 'evidence/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json' }}
+          FALLBACK_COMMIT: ${{ inputs.deployed_commit_sha || '' }}
         run: |
           test -f "$EVIDENCE_PATH"
           cp "$EVIDENCE_PATH" "$RUNNER_TEMP/HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json"
