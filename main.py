@@ -30,6 +30,11 @@ from provenance_engine import record_result as record_v24_provenance
 from timeline_runtime import event as timeline_event
 from memory_layers import update_memory
 from export_engine import export_conversation
+from backup_engine import (
+    MAX_BACKUP_CONVERSATIONS,
+    build_conversation_backup,
+    serialize_conversation_backup,
+)
 from conversation_v25_runtime import ensure_v25_store, reconcile_request, authoritative_audit, sync_v26_message_record
 from hotfix16430_deployment_attestation import build_runtime_deployment_attestation
 from conversation_repository import AccountIdentity, OwnedConversationSnapshot, ConversationRepositoryError
@@ -5228,6 +5233,83 @@ def _supabase_load_saved_chats() -> None:
         st.session_state.active_chat_id = restored[0]["id"]
     st.session_state["_supabase_history_loaded_subject"] = owner.subject
     st.session_state.pop("_supabase_last_storage_error", None)
+
+
+def _backup_chat_from_owned_snapshot(snapshot) -> dict:
+    """Project one already owner-validated Supabase snapshot without session writes."""
+    if snapshot is None:
+        raise ConversationRepositoryError("Supabase backup row is missing")
+    record = copy.deepcopy(snapshot.canonical_record)
+    if not isinstance(record, dict):
+        raise ConversationRepositoryError("Supabase backup record is malformed")
+    view = record.pop("_streamlit_state", {})
+    if not isinstance(view, dict):
+        view = {}
+    conversation_id = str(record.get("conversation_id") or "").strip()
+    if not conversation_id:
+        raise ConversationRepositoryError("Supabase backup conversation identity is missing")
+    return {
+        "id": conversation_id,
+        "conversation_id": conversation_id,
+        "session_id": str(record.get("session_id") or ""),
+        "title": str(view.get("title") or "محادثة محفوظة")[:80],
+        "created_at": str(view.get("created_at") or record.get("created_at") or ""),
+        "messages": copy.deepcopy(view.get("messages") or []),
+        "conversation_record": record,
+        # The canonical record remains the authority. These presentation
+        # projections are copied only to preserve the same export shape.
+        "message_ledger_v24": copy.deepcopy(view.get("messages") or record.get("messages") or []),
+        "request_ledger_v24": copy.deepcopy(record.get("requests") or []),
+        "round_ledger_v24": copy.deepcopy(record.get("rounds") or []),
+        "bridge_ledger_v24": copy.deepcopy(view.get("bridge_ledger_v24") or []),
+        "result_ledger_v24": [],
+        "provenance_ledger_v24": [],
+        "timeline_ledger_v24": [],
+        "memory_l0": {},
+        "memory_l1": {"message_ids": [], "context_digest": ""},
+        "memory_l2": {"items": []},
+        "memory_l3": {},
+    }
+
+
+def _collect_conversation_backup_source() -> tuple[list[dict], str, bool]:
+    """Read the authenticated owner's canonical rows, or copy the local cache.
+
+    Supabase backup reads are read-only, owner-bound, and capped at the
+    repository's documented maximum. A 500-row result is marked as possibly
+    truncated instead of being advertised as a complete account export.
+    """
+    _, _, storage_enabled = get_supabase_config(st)
+    if storage_enabled:
+        if not is_supabase_auth_active(st):
+            raise ConversationRepositoryError(
+                "يلزم تسجيل الدخول قبل إنشاء نسخة من محادثات Supabase."
+            )
+        owner, repository = _supabase_identity_and_repository()
+        if owner is None or repository is None:
+            raise ConversationRepositoryError("جلسة التخزين المصادق عليها غير متاحة.")
+        conversation_ids = repository.list_ids(
+            owner,
+            limit=MAX_BACKUP_CONVERSATIONS,
+        )
+        chats = []
+        for conversation_id in conversation_ids:
+            snapshot = repository.load(owner, conversation_id)
+            if snapshot is None or snapshot.owner != owner:
+                raise ConversationRepositoryError(
+                    "تعذر التحقق من ملكية أحد سجلات النسخ الاحتياطي."
+                )
+            chats.append(_backup_chat_from_owned_snapshot(snapshot))
+        return (
+            chats,
+            "supabase_authenticated_owner",
+            len(conversation_ids) >= MAX_BACKUP_CONVERSATIONS,
+        )
+
+    local_chats = st.session_state.get("chats") or []
+    if not isinstance(local_chats, list):
+        raise ConversationRepositoryError("سجل المحادثات المحلي غير صالح.")
+    return copy.deepcopy(local_chats), "streamlit_session_cache", False
 
 
 def _supabase_delete_remote_chat(chat: dict) -> bool:
