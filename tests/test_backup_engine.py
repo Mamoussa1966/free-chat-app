@@ -123,6 +123,26 @@ def test_backup_serialization_is_utf8_json_and_integrity_verifies_after_round_tr
     ).hexdigest() == loaded["integrity"]["payload_sha256"]
 
 
+def test_backup_preserves_the_sanitized_presentation_state_supplied_by_supabase():
+    chat = _chat()
+    chat["_backup_presentation_state"] = {
+        "title": "Saved title",
+        "request_ids": ["request-1"],
+        "history_identity_ledger": [{"request_id": "request-1", "status": "COMPLETED"}],
+        "result_keys": ["request-1:gemini"],
+        "bridge_ledger_v24": [],
+    }
+
+    document = build_conversation_backup([chat])
+    exported = document["conversations"][0]["stored_presentation_state"]
+
+    assert exported["title"] == "Saved title"
+    assert exported["request_ids"] == ["request-1"]
+    assert exported["result_keys"] == ["request-1:gemini"]
+    assert exported["bridge_ledger_v24"] == []
+    assert verify_conversation_backup(document) is True
+
+
 def test_backup_marks_possible_truncation_at_the_repository_row_limit():
     document = build_conversation_backup(
         [_chat()],
