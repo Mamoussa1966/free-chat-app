@@ -1,6 +1,6 @@
 {
   "application_release_identity": "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE",
-  "audit_active_chat_binding_sha256": "760eec937e23a58d525f3f63814d84de2cf99b404e79b3f5e6b3e677a7338fc2",
+  "audit_active_chat_binding_sha256": "a3af7c30744980f9be2a5eec2392a8ade278372c66beeec5cac293b843a573f1",
   "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE_AND_APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE",
   "blockers": [],
   "canonical_counter_consistent": true,
@@ -19,9 +19,9 @@
     "application_release_identity": "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE",
     "commit_binding_status": "SOURCE_BUNDLE_READY",
     "expected_deployment_branch": "gitops-v0.4-final",
-    "generated_at_utc": "2026-10-29T07:14:16+00:00",
+    "generated_at_utc": "2026-11-06T07:14:35+00:00",
     "missing_source_files": [],
-    "observed_git_commit_sha": "46ce3da58e48110251c88d38202e7462b908bb14",
+    "observed_git_commit_sha": "1595c78cb6aaa28004d4c642388493e622f1d5fa",
     "observed_git_commit_source": "git_rev_parse_HEAD",
     "provider_api_calls_made": 0,
     "provider_core_identity": "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE",
@@ -31,17 +31,17 @@
     "schema": "hotfix164.30-deployment-source-attestation/v1",
     "secrets_exported": false,
     "source_bundle_complete": true,
-    "source_bundle_sha256": "751a1fe6ae6d0d206d197279a76dfc6e9c331427ac884f85097933c335cb5035",
+    "source_bundle_sha256": "aa77b198a32983b8d0c2f0d99787f40b9aad329c3f997c41812f3daed8437f77",
     "source_file_sha256": {
-      ".github/workflows/hotfix164-30-deployment-commit-closure.yml": "2c096d98e7ca6b072c063b553c3f5fee0a3c68fbf6e34c18209cb034fc5ecfdb",
-      "HOTFIX164.30_DEPLOYMENT_COMMIT_GATE.py": "58be13c378b0b31ff1f7699affa79e9f74f741b25cabf36fca28b9daca43d058",
-      "HOTFIX164.30_RELEASE_MANIFEST.json": "4f52b9e7b032ac5447733674c91f2cc5b9f993951055c9a96420a243921e9b3b",
+      "main.py": "3685940301637907f74d50bd0b4121d2c5ccd2e53b7c3d33c7c5c1623ba39394",
+      "providers.py": "1b85e8854b038ecea5d0565036daccad498999c916d803e3a5a801bc6149c21a",
+      "release_identity.py": "3e7802075490aea3567bd0bc2fb6918e4e01fb7e8aa767f3decaf2785c878466",
       "conversation_store.py": "e7f22f5c1f3999be30d2f5d81313c3c98cfde70db401abebb6b4a5ef7e9d2a8d",
       "conversation_v25_runtime.py": "a9d92224bb4f5f32633f49ca823559902d07efd6e9a914b4498eddd0041fc78a",
       "hotfix16430_deployment_attestation.py": "7bee90c0e1f484fa95866fe5841da94d9245da0314559e00a63d7de0a4070bd5",
-      "main.py": "8d3de29eece2e90718e8655c0677ebb917e8f0d003d99749406653bd2d8c8859",
-      "providers.py": "84d6e02aa3abfb491377820948d5931344fe07e1979fe1bb1a7b46471890dd10",
-      "release_identity.py": "3e7802075490aea3567bd0bc2fb6918e4e01fb7e8aa767f3decaf2785c878466"
+      "HOTFIX164.30_DEPLOYMENT_COMMIT_GATE.py": "58be13c378b0b31ff1f7699affa79e9f74f741b25cabf36fca28b9daca43d058",
+      "HOTFIX164.30_RELEASE_MANIFEST.json": "4f52b9e7b032ac5447733674c91f2cc5b9f993951055c9a96420a243921e9b3b",
+      ".github/workflows/hotfix164-30-deployment-commit-closure.yml": "de684fd7dd3abe6d9fc8b2d76d5bf6d4c0e8951db2d4f354c643cb89459ec169"
     }
   },
   "duplicate_canonical_request_ids": [],
@@ -68,7 +68,7 @@
   "read_only_live_state_unchanged": true,
   "read_only_side_effects": "NONE_OBSERVED",
   "read_side_effects": "NONE_OBSERVED",
-  "report_generated_at": "2026-10-29T07:14:16+00:00",
+  "report_generated_at": "2026-11-06T07:14:35+00:00",
   "request_created_count": 2,
   "request_diagnostic_count": 2,
   "requests": [
