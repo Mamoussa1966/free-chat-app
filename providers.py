@@ -34,9 +34,10 @@ RETRIES = 1
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 
 # Zero-cost API policy: explicit *_FREE_MODELS names are user configuration,
-# not proof that a provider's API is free. Only Gemini models with a published
-# Free Tier are eligible, and only after the operator confirms the Google
-# project itself is using the Free Tier (rather than a billed project).
+# not proof that a provider's API is free. Gemini requires confirmation of an
+# unbilled Google AI Studio Free Tier project. Cloudflare is separately gated
+# to its Workers Free plan, one documented Free model, and an explicit account
+# ID. Other providers and dynamic agents remain blocked from paid dispatch.
 ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini", "cloudflare_workers_ai"})
 GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.8-flash",
@@ -159,7 +160,9 @@ def _load_extra_seats() -> Tuple[Seat, ...]:
         # Cloudflare is a reserved provider identity, not an arbitrary
         # user-supplied endpoint. Bind it to the exact official HTTPS API host.
         if key == CLOUDFLARE_WORKERS_AI_KEY:
-            if kind != "cloudflare_workers_ai":
+            if kind != "cloudflare_workers_ai" or any(
+                seat.key == CLOUDFLARE_WORKERS_AI_KEY for seat in result
+            ):
                 continue
             endpoint = CLOUDFLARE_WORKERS_AI_ENDPOINT
         elif kind == "cloudflare_workers_ai":
@@ -550,10 +553,10 @@ def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
 def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
     """Return only explicitly configured, verified zero-cost candidates.
 
-    A provider's *_FREE_MODELS setting is not proof of free API billing. The
-    default policy allows only Gemini, requires an explicit Free Tier project
-    confirmation, and filters model IDs against the published free-tier list.
-    No other provider or dynamic seat can reach an API through this resolver.
+    A provider's *_FREE_MODELS setting is not proof of free API billing.
+    Gemini and the reserved Cloudflare Workers AI seat each require a separate
+    operator confirmation and exact model allowlist. Every other provider and
+    dynamic seat remains blocked from production API dispatch.
     """
     if provider_zero_cost_policy_block_reason(seat):
         return ()
@@ -1212,6 +1215,11 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
         return {"text": text, "provider_reported_model": provider_reported_model}
 
     elif seat.kind == "cloudflare_workers_ai":
+        # This adapter is safe even when called directly: re-check the Free
+        # plan attestation, account ID, credential, and exact model allowlist
+        # immediately before constructing a request.
+        if model not in get_model_candidates_for_dispatch(seat):
+            raise ProviderError("Cloudflare model is not approved by the Workers Free policy", error_class="configuration")
         # Cloudflare's documented OpenAI-compatible Workers AI endpoint. The
         # account ID is read only from a named Secret/environment setting;
         # dynamic config cannot redirect this reserved seat to another host.
@@ -1229,8 +1237,8 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
                 content_parts.append(f"Image attachment not sent to this text-only model: {att['name']}")
             else:
                 extracted = extract_text(att)
-                content_parts.append(f"Attached file: {att['name']}\\n{extracted or '[binary attachment; filename only]'}")
-        content = "\\n\\n".join(part for part in content_parts if part).strip()
+                content_parts.append(f"Attached file: {att['name']}\n{extracted or '[binary attachment; filename only]'}")
+        content = "\n\n".join(part for part in content_parts if part).strip()
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": content}],
