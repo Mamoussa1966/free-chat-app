@@ -2950,6 +2950,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.pop("_council_backup_json", None)
                 st.session_state.pop("_council_backup_count", None)
                 st.session_state.pop("_council_backup_truncated", None)
+                st.session_state.pop("_council_restore_uploader_nonce", None)
                 logout_supabase_user(st)
                 st.rerun()
         if st.session_state.get("_supabase_last_storage_error"):
@@ -3174,11 +3175,18 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                                     repository=restore_repository,
                                 )
                                 inserted_chats = []
+                                session_hydration_warning = False
                                 for restored_id in restore_result.get("restored_conversation_ids", []):
-                                    restored_snapshot = restore_repository.load(restore_owner, restored_id)
-                                    if restored_snapshot is None or restored_snapshot.owner != restore_owner:
-                                        raise ConversationRepositoryError("restored row ownership could not be reconfirmed")
-                                    inserted_chats.append(_chat_from_restored_owned_snapshot(restored_snapshot))
+                                    try:
+                                        restored_snapshot = restore_repository.load(restore_owner, restored_id)
+                                        if restored_snapshot is None or restored_snapshot.owner != restore_owner:
+                                            session_hydration_warning = True
+                                            continue
+                                        inserted_chats.append(_chat_from_restored_owned_snapshot(restored_snapshot))
+                                    except Exception:
+                                        # The insert is already durable; a local display-hydration
+                                        # failure must not be reported as a database rollback.
+                                        session_hydration_warning = True
                                 if inserted_chats:
                                     current_chats = st.session_state.get("chats") or []
                                     st.session_state.chats = inserted_chats + [
@@ -3187,6 +3195,11 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                                             str(chat_item.get("conversation_id") or "") for chat_item in inserted_chats
                                         }
                                     ]
+                                if session_hydration_warning:
+                                    st.warning(
+                                        "تم حفظ بعض المحادثات في Supabase، لكن تعذّر تحميلها فورًا داخل الجلسة الحالية. "
+                                        "لا تعِد الاستيراد؛ السجلات المحفوظة ستبقى في الحساب."
+                                    )
                                 if restore_result["status"] == "COMPLETED":
                                     st.success(
                                         f"اكتملت الاستعادة: أُضيفت {restore_result['restored']} محادثة، "
