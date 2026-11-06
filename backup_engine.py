@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import hmac
 import json
 import re
 from datetime import datetime, timezone
@@ -159,7 +160,7 @@ def verify_conversation_backup(document: dict[str, Any]) -> bool:
             return False
         payload = {key: value for key, value in document.items() if key != "integrity"}
         actual = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
-        if not __import__("hmac").compare_digest(actual, expected):
+        if not hmac.compare_digest(actual, expected):
             return False
 
         exported_at = document.get("exported_at")
@@ -237,7 +238,7 @@ def verify_conversation_backup(document: dict[str, Any]) -> bool:
                 or not re.fullmatch(r"[0-9a-f]{64}", per_conversation_digest)
             ):
                 return False
-            if not __import__("hmac").compare_digest(
+            if not hmac.compare_digest(
                 canonical_history_hash(canonical_record),
                 per_conversation_digest,
             ):
