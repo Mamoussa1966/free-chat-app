@@ -73,6 +73,16 @@ def _chat(conversation_id: str = "restore-conversation-1") -> dict:
         "request_ids": ["request-1"],
         "history_identity_ledger": [{"message_id": "message-1"}],
         "result_keys": ["request-1:gemini"],
+        "_backup_presentation_state": {
+            "title": "Restore test",
+            "created_at": "2026-11-06T00:00:00Z",
+            "messages": [{"role": "user", "content": "canonical user text"}],
+            "request_records": [{"request_id": "request-1"}],
+            "request_ids": ["request-1"],
+            "history_identity_ledger": [{"message_id": "message-1"}],
+            "result_keys": ["request-1:gemini"],
+            "bridge_ledger_v24": [],
+        },
     }
 
 
