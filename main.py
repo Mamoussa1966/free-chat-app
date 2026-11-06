@@ -2941,6 +2941,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             auth_state = st.session_state.get(AUTH_SESSION_KEY) or {}
             st.caption(f"🔐 الحساب: {str(auth_state.get('email') or auth_state.get('user_id') or 'مستخدم مصادق عليه')}")
             if st.button("تسجيل الخروج من التخزين السحابي", key="supabase_auth_logout", use_container_width=True):
+                st.session_state.pop("_council_backup_json", None)
+                st.session_state.pop("_council_backup_count", None)
+                st.session_state.pop("_council_backup_truncated", None)
                 logout_supabase_user(st)
                 st.rerun()
         if st.session_state.get("_supabase_last_storage_error"):
@@ -3069,6 +3072,55 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                     st.session_state.last_diagnostics = []
                     st.rerun()
         st.divider()
+        with st.expander("📦 النسخ الاحتياطية للمحادثات", expanded=False):
+            st.caption(
+                "إنشاء ملف JSON للقراءة فقط. عند تفعيل Supabase تُقرأ سجلات الحساب المصادق عليه مباشرةً "
+                "من قاعدة البيانات؛ وإلا تُصدّر المحادثات الموجودة في الجلسة الحالية."
+            )
+            if st.button(
+                "🧰 تجهيز نسخة احتياطية الآن",
+                key="council_prepare_conversation_backup",
+                use_container_width=True,
+            ):
+                try:
+                    backup_chats, backup_source, backup_may_be_truncated = _collect_conversation_backup_source()
+                    backup_document = build_conversation_backup(
+                        backup_chats,
+                        source=backup_source,
+                        possible_truncation=backup_may_be_truncated,
+                    )
+                    backup_payload = serialize_conversation_backup(backup_document)
+                    st.session_state["_council_backup_json"] = backup_payload
+                    st.session_state["_council_backup_count"] = int(backup_document["conversation_count"])
+                    st.session_state["_council_backup_truncated"] = bool(backup_document["limits"]["possible_truncation"])
+                    st.session_state["_council_backup_source"] = str(backup_document["source"])
+                except Exception:
+                    st.session_state.pop("_council_backup_json", None)
+                    st.session_state.pop("_council_backup_count", None)
+                    st.session_state.pop("_council_backup_truncated", None)
+                    st.error("تعذر إعداد نسخة احتياطية موثوقة؛ لم ننشئ ملفًا جزئيًا.")
+            backup_payload = st.session_state.get("_council_backup_json")
+            if isinstance(backup_payload, str) and backup_payload:
+                st.success(
+                    f"تم تجهيز ملف يحتوي على {st.session_state.get('_council_backup_count', 0)} محادثة."
+                )
+                if st.session_state.get("_council_backup_truncated"):
+                    st.warning(
+                        "تم بلوغ حد 500 محادثة؛ قد توجد سجلات إضافية لم تدخل هذه النسخة."
+                    )
+                st.download_button(
+                    "⬇️ تنزيل نسخة AI Council الاحتياطية",
+                    data=backup_payload,
+                    file_name="AI_Council_Backup.json",
+                    mime="application/json",
+                    key="council_download_conversation_backup",
+                    use_container_width=True,
+                )
+            st.caption(
+                "النطاق: سجلات المحادثات والهوية والتدقيق. لا تتضمن النسخة ملفات الصوت أو المرفقات الثنائية، "
+                "ولا مفاتيح API المحفوظة في الإعدادات. النص الذي أدخلته داخل المحادثة قد يتضمن بيانات حساسة؛ "
+                "احفظ الملف في مكان خاص. هذا تصدير فقط ولا يدعم الاستعادة التلقائية."
+            )
         st.divider()
         st.subheader("🧭 V24 Conversation Platform")
         ensure_store(chat)
