@@ -171,12 +171,18 @@ def _load_extra_seats() -> Tuple[Seat, ...]:
             continue
         if kind not in allowed_kinds or len(result) >= (MAX_AGENTS - len(BUILTIN_SEATS)):
             continue
-        credential_names = item.get("credential_names") or item.get("credential_env") or []
-        model_names = item.get("model_names") or item.get("model_env") or []
-        if isinstance(credential_names, str): credential_names = [credential_names]
-        if isinstance(model_names, str): model_names = [model_names]
-        credential_names = tuple(str(x).strip() for x in credential_names if str(x).strip())
-        model_names = tuple(str(x).strip() for x in model_names if str(x).strip())
+        if key == CLOUDFLARE_WORKERS_AI_KEY:
+            # Pin credential/model namespaces too; a dynamic config must never
+            # bind another provider's credential or arbitrary model variable.
+            credential_names = ("CLOUDFLARE_API_TOKEN",)
+            model_names = ("CLOUDFLARE_WORKERS_AI_FREE_MODELS",)
+        else:
+            credential_names = item.get("credential_names") or item.get("credential_env") or []
+            model_names = item.get("model_names") or item.get("model_env") or []
+            if isinstance(credential_names, str): credential_names = [credential_names]
+            if isinstance(model_names, str): model_names = [model_names]
+            credential_names = tuple(str(x).strip() for x in credential_names if str(x).strip())
+            model_names = tuple(str(x).strip() for x in model_names if str(x).strip())
         if not credential_names or not model_names:
             continue
         label = str(item.get("label") or f"🔑 {name}").strip()[:80]
