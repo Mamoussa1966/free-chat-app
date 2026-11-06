@@ -195,3 +195,38 @@ def test_failure_in_another_workflow_warns_even_if_exact_commit_ci_passes():
     assert result["workflows"]["last_30_days"]["failures"] == 1
     assert result["report_status"] == "WARN"
 
+
+def test_console_summary_separates_ci_failures_from_other_workflow_failures():
+    ci_run = _run(130, PRODUCTION_SHA, conclusion="success")
+    other_failure = _run(
+        131,
+        "b" * 40,
+        conclusion="failure",
+        path=".github/workflows/supabase-production-auth-acceptance.yml",
+    )
+    other_failure["name"] = "Supabase production Auth acceptance"
+    result = report.build_report(
+        _branch(),
+        {"workflow_runs": [ci_run]},
+        {"workflow_runs": []},
+        all_workflow_data={"workflow_runs": [ci_run, other_failure]},
+        now=NOW,
+    )
+
+    summary = report._console_status_summary(result, "dist/report.json")
+
+    assert summary["current_commit_ci_status"] == "PASS"
+    assert summary["ci_failure_count_last_30_days"] == 0
+    assert summary["workflow_failure_count_last_30_days"] == 1
+    assert summary["recent_workflow_failures"] == [{
+        "name": "Supabase production Auth acceptance",
+        "workflow_path": ".github/workflows/supabase-production-auth-acceptance.yml",
+        "branch": "gitops-v0.4-final",
+        "head_sha": "b" * 40,
+        "conclusion": "failure",
+        "created_at": "2026-10-29T11:00:00Z",
+        "url": "https://github.com/example/repo/actions/runs/131",
+    }]
+    assert summary["provider_api_calls"] == 0
+    assert summary["repository_mutations"] == 0
+

@@ -323,6 +323,37 @@ def _markdown_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _console_status_summary(report: dict[str, Any], output_file: str) -> dict[str, Any]:
+    """Return accurately separated CI and all-workflow counts for the job log."""
+    ci_recent = report["ci"]["last_30_days"]
+    workflow_recent = report["workflows"]["last_30_days"]
+    recent_failures = [
+        {
+            "name": run.get("name"),
+            "workflow_path": run.get("workflow_path"),
+            "branch": run.get("branch"),
+            "head_sha": run.get("head_sha"),
+            "conclusion": run.get("conclusion"),
+            "created_at": run.get("created_at"),
+            "url": run.get("html_url"),
+        }
+        for run in workflow_recent["latest_failures"][:10]
+    ]
+    return {
+        "report_file": output_file,
+        "report_status": report["report_status"],
+        "production_commit_sha": report["production"]["commit_sha"],
+        "current_commit_ci_status": report["ci"]["current_commit_status"],
+        "ci_run_count_last_30_days": ci_recent["runs_seen"],
+        "ci_failure_count_last_30_days": ci_recent["failures"],
+        "workflow_run_count_last_30_days": workflow_recent["runs_seen"],
+        "workflow_failure_count_last_30_days": workflow_recent["failures"],
+        "recent_workflow_failures": recent_failures,
+        "provider_api_calls": 0,
+        "repository_mutations": 0,
+    }
+
+
 def main() -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -338,15 +369,10 @@ def main() -> int:
         if summary_path:
             with open(summary_path, "a", encoding="utf-8") as handle:
                 handle.write(summary + "\n")
-        print(json.dumps({
-            "report_file": str(output),
-            "report_status": report["report_status"],
-            "production_commit_sha": report["production"]["commit_sha"],
-            "current_commit_ci_status": report["ci"]["current_commit_status"],
-            "ci_failure_count_last_30_days": report["ci"]["last_30_days"]["failures"],
-            "provider_api_calls": 0,
-            "repository_mutations": 0,
-        }, ensure_ascii=False))
+        print(json.dumps(
+            _console_status_summary(report, str(output)),
+            ensure_ascii=False,
+        ))
         return 0
     except (ValueError, RuntimeError) as exc:
         print(f"STATUS_REPORT_ERROR: {exc}", file=sys.stderr)
