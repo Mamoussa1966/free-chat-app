@@ -145,6 +145,8 @@ def test_local_backup_source_is_a_defensive_copy_and_is_labeled_as_session_only(
 
     assert source == "streamlit_session_cache"
     assert truncated is False
-    assert chats == [chat]
+    assert chats[0]["conversation_id"] == chat["conversation_id"]
     assert chats[0] is not chat
     assert chats[0]["messages"] is not chat["messages"]
+    assert chats[0]["_backup_presentation_state"]["messages"] == chat["messages"]
+    assert "_backup_presentation_state" not in chat
