@@ -3104,6 +3104,11 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.success(
                     f"تم تجهيز ملف يحتوي على {st.session_state.get('_council_backup_count', 0)} محادثة."
                 )
+                backup_source = str(st.session_state.get("_council_backup_source") or "")
+                if backup_source == "supabase_authenticated_owner":
+                    st.caption("مصدر النسخة: سجلات Supabase المملوكة للحساب المسجّل دخوله.")
+                elif backup_source == "streamlit_session_cache":
+                    st.warning("مصدر النسخة: ذاكرة الجلسة الحالية فقط؛ هذه ليست نسخة سحابية دائمة، وقد لا تشمل محادثات من جلسات سابقة.")
                 if st.session_state.get("_council_backup_truncated"):
                     st.warning(
                         "تم بلوغ حد 500 محادثة؛ قد توجد سجلات إضافية لم تدخل هذه النسخة."
