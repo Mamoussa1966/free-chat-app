@@ -1538,8 +1538,24 @@ def call_seat(seat: Seat, user_prompt: str, shared_context: str, round_no: int, 
     # No artificial provider/seat timeout is imposed. An optional caller-owned
     # deadline is honored only when explicitly supplied by the caller.
     seat_deadline = float(deadline) if deadline is not None else None
+    supplied_candidates = _parse_models(",".join(model_candidates or ()))
+    if seat.key == CLOUDFLARE_WORKERS_AI_KEY:
+        # Never trust a caller-supplied model tuple for the Cloudflare seat:
+        # direct call_seat callers must pass through the same account, plan,
+        # credential, and exact-model allowlist gate as the main dispatcher.
+        approved = set(get_model_candidates_for_dispatch(seat))
+        selected_candidates = (
+            tuple(model for model in supplied_candidates if model in approved)
+            if model_candidates is not None
+            else get_model_candidates_for_dispatch(seat)
+        )
+    else:
+        selected_candidates = (
+            model_candidates if model_candidates is not None
+            else get_model_candidates_for_dispatch(seat)
+        )
     cascade = FreeCascadeController(
-        _parse_models(",".join(model_candidates if model_candidates is not None else get_model_candidates_for_dispatch(seat)))[:MAX_MODELS_PER_SEAT],
+        _parse_models(",".join(selected_candidates))[:MAX_MODELS_PER_SEAT],
         TimeoutRetryPolicy(timeout_seconds=CASCADE_MODEL_TIMEOUT_SECONDS, max_transport_retries=0, cascade_max_models=MAX_MODELS_PER_SEAT),
     )
     candidates = cascade.candidates
