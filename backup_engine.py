@@ -71,11 +71,19 @@ def build_conversation_backup(
         if str(snapshot.get("conversation_id") or "").strip() != conversation_id:
             raise ValueError("canonical conversation identity does not match the source row")
 
-        conversations.append({
+        conversation_export = {
             "conversation_id": conversation_id,
             "canonical_history_sha256": canonical_history_hash(canonical_record),
             "snapshot": snapshot,
-        })
+        }
+        # Supabase also stores a separately sanitized Streamlit presentation
+        # projection (message text, compact request history, and result keys).
+        # Preserve that exact stored projection when exporting a remote backup;
+        # it is not recreated from incomplete compatibility ledgers.
+        presentation_state = working_copy.get("_backup_presentation_state")
+        if isinstance(presentation_state, dict):
+            conversation_export["stored_presentation_state"] = copy.deepcopy(presentation_state)
+        conversations.append(conversation_export)
 
     conversations.sort(key=lambda row: row["conversation_id"])
     document: dict[str, Any] = {
