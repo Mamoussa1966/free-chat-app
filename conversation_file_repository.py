@@ -304,6 +304,24 @@ class FileConversationRepository:
                     return
             self._write_atomic(path, snapshot)
 
+    def restore_if_absent(self, snapshot: OwnedConversationSnapshot) -> bool:
+        """Atomically insert a snapshot without replacing an existing path."""
+        if not isinstance(snapshot, OwnedConversationSnapshot):
+            raise ValueError("snapshot must be an OwnedConversationSnapshot")
+        self._validate_owner(snapshot.owner)
+        conversation_id = self._validate_conversation_id(snapshot.conversation_id)
+        if conversation_id != snapshot.conversation_id:
+            raise ValueError("snapshot conversation_id must already be normalized")
+        path = self._path_for(conversation_id)
+        with self._exclusive_lock():
+            existing = self._read_file(path, expected_id=conversation_id)
+            if existing is not None:
+                if existing.owner != snapshot.owner:
+                    raise ConversationOwnershipError("conversation owner mismatch")
+                return False
+            self._write_atomic(path, snapshot)
+            return True
+
     def load(self, owner: AccountIdentity, conversation_id: str) -> OwnedConversationSnapshot | None:
         self._validate_owner(owner)
         conversation_id = self._validate_conversation_id(conversation_id)
