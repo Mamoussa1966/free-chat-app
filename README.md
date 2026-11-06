@@ -29,6 +29,16 @@ The inherited bridge correction: explicit `BRIDGE_* = value` declarations in the
 The SharedContextBridge now normalizes explicit provider bridge writes into canonical attributed records. The intended proof path is Seat 7 → DeepSeek → Bridge Write → Shared Context → Gemini → Seat 2 → Bridge Read. This change does not modify provider adapters or the seat/identity/Free Cascade contract.
 
 
+## Canonical conversation backup and safe restore
+
+The sidebar backup tool exports a SHA-256 checked JSON bundle containing canonical Message/Request/Round history and the separately stored sanitized presentation projection. The export is capped at 500 conversations and 25 MiB. User-entered text may contain sensitive information; provider credentials and binary voice/attachment payloads are excluded.
+
+The restore tool accepts only a verified backup while the user is signed in to the configured Supabase project. It validates the outer bundle checksum, each canonical-history checksum, conversation identity, and Message→Request→Round references before the first write. It restores by **atomic insert-only** operations; existing conversation IDs are skipped and are never updated or merged. A concurrent ID collision cannot turn into an upsert. Restore does not call AI providers.
+
+Restore is additive and may be partial if a network/database error occurs after earlier rows were inserted. The UI reports the inserted/skipped/failed counts. Re-importing the same file is idempotent: rows already present for the signed-in owner are skipped. A foreign owner's hidden ID conflict fails closed without disclosing ownership. Only the authenticated user's RLS-visible records can be read or inserted.
+
+The export does not include audio recordings or uploaded attachment bytes. These media files are not recovered by this restore flow. The format is a transport/backup snapshot, not a signed authenticity proof: SHA-256 detects corruption and inconsistent nested history, but a person able to rewrite the bundle and recompute its hashes can create a self-consistent replacement. Automatic restore must not be described as full-fidelity media recovery.
+
 ## Production Hardening
 - Provider-isolated Free Cascade: each API seat owns its credential/model chain; a failure in one provider does not invoke another provider's credentials or models.
 - Safe attempt telemetry includes provider, attempt, model, HTTP status, stable error classification, retryability, execution time, request ID, round, and final result/cascade action.
