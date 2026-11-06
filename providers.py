@@ -37,7 +37,7 @@ TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 # not proof that a provider's API is free. Only Gemini models with a published
 # Free Tier are eligible, and only after the operator confirms the Google
 # project itself is using the Free Tier (rather than a billed project).
-ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini"})
+ZERO_COST_API_PROVIDER_KEYS = frozenset({"gemini", "cloudflare_workers_ai"})
 GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.8-flash",
     "gemini-3.6-flash",
@@ -45,6 +45,21 @@ GEMINI_ZERO_COST_MODEL_ALLOWLIST = frozenset({
     "gemini-3.1-flash-lite",
 })
 GEMINI_FREE_TIER_CONFIRMATION_SETTING = "GEMINI_API_ZERO_COST_CONFIRMED"
+
+# Cloudflare Workers AI: only the non-frontier model explicitly documented as
+# available on Workers Free is enabled. The 10,000-Neuron daily allocation is
+# shared across models and resets at 00:00 UTC. A Free account fails closed at
+# its limit; a Workers Paid account can incur overage charges, so an explicit
+# operator attestation is mandatory and is never inferred from an API token.
+CLOUDFLARE_WORKERS_AI_KEY = "cloudflare_workers_ai"
+CLOUDFLARE_WORKERS_AI_ENDPOINT = (
+    "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions"
+)
+CLOUDFLARE_WORKERS_AI_MODEL_ALLOWLIST = frozenset({
+    "@cf/zai-org/glm-4.7-flash",
+})
+CLOUDFLARE_WORKERS_FREE_CONFIRMATION_SETTING = "CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED"
+CLOUDFLARE_ACCOUNT_ID_SETTING = "CLOUDFLARE_ACCOUNT_ID"
 
 
 
@@ -130,7 +145,7 @@ def _load_extra_seats() -> Tuple[Seat, ...]:
     if not isinstance(data, list):
         return ()
     builtins = {s.key for s in BUILTIN_SEATS}
-    allowed_kinds = {"chat_completions", "openai_responses", "xai_responses", "deepseek_chat", "gemini", "anthropic"}
+    allowed_kinds = {"chat_completions", "openai_responses", "xai_responses", "deepseek_chat", "gemini", "anthropic", "cloudflare_workers_ai"}
     result = []
     for item in data:
         if not isinstance(item, dict):
@@ -139,7 +154,17 @@ def _load_extra_seats() -> Tuple[Seat, ...]:
         name = str(item.get("name") or "").strip()
         endpoint = str(item.get("endpoint") or "").strip()
         kind = str(item.get("kind") or "chat_completions").strip()
-        if not key or not name or not endpoint or key in builtins or not re.fullmatch(r"[a-z][a-z0-9_-]{1,31}", key):
+        if not key or not name or key in builtins or not re.fullmatch(r"[a-z][a-z0-9_-]{1,31}", key):
+            continue
+        # Cloudflare is a reserved provider identity, not an arbitrary
+        # user-supplied endpoint. Bind it to the exact official HTTPS API host.
+        if key == CLOUDFLARE_WORKERS_AI_KEY:
+            if kind != "cloudflare_workers_ai":
+                continue
+            endpoint = CLOUDFLARE_WORKERS_AI_ENDPOINT
+        elif kind == "cloudflare_workers_ai":
+            continue
+        elif not endpoint:
             continue
         if kind not in allowed_kinds or len(result) >= (MAX_AGENTS - len(BUILTIN_SEATS)):
             continue
@@ -485,6 +510,18 @@ def gemini_free_tier_is_confirmed() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def cloudflare_workers_free_plan_is_confirmed() -> bool:
+    """True only after the operator confirms the account is on Workers Free."""
+    value = str(_setting((CLOUDFLARE_WORKERS_FREE_CONFIRMATION_SETTING,)) or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def cloudflare_account_id_is_configured() -> bool:
+    """Require a Cloudflare account ID before allowing any API dispatch."""
+    account_id = str(_setting((CLOUDFLARE_ACCOUNT_ID_SETTING,)) or "").strip()
+    return bool(re.fullmatch(r"[0-9a-fA-F]{32}", account_id))
+
+
 def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
     """Return a user-safe reason when policy forbids dispatching this provider."""
     if seat.key not in ZERO_COST_API_PROVIDER_KEYS:
@@ -497,6 +534,16 @@ def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
             "موقوف احترازيًا: يجب تأكيد أن مشروع Google AI Studio يعمل على Free Tier "
             "ولا يرتبط بميزة فوترة مدفوعة؛ لم يُرسل أي طلب."
         )
+    if seat.key == CLOUDFLARE_WORKERS_AI_KEY:
+        if getattr(seat, "kind", "") != "cloudflare_workers_ai":
+            return "موقوف احترازيًا: تعريف Cloudflare AI غير مطابق للعقد الرسمي."
+        if not cloudflare_workers_free_plan_is_confirmed():
+            return (
+                "موقوف احترازيًا: يجب تأكيد أن الحساب على Cloudflare Workers Free "
+                "وليس Workers Paid؛ تجاوز 10,000 Neurons يوميًا على الخطة المدفوعة قد يكلّف مالًا."
+            )
+        if not cloudflare_account_id_is_configured():
+            return "موقوف احترازيًا: CLOUDFLARE_ACCOUNT_ID غير مضبوط؛ لم يُرسل أي طلب."
     return ""
 
 
@@ -519,6 +566,13 @@ def get_model_candidates_for_dispatch(seat: Seat) -> Tuple[str, ...]:
             model for model in configured_models
             if model in GEMINI_ZERO_COST_MODEL_ALLOWLIST
         )
+    if seat.key == CLOUDFLARE_WORKERS_AI_KEY and seat.kind == "cloudflare_workers_ai":
+        # One model only: no intra-provider model fallback when the daily Free
+        # allocation or transient capacity limit is reached.
+        return tuple(
+            model for model in configured_models
+            if model in CLOUDFLARE_WORKERS_AI_MODEL_ALLOWLIST
+        )[:1]
     return ()
 
 
@@ -1156,6 +1210,49 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
         text = _openai_text(data)
         provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
         return {"text": text, "provider_reported_model": provider_reported_model}
+
+    elif seat.kind == "cloudflare_workers_ai":
+        # Cloudflare's documented OpenAI-compatible Workers AI endpoint. The
+        # account ID is read only from a named Secret/environment setting;
+        # dynamic config cannot redirect this reserved seat to another host.
+        account_id = str(_setting((CLOUDFLARE_ACCOUNT_ID_SETTING,)) or "").strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", account_id):
+            raise ProviderError("Cloudflare account ID is missing or invalid", error_class="configuration")
+        if seat.endpoint != CLOUDFLARE_WORKERS_AI_ENDPOINT:
+            raise ProviderError("Cloudflare endpoint does not match the official API contract", error_class="configuration")
+        endpoint = CLOUDFLARE_WORKERS_AI_ENDPOINT.format(account_id=account_id)
+        content_parts = [prompt]
+        for att in safe_attachments:
+            if att["omitted"]:
+                content_parts.append(f"Attachment omitted by safety cap: {att['name']}")
+            elif is_image(att):
+                content_parts.append(f"Image attachment not sent to this text-only model: {att['name']}")
+            else:
+                extracted = extract_text(att)
+                content_parts.append(f"Attached file: {att['name']}\\n{extracted or '[binary attachment; filename only]'}")
+        content = "\\n\\n".join(part for part in content_parts if part).strip()
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            # Fail fast instead of queueing a request when Workers AI is busy.
+            "options": {"rejectIfBusy": True},
+        }
+        data = _post(
+            endpoint,
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            payload,
+            timeout,
+            deadline,
+            0,
+        )
+        if isinstance(data, dict) and isinstance(data.get("error"), dict):
+            err = data.get("error") or {}
+            raise ProviderError(str(err.get("message") or "Cloudflare Workers AI error"), error_class="API_ERROR")
+        text = _chat_text(data)
+        provider_reported_model = str(data.get("model") or "").strip() if isinstance(data, dict) else ""
+        if not provider_reported_model or provider_reported_model != model:
+            raise ProviderError("Cloudflare provider model identity mismatch", error_class="execution_identity_mismatch")
 
     elif seat.kind == "deepseek_chat":
         # DeepSeek official OpenAI-compatible Chat Completions API.
