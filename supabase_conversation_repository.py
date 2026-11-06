@@ -1,9 +1,10 @@
 """Supabase/PostgREST adapter for owner-scoped canonical conversation snapshots.
 
-This module deliberately is not imported by main.py or app.py. It requires a
-verified Supabase Auth identity and that user's access JWT. The publishable key
-identifies the project; PostgreSQL RLS and the signed JWT authorize every row.
-Never pass a Supabase secret/service-role key to this adapter.
+This adapter is used by main.py's authenticated Supabase conversation-storage
+integration. It requires a verified Supabase Auth identity and that user's
+access JWT. The publishable key identifies the project; PostgreSQL RLS and the
+signed JWT authorize every row. Never pass a Supabase secret/service-role key
+to this adapter.
 """
 from __future__ import annotations
 
@@ -154,8 +155,11 @@ class SupabaseConversationRepository:
     Required migration:
       supabase/migrations/20261024134655_20261023000000_council_conversations.sql
 
-    This adapter has not been wired into the production UI. A real two-account
-    test must be run against a dedicated Supabase project before app integration.
+    main.py constructs this adapter only after the Streamlit Auth session is
+    active and binds it to that session's verified issuer + subject. Unit tests
+    cover owner isolation and insert-only restore; a live two-account acceptance
+    test on an isolated Supabase project is still required before claiming that
+    cross-account restore behavior is proven in a live environment.
     """
 
     def __init__(
