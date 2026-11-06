@@ -3139,10 +3139,11 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             if not restore_storage_enabled or not is_supabase_auth_active(st):
                 st.info("يلزم تفعيل Supabase Storage وتسجيل الدخول بالحساب المستهدف قبل الاستعادة. لن تُستورد النسخة إلى ذاكرة جلسة مؤقتة.")
             else:
+                restore_uploader_nonce = int(st.session_state.get("_council_restore_uploader_nonce", 0))
                 restore_upload = st.file_uploader(
                     "اختر ملف AI_Council_Backup.json",
                     type=["json"],
-                    key="council_backup_restore_upload",
+                    key=f"council_backup_restore_upload_{restore_uploader_nonce}",
                     help="يُتحقق من البصمات وسلسلة Message→Request→Round قبل أي كتابة.",
                 )
                 if restore_upload is not None:
@@ -3180,10 +3181,6 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                                     inserted_chats.append(_chat_from_restored_owned_snapshot(restored_snapshot))
                                 if inserted_chats:
                                     current_chats = st.session_state.get("chats") or []
-                                    existing_ids = {
-                                        str(item.get("conversation_id") or item.get("id") or "")
-                                        for item in current_chats if isinstance(item, dict)
-                                    }
                                     st.session_state.chats = inserted_chats + [
                                         item for item in current_chats
                                         if str(item.get("conversation_id") or item.get("id") or "") not in {
@@ -3201,7 +3198,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                                         f"وتُخطيت {restore_result['skipped_existing']}، "
                                         "وتوقفت العملية عند أول سجل تعذر تأكيده. لم يتم استبدال أي سجل موجود."
                                     )
-                                st.session_state.pop("council_backup_restore_upload", None)
+                                st.session_state["_council_restore_uploader_nonce"] = restore_uploader_nonce + 1
                                 st.rerun()
                         except BackupRestoreError:
                             st.error("رفضنا الاستعادة: الملف غير سليم أو لا يطابق سجل المحادثات القانوني.")
