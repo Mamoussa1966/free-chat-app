@@ -159,6 +159,8 @@ def test_cloudflare_adapter_uses_only_official_endpoint_and_rejects_busy_request
     assert args[0] == providers.CLOUDFLARE_WORKERS_AI_ENDPOINT.format(account_id=ACCOUNT_ID)
     assert args[1]["Authorization"] == f"Bearer {TOKEN}"
     assert args[2]["model"] == MODEL
+    assert args[2]["max_completion_tokens"] == providers.MAX_OUTPUT_TOKENS
+    assert "max_tokens" not in args[2]
     assert args[2]["options"] == {"rejectIfBusy": True}
     assert args[2]["messages"][0]["content"] == "hello"
     assert args[-1] == 0
