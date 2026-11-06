@@ -2950,7 +2950,9 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.pop("_council_backup_json", None)
                 st.session_state.pop("_council_backup_count", None)
                 st.session_state.pop("_council_backup_truncated", None)
-                st.session_state.pop("_council_restore_uploader_nonce", None)
+                # Rotate the uploader widget key on logout so a file selected
+                # under the previous account cannot be silently reused later.
+                st.session_state["_council_restore_uploader_nonce"] = int(st.session_state.get("_council_restore_uploader_nonce", 0)) + 1
                 st.session_state.pop("_council_restore_summary", None)
                 logout_supabase_user(st)
                 st.rerun()
