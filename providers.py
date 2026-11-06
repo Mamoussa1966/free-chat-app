@@ -1334,6 +1334,8 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
         attestation = _take_runtime_payload_attestation()
         if attestation:
             return {"text": text, "provider_reported_model": provider_reported_model, "__runtime_attestation": attestation}
+    if seat.key == CLOUDFLARE_WORKERS_AI_KEY:
+        return {"text": text, "provider_reported_model": provider_reported_model}
     return text
 
 
