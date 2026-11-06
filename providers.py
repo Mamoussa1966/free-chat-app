@@ -1248,7 +1248,7 @@ def call_official(seat: Seat, prompt: str, model: str, credential: Optional[str]
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": content}],
-            "max_tokens": MAX_OUTPUT_TOKENS,
+            "max_completion_tokens": MAX_OUTPUT_TOKENS,
             # Fail fast instead of queueing a request when Workers AI is busy.
             "options": {"rejectIfBusy": True},
         }
