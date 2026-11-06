@@ -124,6 +124,14 @@ def test_remote_backup_marks_the_configured_row_limit_as_possibly_truncated(monk
     assert repository.list_calls == [(OWNER, 2)]
 
 
+def test_backup_ui_discloses_remote_or_session_only_source():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert "مصدر النسخة: سجلات Supabase المملوكة للحساب المسجّل دخوله." in source
+    assert "ذاكرة الجلسة الحالية فقط؛ هذه ليست نسخة سحابية دائمة" in source
+
+
 def test_local_backup_source_is_a_defensive_copy_and_is_labeled_as_session_only(monkeypatch):
     chat = {
         "conversation_id": "local-conversation",
