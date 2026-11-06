@@ -5308,6 +5308,9 @@ def _backup_chat_from_owned_snapshot(snapshot) -> dict:
         "created_at": str(view.get("created_at") or record.get("created_at") or ""),
         "messages": copy.deepcopy(view.get("messages") or []),
         "conversation_record": record,
+        # Keep the sanitized presentation projection stored by the existing
+        # Supabase adapter. It contains no binary media or provider credentials.
+        "_backup_presentation_state": copy.deepcopy(view),
         # The canonical record remains the authority. These presentation
         # projections are copied only to preserve the same export shape.
         "message_ledger_v24": copy.deepcopy(view.get("messages") or record.get("messages") or []),
