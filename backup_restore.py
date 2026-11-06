@@ -167,6 +167,7 @@ def restore_only_missing_conversations(
     restored = 0
     skipped_existing = 0
     failed: list[str] = []
+    restored_ids: list[str] = []
     for snapshot in snapshots:
         try:
             inserted = restore_method(snapshot)
@@ -178,6 +179,7 @@ def restore_only_missing_conversations(
             break
         if inserted is True:
             restored += 1
+            restored_ids.append(snapshot.conversation_id)
         elif inserted is False:
             skipped_existing += 1
         else:
@@ -188,6 +190,7 @@ def restore_only_missing_conversations(
         "status": "PARTIAL" if failed else "COMPLETED",
         "total": len(snapshots),
         "restored": restored,
+        "restored_conversation_ids": restored_ids,
         "skipped_existing": skipped_existing,
         "failed_conversation_ids": failed,
         "writes_are_insert_only": True,
