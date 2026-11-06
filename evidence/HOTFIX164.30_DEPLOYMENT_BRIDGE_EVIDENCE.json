@@ -33,15 +33,15 @@
     "source_bundle_complete": true,
     "source_bundle_sha256": "aa77b198a32983b8d0c2f0d99787f40b9aad329c3f997c41812f3daed8437f77",
     "source_file_sha256": {
-      "main.py": "3685940301637907f74d50bd0b4121d2c5ccd2e53b7c3d33c7c5c1623ba39394",
-      "providers.py": "1b85e8854b038ecea5d0565036daccad498999c916d803e3a5a801bc6149c21a",
-      "release_identity.py": "3e7802075490aea3567bd0bc2fb6918e4e01fb7e8aa767f3decaf2785c878466",
+      ".github/workflows/hotfix164-30-deployment-commit-closure.yml": "de684fd7dd3abe6d9fc8b2d76d5bf6d4c0e8951db2d4f354c643cb89459ec169",
+      "HOTFIX164.30_DEPLOYMENT_COMMIT_GATE.py": "58be13c378b0b31ff1f7699affa79e9f74f741b25cabf36fca28b9daca43d058",
+      "HOTFIX164.30_RELEASE_MANIFEST.json": "4f52b9e7b032ac5447733674c91f2cc5b9f993951055c9a96420a243921e9b3b",
       "conversation_store.py": "e7f22f5c1f3999be30d2f5d81313c3c98cfde70db401abebb6b4a5ef7e9d2a8d",
       "conversation_v25_runtime.py": "a9d92224bb4f5f32633f49ca823559902d07efd6e9a914b4498eddd0041fc78a",
       "hotfix16430_deployment_attestation.py": "7bee90c0e1f484fa95866fe5841da94d9245da0314559e00a63d7de0a4070bd5",
-      "HOTFIX164.30_DEPLOYMENT_COMMIT_GATE.py": "58be13c378b0b31ff1f7699affa79e9f74f741b25cabf36fca28b9daca43d058",
-      "HOTFIX164.30_RELEASE_MANIFEST.json": "4f52b9e7b032ac5447733674c91f2cc5b9f993951055c9a96420a243921e9b3b",
-      ".github/workflows/hotfix164-30-deployment-commit-closure.yml": "de684fd7dd3abe6d9fc8b2d76d5bf6d4c0e8951db2d4f354c643cb89459ec169"
+      "main.py": "3685940301637907f74d50bd0b4121d2c5ccd2e53b7c3d33c7c5c1623ba39394",
+      "providers.py": "1b85e8854b038ecea5d0565036daccad498999c916d803e3a5a801bc6149c21a",
+      "release_identity.py": "3e7802075490aea3567bd0bc2fb6918e4e01fb7e8aa767f3decaf2785c878466"
     }
   },
   "duplicate_canonical_request_ids": [],
