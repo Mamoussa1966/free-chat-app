@@ -2951,6 +2951,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.pop("_council_backup_count", None)
                 st.session_state.pop("_council_backup_truncated", None)
                 st.session_state.pop("_council_restore_uploader_nonce", None)
+                st.session_state.pop("_council_restore_summary", None)
                 logout_supabase_user(st)
                 st.rerun()
         if st.session_state.get("_supabase_last_storage_error"):
@@ -3140,6 +3141,21 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             if not restore_storage_enabled or not is_supabase_auth_active(st):
                 st.info("يلزم تفعيل Supabase Storage وتسجيل الدخول بالحساب المستهدف قبل الاستعادة. لن تُستورد النسخة إلى ذاكرة جلسة مؤقتة.")
             else:
+                restore_summary = st.session_state.get("_council_restore_summary")
+                if isinstance(restore_summary, dict):
+                    if restore_summary.get("status") == "COMPLETED":
+                        st.success(
+                            f"آخر استعادة: أُضيفت {restore_summary.get('restored', 0)} محادثة، "
+                            f"وتُخطيت {restore_summary.get('skipped_existing', 0)} موجودة."
+                        )
+                    else:
+                        st.warning(
+                            f"آخر استعادة جزئية: أُضيفت {restore_summary.get('restored', 0)}، "
+                            f"وتُخطيت {restore_summary.get('skipped_existing', 0)}، "
+                            f"وتعذر تأكيد {restore_summary.get('failed_count', 0)} سجل."
+                        )
+                    if restore_summary.get("session_hydration_warning"):
+                        st.caption("تم الحفظ الدائم، لكن بعض السجلات لم تظهر فورًا في الجلسة الحالية.")
                 restore_uploader_nonce = int(st.session_state.get("_council_restore_uploader_nonce", 0))
                 restore_upload = st.file_uploader(
                     "اختر ملف AI_Council_Backup.json",
@@ -3195,22 +3211,13 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                                             str(chat_item.get("conversation_id") or "") for chat_item in inserted_chats
                                         }
                                     ]
-                                if session_hydration_warning:
-                                    st.warning(
-                                        "تم حفظ بعض المحادثات في Supabase، لكن تعذّر تحميلها فورًا داخل الجلسة الحالية. "
-                                        "لا تعِد الاستيراد؛ السجلات المحفوظة ستبقى في الحساب."
-                                    )
-                                if restore_result["status"] == "COMPLETED":
-                                    st.success(
-                                        f"اكتملت الاستعادة: أُضيفت {restore_result['restored']} محادثة، "
-                                        f"وتُخطيت {restore_result['skipped_existing']} محادثة موجودة مسبقًا."
-                                    )
-                                else:
-                                    st.warning(
-                                        f"استعادة جزئية: أُضيفت {restore_result['restored']}، "
-                                        f"وتُخطيت {restore_result['skipped_existing']}، "
-                                        "وتوقفت العملية عند أول سجل تعذر تأكيده. لم يتم استبدال أي سجل موجود."
-                                    )
+                                st.session_state["_council_restore_summary"] = {
+                                    "status": restore_result["status"],
+                                    "restored": int(restore_result["restored"]),
+                                    "skipped_existing": int(restore_result["skipped_existing"]),
+                                    "failed_count": len(restore_result.get("failed_conversation_ids", [])),
+                                    "session_hydration_warning": bool(session_hydration_warning),
+                                }
                                 st.session_state["_council_restore_uploader_nonce"] = restore_uploader_nonce + 1
                                 st.rerun()
                         except BackupRestoreError:
