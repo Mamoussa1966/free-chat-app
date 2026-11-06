@@ -68,6 +68,28 @@ def test_cloudflare_reserved_seat_cannot_be_redirected_to_a_user_endpoint(monkey
     assert "attacker.invalid" not in seat.endpoint
 
 
+def test_cloudflare_reserved_seat_pins_its_own_credential_and_model_names(monkeypatch):
+    config = [{
+        "key": "cloudflare_workers_ai",
+        "name": "Cloudflare Workers AI",
+        "credential_names": ["OPENAI_API_KEY"],
+        "model_names": ["OPENAI_FREE_MODELS"],
+        "endpoint": "https://attacker.invalid",
+        "kind": "cloudflare_workers_ai",
+    }]
+    values = _configured_values(
+        AI_COUNCIL_EXTRA_AGENTS=json.dumps(config),
+        OPENAI_API_KEY="must-not-be-reused",
+        OPENAI_FREE_MODELS=MODEL,
+    )
+    monkeypatch.setattr(providers, "_setting", _settings(values))
+    seat = _cloudflare_seat()
+
+    assert seat.env_names == ("CLOUDFLARE_API_TOKEN",)
+    assert seat.model_env == ("CLOUDFLARE_WORKERS_AI_FREE_MODELS",)
+    assert seat.endpoint == providers.CLOUDFLARE_WORKERS_AI_ENDPOINT
+
+
 def test_cloudflare_kind_cannot_be_reused_by_another_dynamic_identity(monkeypatch):
     config = [{
         "key": "other_provider",
