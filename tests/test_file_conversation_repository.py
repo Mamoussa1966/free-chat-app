@@ -235,3 +235,24 @@ def test_unowned_or_missing_ids_have_same_delete_result(repository):
     assert repository.delete(OWNER_B, candidate.conversation_id) is False
     assert repository.delete(OWNER_A, "missing-id") is False
     assert repository.delete(OWNER_A, candidate.conversation_id) is True
+
+
+def test_restore_if_absent_is_atomic_and_never_overwrites(repository):
+    first = snapshot(record=canonical_record("restore-id"))
+    assert repository.restore_if_absent(first) is True
+
+    changed_record = canonical_record("restore-id", message_id="replacement-message")
+    changed = snapshot(record=changed_record)
+    assert repository.restore_if_absent(changed) is False
+    assert repository.load(OWNER_A, "restore-id").canonical_record == first.canonical_record
+
+
+def test_restore_if_absent_rejects_foreign_owner_without_replacing_row(repository):
+    first = snapshot(OWNER_A, canonical_record("restore-owner-id"))
+    repository.save(first)
+    foreign = snapshot(OWNER_B, canonical_record("restore-owner-id", message_id="foreign-message"))
+
+    with pytest.raises(ConversationOwnershipError):
+        repository.restore_if_absent(foreign)
+
+    assert repository.load(OWNER_A, "restore-owner-id").canonical_record == first.canonical_record
