@@ -222,14 +222,21 @@ def verify_conversation_backup(document: dict[str, Any]) -> bool:
             if not isinstance(snapshot, dict) or snapshot.get("conversation_id") != conversation_id:
                 return False
             canonical_record = snapshot.get("canonical_conversation_record")
-            if (
-                not isinstance(canonical_record, dict)
-                or canonical_record.get("conversation_id") != conversation_id
-            ):
+            if not isinstance(canonical_record, dict):
                 return False
             for collection in ("messages", "requests", "rounds"):
                 rows = canonical_record.get(collection)
                 if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                    return False
+                # The canonical history payload stores conversation identity on
+                # each row rather than at the collection-container level.
+                # Older compatible rows may omit the field, but any supplied
+                # conversation binding must match the enclosing snapshot.
+                if any(
+                    row.get("conversation_id") not in (None, "")
+                    and row.get("conversation_id") != conversation_id
+                    for row in rows
+                ):
                     return False
 
             per_conversation_digest = item.get("canonical_history_sha256")
