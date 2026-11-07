@@ -3139,9 +3139,13 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             )
             st.divider()
             st.markdown("**📥 استعادة نسخة احتياطية إلى حسابك**")
-            _, _, restore_storage_enabled = get_supabase_config(st)
-            if not restore_storage_enabled or not is_supabase_auth_active(st):
-                st.info("يلزم تفعيل Supabase Storage وتسجيل الدخول بالحساب المستهدف قبل الاستعادة. لن تُستورد النسخة إلى ذاكرة جلسة مؤقتة.")
+            _, _, restore_supabase_auth_enabled = get_supabase_config(st)
+            if not restore_supabase_auth_enabled or not is_supabase_auth_active(st):
+                st.info(
+                    "يلزم تفعيل Supabase Auth وتسجيل الدخول بالحساب المستهدف. "
+                    "ستُدرج المحادثات في جدول قاعدة البيانات مع تطبيق سياسات RLS؛ "
+                    "لا تُرفع النسخة إلى Supabase Storage ولا تُحفظ في ذاكرة جلسة مؤقتة."
+                )
             else:
                 restore_summary = st.session_state.get("_council_restore_summary")
                 if isinstance(restore_summary, dict):
