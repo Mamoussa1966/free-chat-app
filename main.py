@@ -263,14 +263,13 @@ def _round_count_for_request(rounds: int, user_prompt: str, bridge_controls=None
     return max(1, min(int(rounds), MAX_ROUNDS))
 
 
-def _round_provider_execution_order(
-    seats, strict_live_bridge: bool = False, protect_cloudflare_deadline: bool = False
-):
-    """Order round providers while preserving the strict DeepSeek→Gemini Bridge contract.
+def _round_provider_execution_order(seats, strict_live_bridge: bool = False):
+    """Order normal rounds with the configured Cloudflare Free seat before Gemini.
 
-    When the operator opts into a whole-request deadline, reserve Cloudflare's
-    execution slot before Gemini's potentially long Free cascade.  Strict live
-    Bridge closure remains limited to its two proof endpoints.
+    Cloudflare's dedicated Free inference call is scheduled before Gemini's
+    potentially long multi-model cascade in every ordinary Council round, not
+    only when a whole-request deadline Secret is configured. Strict live Bridge
+    closure remains limited to its two proof endpoints and retains its exact order.
     """
     by_key = {str(getattr(seat, "key", "") or "").lower(): seat for seat in seats}
     if strict_live_bridge:
@@ -280,7 +279,7 @@ def _round_provider_execution_order(
     bridge_order = []
     if "deepseek" in by_key:
         bridge_order.append(by_key.pop("deepseek"))
-    if protect_cloudflare_deadline and "cloudflare_workers_ai" in by_key:
+    if "cloudflare_workers_ai" in by_key:
         bridge_order.append(by_key.pop("cloudflare_workers_ai"))
     if "gemini" in by_key:
         bridge_order.append(by_key.pop("gemini"))
@@ -2160,9 +2159,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     by_key = {seat.key: seat for seat in seats}
     # Keep an immutable lookup for the transaction target identity check.
     seat_by_key = dict(by_key)
-    bridge_order = _round_provider_execution_order(
-        seats, strict_live_bridge, protect_cloudflare_deadline=(deadline is not None)
-    )
+    bridge_order = _round_provider_execution_order(seats, strict_live_bridge)
     # Keep the legacy source-inspection seam while executing the dependency
     # order selected above; the false branch is intentionally unreachable.
     for seat in SEATS if False else bridge_order:
