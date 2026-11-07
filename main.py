@@ -2943,9 +2943,17 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         st.caption("المقاعد: ChatGPT 1 · Gemini 2 · Claude 3 · Grok 4 · Kimi 5 · أنت 6 · DeepSeek 7 · وكلاء إضافيون من 8")
         rounds = st.slider("عدد الجولات", 1, MAX_ROUNDS, max(1, min(rounds, MAX_ROUNDS)), 1)
         st.session_state.rounds = rounds
-        st.caption("🆓 سياسة عدم التكلفة: Gemini Free Tier فقط بعد تأكيد مشروع Google AI Studio؛ بقية واجهات API موقوفة احترازيًا. لا Local Engine ولا Paid fallback.")
+        st.caption("🆓 سياسة عدم التكلفة: Gemini Free Tier وCloudflare Workers AI Free فقط بعد تأكيد كل خطة ونموذج معتمد؛ بقية واجهات API موقوفة احترازيًا. لا Local Engine ولا Paid fallback.")
         if not gemini_free_tier_is_confirmed():
             st.warning("إرسال Gemini API متوقف حاليًا حتى تأكيد أن مشروع Google AI Studio على Free Tier وغير مربوط بالفوترة.")
+        cloudflare_seat = next(
+            (seat for seat in seats if seat.key == "cloudflare_workers_ai"),
+            None,
+        )
+        if cloudflare_seat is not None:
+            cloudflare_block = provider_zero_cost_policy_block_reason(cloudflare_seat)
+            if cloudflare_block:
+                st.warning("إرسال Cloudflare Workers AI متوقف: " + cloudflare_block)
         st.divider()
         st.subheader("🔬 تشخيص المزودين")
         st.caption("API رسمي فقط؛ لا Local Engine ولا نموذج تلقائي.")
@@ -5261,6 +5269,45 @@ def _text_prompt_for_submission(typed_prompt: Any, send_clicked: bool) -> str:
     return str(typed_prompt or "").strip()
 
 
+def _composer_submission_state(
+    typed_prompt: Any,
+    *,
+    direct_files: Any = None,
+    folder_files: Any = None,
+    voice_submission: Any = None,
+    pending_voice: Any = None,
+    active_chat_id: str = "",
+) -> dict:
+    """Return a read-only, testable readiness snapshot for the mobile composer.
+
+    This is a UI affordance only: it never allocates a Message/Request/Round,
+    starts a provider call, or mutates Streamlit state. Voice is eligible only
+    when its pending recording belongs to the currently active conversation.
+    """
+    prompt_text = str(typed_prompt or "")
+    char_count = len(prompt_text)
+    over_limit = char_count > MAX_PROMPT_CHARS
+    pending_voice_ready = (
+        isinstance(pending_voice, dict)
+        and str(pending_voice.get("chat_id") or "") == str(active_chat_id or "")
+        and bool(pending_voice.get("audio_bytes"))
+    )
+    has_content = (
+        bool(prompt_text.strip())
+        or bool(direct_files)
+        or bool(folder_files)
+        or bool(voice_submission)
+        or pending_voice_ready
+    )
+    return {
+        "can_submit": bool(has_content and not over_limit),
+        "character_count": char_count,
+        "remaining_characters": max(0, MAX_PROMPT_CHARS - char_count),
+        "over_limit": over_limit,
+        "pending_voice_ready": bool(pending_voice_ready),
+    }
+
+
 def _pending_voice_recording_for_send(
     pending_voice: Any,
     active_chat_id: Any,
@@ -5348,7 +5395,7 @@ def run_app() -> None:
     chat = _active_chat()
     _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
-    st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini Free Tier فقط بعد التأكيد • Provider: {PROVIDER_VERSION}")
+    st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini / Cloudflare Workers AI بعد تأكيد الخطة المجانية • Provider: {PROVIDER_VERSION}")
     runtime_commit, runtime_commit_source, runtime_commit_proven = _runtime_commit_summary(
         st.session_state.get("_hotfix16430_runtime_attestation", {})
     )
@@ -5364,7 +5411,27 @@ def run_app() -> None:
         )
     st.caption(f"HOTFIX123 Release Identity Gate: {release_identity.get('gate', 'FAIL')} • Frozen Provider={release_identity.get('observed', {}).get('provider_core', 'NOT_PROVEN')} • Runtime Match={release_identity.get('runtime_matches_frozen_identity', False)}")
     st.caption("V26.3: Authoritative Conversation Persistence · Message→Request→Round Chain · HOTFIX145 Core Preserved")
-    st.markdown("**العقد:** لا Local Engine ولا Paid fallback ولا نموذج تلقائي. وجود اسم داخل `*_FREE_MODELS` لا يثبت المجانية؛ يسمح التشغيل فقط بموديلات Gemini Free Tier المعتمدة وبعد تأكيد أن مشروع Google نفسه غير مربوط بالفوترة. بقية واجهات API مقفولة احترازيًا.")
+    st.markdown("**العقد:** لا Local Engine ولا Paid fallback ولا نموذج تلقائي. وجود اسم داخل `*_FREE_MODELS` لا يثبت المجانية؛ يُسمح فقط بنماذج Gemini Free Tier وCloudflare Workers AI Free المعتمدة بعد تأكيد خطة الحساب. بقية واجهات API مقفولة احترازيًا.")
+    eligible_provider_count = sum(bool(model_candidates.get(seat.key)) for seat in get_seats())
+    last_round_results = st.session_state.get("last_results") or []
+    successful_round_results = sum(
+        1 for result in last_round_results
+        if isinstance(result, dict) and str(result.get("status") or "").upper() == "SUCCESS"
+    )
+    with st.container(border=True):
+        status_cols = st.columns(3)
+        with status_cols[0]:
+            st.metric("وكلاء مهيؤون للإرسال المجاني", f"{eligible_provider_count}/{len(get_seats())}")
+        with status_cols[1]:
+            st.metric("رسائل المحادثة", len(chat.get("messages") or []))
+        with status_cols[2]:
+            round_value = (
+                f"{successful_round_results}/{len(last_round_results)}"
+                if last_round_results else "لم تبدأ"
+            )
+            st.metric("نجاح آخر جولة", round_value)
+        st.caption("عدد الوكلاء المهيئين يعكس الاعتماد وقائمة النماذج وسياسة المجانية فقط؛ ولا يعني اختبار اتصال حيًا أو توافر حصة لحظيًا.")
+    st.markdown("**تنبيه الخصوصية:** لا ترسل كلمات مرور أو مفاتيح API أو بيانات شديدة الحساسية. في Gemini Free Tier قد تُستخدم البيانات لتحسين منتجات Google وفق شروط الطبقة المجانية؛ راجع سياسة المزود قبل إرسال أي محتوى خاص.")
     voice_submission = _render_agent_rooms(chat, model_candidates, credentials)
     folder_files = _render_attachment_picker()
 
@@ -5386,16 +5453,32 @@ def run_app() -> None:
         help="يمكنك اختيار أكثر من ملف من الهاتف قبل الإرسال.",
     )
     pending_voice_hint = st.session_state.get("pending_voice_recording")
-    if (
-        isinstance(pending_voice_hint, dict)
-        and str(pending_voice_hint.get("chat_id") or "") == str(chat.get("id") or "")
-        and bool(pending_voice_hint.get("audio_bytes"))
-    ):
+    composer_state = _composer_submission_state(
+        typed_prompt,
+        direct_files=direct_files,
+        folder_files=folder_files,
+        voice_submission=voice_submission,
+        pending_voice=pending_voice_hint,
+        active_chat_id=str(chat.get("id") or ""),
+    )
+    st.caption(
+        f"عدد الأحرف: {composer_state['character_count']:,} / {MAX_PROMPT_CHARS:,} "
+        f"· المتبقي: {composer_state['remaining_characters']:,}"
+    )
+    if composer_state["over_limit"]:
+        st.error(f"تجاوزت الرسالة الحد المسموح ({MAX_PROMPT_CHARS:,} حرف). اختصر النص قبل الإرسال.")
+    if composer_state["pending_voice_ready"]:
         st.info(
-            "يوجد تسجيل صوتي جاهز. اضغط «🎤 إرسال الصوت للمجلس» أو «📨 إرسال إلى المجلس» "
+            "يوجد تسجيل صوتي جاهز لهذه المحادثة. اضغط «🎤 إرسال الصوت للمجلس» أو «📨 إرسال إلى المجلس» "
             "لإرساله مع النص المستخرج وإرفاق ملف الصوت بسجل الرسالة."
         )
-    send_clicked = st.button("📨 إرسال إلى المجلس", type="primary", use_container_width=True, key=f"send_message_{st.session_state.input_nonce}")
+    send_clicked = st.button(
+        "📨 إرسال إلى المجلس",
+        type="primary",
+        use_container_width=True,
+        key=f"send_message_{st.session_state.input_nonce}",
+        disabled=not composer_state["can_submit"],
+    )
 
     prompt = ""
     attachments: list[dict] = []
@@ -5706,7 +5789,7 @@ def run_app() -> None:
     runtime_audit = conversation_audit(chat)
     v25_audit = authoritative_audit(chat, st.session_state)
     v25_audit["v26_3_persistence"] = persistence_audit(chat, st.session_state)
-    with st.expander("🧭 HOTFIX118 — Authoritative Historical Conversation Audit", expanded=True):
+    with st.expander("🧭 HOTFIX118 — Authoritative Historical Conversation Audit", expanded=False):
         # HOTFIX155: dedicated Copy + Print controls for the complete HOTFIX118
         # authoritative audit payload. These controls are presentation-only and
         # never mutate canonical persistence, counters, provider execution, or audit truth.
@@ -5746,7 +5829,7 @@ def run_app() -> None:
         _render_section_actions("HOTFIX141 — A/B/C Independent Lifecycle Harness", {"mode": "HOTFIX141_ABC", "requests": harness_report, "authoritative_source": "APPLICATION_OWNED_REQUEST_RECORDS"}, "hotfix141_abc", "HOTFIX141_ABC_Lifecycle_Audit.json")
         st.json({"mode": "HOTFIX141_ABC", "requests": harness_report, "authoritative_source": "APPLICATION_OWNED_REQUEST_RECORDS"})
 
-    with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=True):
+    with st.expander("🔐 V23 Security / Context / Platform Audit", expanded=False):
         # HOTFIX151.4: the expander label IS the single V23 audit heading.
         # Do not render a second inner subheader; doing so produced two
         # visually identical audit headings, one above the action bar and
