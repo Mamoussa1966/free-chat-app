@@ -3013,6 +3013,15 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             with st.spinner("تشخيص المزودين بالتوازي…"):
                 st.session_state.last_diagnostics = [_public_result(r) for r in _run_provider_diagnostics(credentials, model_candidates)]
             st.rerun()
+        if st.button(
+            "🧪 اختبار Cloudflare Workers AI فقط",
+            key="cloudflare_workers_ai_single_provider_diagnostic",
+            use_container_width=True,
+        ):
+            with st.spinner("اختبار Cloudflare فقط عبر Workers AI Free…"):
+                cloudflare_result = _run_cloudflare_only_diagnostic(credentials, model_candidates)
+                st.session_state.last_diagnostics = [_public_result(cloudflare_result)]
+            st.rerun()
         if st.button("🧪 Run Production Core Tests", use_container_width=True):
             with st.spinner("تشغيل Test Harness المحلي — بدون أي وكيل AI…"):
                 code, report = run_production_core_tests()
