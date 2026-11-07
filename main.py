@@ -531,7 +531,12 @@ class SharedContextBridge:
                 value = str(record.get("value") or "") if isinstance(record, dict) else ""
                 if len(value) >= 8:
                     base = base.replace(value, "[REDACTED_BRIDGE_VALUE]")
-            base = re.sub(r"\bBRIDGE_[A-Z0-9_]+\b", "[REDACTED_BRIDGE_KEY]", base)
+        # HOTFIX165: Bridge control keys are private to the application for
+        # every provider, not only Gemini. Historical user messages can contain
+        # BRIDGE_RESULT from old closure tests; leaving it in a non-Gemini seat's
+        # context causes _assert_provider_boundary to reject that seat before
+        # call_seat() and can silently starve the Cloudflare round-priority slot.
+        base = re.sub(r"\bBRIDGE_[A-Z0-9_]+\b", "[REDACTED_BRIDGE_KEY]", base)
         return base[-self.max_chars:]
 
     def record_provider_input(self, seat, prompt: str, provider_user_prompt: str = "") -> None:
@@ -2204,6 +2209,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 "execution_claim": f"{request_id}:{round_no}:{seat.key}",
             }
             continue
+        execution_stage = "PRE_DISPATCH"
+        provider_result = None
+        provider_output_validated = False
+        dispatch_accepted = False
+        result = {}
         try:
             # HOTFIX132: dispatch is accepted before entering the Provider Execution Contract.
             # Provider/API failures after this point are execution outcomes, never dispatch failures.
@@ -2216,6 +2226,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
             # may the application cross the COMMIT -> BARRIER -> READ boundary.
             # The resolved value remains application-owned and is never injected
             # into the Gemini prompt or HTTP payload.
+            execution_stage = "PROMPT_PREPARATION"
             provider_prompt = bridge.prompt_snapshot(seat)
             if strict_live_bridge and seat.key == "deepseek":
                 provider_prompt = (provider_prompt + "\n\n" if provider_prompt else "") + (
@@ -2245,11 +2256,15 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 bridge._record_bridge_event("TARGET_DISPATCH", seat=2, target_seat=2, provider="Gemini", status="ACCEPTED")
             provider_candidates = _round_model_candidates(seat.key, model_candidates, strict_live_bridge)
             provider_deadline = _provider_execution_deadline(seat, deadline)
-            result = call_seat(
+            execution_stage = "PROVIDER_CALL"
+            dispatch_accepted = True
+            provider_result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, provider_candidates,
                 provider_deadline, request_id,
             )
+            result = provider_result
+            execution_stage = "PROVIDER_RESULT_VALIDATION"
             result["dispatch_decision"] = "DISPATCH_ACCEPTED"
             result["dispatch_reason"] = "READY_FREE_MODEL"
             result["dispatch_accepted"] = True
@@ -2262,6 +2277,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 result["execution_proof_reason"] = target_execution_reason
             if str(result.get("status") or "").upper() == "SUCCESS":
                 result = _validate_provider_output(result, seat, request_id, round_no)
+                provider_output_validated = True
                 # Authoritative cascade identity comes from the actual API-attempt
                 # ledger, never from a provider-generated field.
                 attempted_models = [str(m).strip() for m in result.get("attempted_models", []) if str(m).strip()]
@@ -2303,6 +2319,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 )
             actual_provider_prompt = result.pop("_provider_input_prompt", "") if isinstance(result, dict) else ""
             runtime_attestation = result.pop("_runtime_payload_attestation", {}) if isinstance(result, dict) else {}
+            execution_stage = "BRIDGE_EVIDENCE_RECORDING"
             bridge.record_provider_input(seat, actual_provider_prompt or provider_prompt)
             bridge.record_runtime_payload_attestation(seat, runtime_attestation)
             # HOTFIX164.1: complete the application-owned target-side READ only
@@ -2319,12 +2336,14 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                         source_value = str((bridge._values.get("BRIDGE_RESULT") or {}).get("value") or "")
                         target_value = str((bridge._resolved_reads.get("BRIDGE_RESULT") or {}).get("value") or "")
                         bridge._record_bridge_event("MATCH", seat=2, target_seat=2, provider="Application", status="PASS" if source_value and source_value == target_value else "FAIL")
+            execution_stage = "PROVIDER_TELEMETRY_RENDER"
             _render_live_cascade_telemetry(result)
             result["request_routed"] = result_request_routed
             result["model_candidates_configured"] = bool(model_candidates.get(seat.key))
             result["execution_id"] = execution_id
             result["execution_claim"] = f"{request_id}:{round_no}:{seat.key}"
             results[seat.key] = result
+            execution_stage = "BRIDGE_OUTPUT_HANDOFF"
             bridge.append_agent_output(seat, result)
             # HOTFIX131: provider prose is untrusted presentation data. It cannot
             # introduce a Request ID/status/result row or expose bridge values.
@@ -2335,6 +2354,7 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     bridge.commit(gemini_target)
                     bridge.barrier()
             else:
+                execution_stage = "BRIDGE_READ_HANDOFF"
                 resolution = bridge.consume_read_requests(seat, result)
                 result["bridge_read_status"] = (
                     "PASS" if resolution.get("status") == "RESOLVED" else
@@ -2356,24 +2376,52 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                     result["target_response_used_as_bridge_read_proof"] = False
                 elif resolution.get("status") == "NOT_READY":
                     result["content"] = "BRIDGE_READ_STATUS = NOT_READY"
+            execution_stage = "BRIDGE_TRACE_FINALIZATION"
             result["bridge_trace"] = bridge.transaction_trace()
         except Exception as exc:
-            # HOTFIX132: once DISPATCH_ACCEPTED has been recorded, an exception is
-            # an execution/provider-contract failure, not a dispatch rejection.
+            # Preserve provider-returned attempt evidence when a later orchestration/
+            # Bridge handoff step fails.  A post-call exception must never erase an
+            # actual HTTP attempt and misreport it as NOT_EXECUTED.
+            provider_result = provider_result if isinstance(provider_result, dict) else {}
+            attempted_models = [
+                str(item).strip()
+                for item in (provider_result.get("attempted_models") or [])
+                if str(item).strip()
+            ]
+            runtime_events = list(provider_result.get("runtime_execution_events") or [])
+            execution_started = bool(attempted_models) or any(
+                isinstance(event, dict) and event.get("execution_started") is True
+                for event in runtime_events
+            )
+            executed_model = str(
+                provider_result.get("executed_model")
+                or provider_result.get("model")
+                or (attempted_models[-1] if attempted_models else "")
+            ).strip()
             failure = {
                 "seat": seat.key, "name": seat.name, "label": seat.label,
                 "status": "PROVIDER_ERROR", "mode": "official_api",
-                "model": "", "executed_model": "", "content": "",
+                "model": executed_model, "executed_model": executed_model, "content": "",
+                "provider_reported_model": str(provider_result.get("provider_reported_model") or ""),
                 "classification": "PROVIDER_ERROR",
-                "error": f"provider execution failed after dispatch acceptance: {exc.__class__.__name__}",
-                "attempt_summaries": [], "attempt_telemetry": [], "attempted_models": [],
-                "official_authenticated": bool(credentials.get(seat.key)),
-                "execution_started": False, "runtime_execution_events": [],
+                "error": f"provider/orchestration path failed at {execution_stage}: {exc.__class__.__name__}",
+                "attempted_models": attempted_models,
+                "attempt_diagnostics": list(provider_result.get("attempt_diagnostics") or []),
+                "attempt_summaries": list(provider_result.get("attempt_summaries") or []),
+                "attempt_telemetry": list(provider_result.get("attempt_telemetry") or []),
+                "runtime_execution_events": runtime_events,
+                "official_authenticated": bool(
+                    provider_result.get("official_authenticated", credentials.get(seat.key))
+                ),
+                "execution_started": execution_started,
+                "provider_response_validated": provider_output_validated,
+                "failure_stage": execution_stage,
+                "orchestration_error_type": exc.__class__.__name__,
                 "request_id": request_id, "round": round_no,
-                "dispatch_decision": "DISPATCH_ACCEPTED",
-                "dispatch_reason": "READY_FREE_MODEL",
-                "dispatch_accepted": True, "dispatch_gate": "HOTFIX132",
-                "request_routed": True,
+                "dispatch_decision": "DISPATCH_ACCEPTED" if dispatch_accepted else "DISPATCH_NOT_ACCEPTED",
+                "dispatch_reason": "READY_FREE_MODEL" if dispatch_accepted else "INTERNAL_FAILURE_BEFORE_PROVIDER_CALL",
+                "dispatch_accepted": dispatch_accepted, "dispatch_gate": "HOTFIX132",
+                "request_routed": bool(credentials.get(seat.key) and model_candidates.get(seat.key)),
                 "model_candidates_configured": bool(model_candidates.get(seat.key)),
                 "execution_id": execution_id,
                 "execution_claim": f"{request_id}:{round_no}:{seat.key}",
@@ -3881,7 +3929,12 @@ def _render_result_line(result: dict, diagnostic_only: bool = False) -> None:
         st.caption("Classification: DISPATCH_REJECTED · Provider error not proven")
     elif status == "NOT_EXECUTED":
         st.warning(f"🟡 {result.get('label', result.get('name', 'Provider'))} — لم يتم تنفيذ أي محاولة API.")
-        st.caption("Classification: NOT_EXECUTED · Provider error not proven")
+        failure_stage = str(result.get("failure_stage") or "").strip()
+        error_type = str(result.get("orchestration_error_type") or "").strip()
+        if failure_stage:
+            st.caption(f"Execution path diagnostic: {failure_stage} · {error_type or 'unknown'}")
+        else:
+            st.caption("Classification: NOT_EXECUTED · Provider error not proven")
     elif status in {"NOT_CONFIGURED", "NO_FREE_MODEL_CONFIGURED"}:
         dispatch_reason = str(result.get("dispatch_reason") or "").strip().upper()
         if dispatch_reason == "ZERO_COST_API_POLICY_BLOCKED":
