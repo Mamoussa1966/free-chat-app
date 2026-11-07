@@ -223,6 +223,15 @@ class ConversationRepository(Protocol):
         """List only IDs owned by the supplied identity."""
         ...
 
+    def restore_if_absent(self, snapshot: OwnedConversationSnapshot) -> bool:
+        """Atomically insert a snapshot only when its conversation ID is absent.
+
+        This is distinct from save/upsert: restore must never replace an
+        existing conversation, including one created concurrently after a read.
+        Return False only when the already-existing row is visible to this owner.
+        """
+        ...
+
     def delete(self, owner: AccountIdentity, conversation_id: str) -> bool:
         """Delete an owned snapshot; return False for missing or unowned IDs."""
         ...

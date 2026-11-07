@@ -93,6 +93,18 @@ class InMemoryRepositoryDouble:
                     raise ConversationIdentityConflict("canonical identity binding cannot be rewritten")
         self._rows[cid] = OwnedConversationSnapshot(snapshot.owner, record)
 
+    def restore_if_absent(self, snapshot):
+        assert isinstance(snapshot, OwnedConversationSnapshot)
+        existing = self._rows.get(snapshot.conversation_id)
+        if existing is not None:
+            if existing.owner != snapshot.owner:
+                raise ConversationOwnershipError("conversation owner mismatch")
+            return False
+        self._rows[snapshot.conversation_id] = OwnedConversationSnapshot(
+            snapshot.owner, snapshot.canonical_record
+        )
+        return True
+
     def load(self, owner, conversation_id):
         row = self._rows.get(str(conversation_id or "").strip())
         if row is None or row.owner != owner:

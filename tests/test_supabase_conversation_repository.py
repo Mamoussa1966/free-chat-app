@@ -173,8 +173,14 @@ class RlsFakeSession:
                 return FakeResponse(403, {"message": "row-level security violation"})
             cid = candidate.get("conversation_id")
             existing = self.rows.get(cid)
+            if existing is not None and "on_conflict" not in params:
+                if existing["owner_id"] != owner_id:
+                    # Model an RLS-hidden conflict without revealing the existing owner.
+                    return FakeResponse(201, [])
+                # Plain INSERT has no update path, even for the same owner.
+                return FakeResponse(409, {"message": "duplicate key"})
             if existing is not None and existing["owner_id"] != owner_id:
-                # Model an RLS-hidden conflict without revealing the existing owner.
+                # Upsert under RLS must not reveal or replace another owner's row.
                 return FakeResponse(201, [])
             if existing is not None:
                 try:
@@ -415,3 +421,42 @@ def test_project_level_rls_helper_acl_migration_is_conditional_and_restrictive()
     for role in ("public", "anon", "authenticated", "service_role"):
         assert role in migration
 
+
+
+
+def test_restore_if_absent_uses_plain_insert_and_never_overwrites_existing_owner_row(fake_session):
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
+    original = OwnedConversationSnapshot(OWNER_A, canonical_record(body="original"))
+    assert repo.restore_if_absent(original) is True
+
+    insert_call = next(call for call in fake_session.calls if call["method"] == "POST")
+    assert "on_conflict" not in insert_call["params"]
+    assert "merge-duplicates" not in insert_call["headers"].get("Prefer", "")
+
+    changed = OwnedConversationSnapshot(OWNER_A, canonical_record(body="replacement"))
+    before_calls = len([call for call in fake_session.calls if call["method"] == "POST"])
+    assert repo.restore_if_absent(changed) is False
+    after_calls = len([call for call in fake_session.calls if call["method"] == "POST"])
+    assert after_calls == before_calls
+    assert repo.load(OWNER_A, original.conversation_id).canonical_record == original.canonical_record
+
+
+def test_restore_if_absent_does_not_overwrite_or_disclose_another_owners_row(fake_session):
+    repo_a = make_repository(OWNER_A, TOKEN_A, fake_session)
+    repo_b = make_repository(OWNER_B, TOKEN_B, fake_session)
+    original = OwnedConversationSnapshot(OWNER_A, canonical_record(body="owner-a"))
+    repo_a.save(original)
+
+    attempted = OwnedConversationSnapshot(OWNER_B, canonical_record(body="owner-b"))
+    with pytest.raises(ConversationRepositoryError):
+        repo_b.restore_if_absent(attempted)
+
+    assert repo_a.load(OWNER_A, original.conversation_id).canonical_record == original.canonical_record
+
+
+def test_restore_if_absent_is_idempotent_for_same_owner_existing_snapshot(fake_session):
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
+    original = OwnedConversationSnapshot(OWNER_A, canonical_record())
+    assert repo.restore_if_absent(original) is True
+    assert repo.restore_if_absent(original) is False
+    assert repo.list_ids(OWNER_A) == [original.conversation_id]
