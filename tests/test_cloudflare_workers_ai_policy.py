@@ -38,6 +38,7 @@ def _configured_values(**overrides):
         "CLOUDFLARE_ACCOUNT_ID": ACCOUNT_ID,
         "CLOUDFLARE_WORKERS_AI_FREE_MODELS": MODEL,
         "CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED": "true",
+        "CLOUDFLARE_WORKERS_FREE_CONFIRMED_ACCOUNT_ID": ACCOUNT_ID,
     }
     values.update(overrides)
     return values
@@ -120,6 +121,24 @@ def test_cloudflare_dispatch_requires_a_valid_account_id(monkeypatch):
 
     assert providers.get_model_candidates_for_dispatch(seat) == ()
     assert "CLOUDFLARE_ACCOUNT_ID" in providers.provider_zero_cost_policy_block_reason(seat)
+
+
+def test_cloudflare_free_plan_attestation_is_bound_to_the_configured_account_id(monkeypatch):
+    values = _configured_values(CLOUDFLARE_ACCOUNT_ID="b" * 32)
+    monkeypatch.setattr(providers, "_setting", _settings(values))
+    seat = _cloudflare_seat()
+
+    assert providers.get_model_candidates_for_dispatch(seat) == ()
+    assert "CONFIRMED_ACCOUNT_ID" in providers.provider_zero_cost_policy_block_reason(seat)
+
+
+def test_cloudflare_free_plan_attestation_requires_the_account_id_copy(monkeypatch):
+    values = _configured_values(CLOUDFLARE_WORKERS_FREE_CONFIRMED_ACCOUNT_ID="")
+    monkeypatch.setattr(providers, "_setting", _settings(values))
+    seat = _cloudflare_seat()
+
+    assert providers.get_model_candidates_for_dispatch(seat) == ()
+    assert "CONFIRMED_ACCOUNT_ID" in providers.provider_zero_cost_policy_block_reason(seat)
 
 
 def test_cloudflare_allowlist_contains_only_the_verified_free_model(monkeypatch):
