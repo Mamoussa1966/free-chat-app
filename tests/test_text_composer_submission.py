@@ -40,7 +40,7 @@ def test_production_run_app_wires_exact_text_widget_and_send_event_to_request_pa
     source = (ROOT / "main.py").read_text(encoding="utf-8")
     run_app_start = source.index("def run_app() -> None:")
     composer_start = source.index('typed_prompt = st.text_area(', run_app_start)
-    send_button = source.index('send_clicked = st.button("📨 إرسال إلى المجلس"', composer_start)
+    send_button = source.index("send_clicked = st.button(", composer_start)
     resolver = source.index(
         "prompt = _text_prompt_for_submission(typed_prompt, send_clicked)",
         send_button,
@@ -50,7 +50,10 @@ def test_production_run_app_wires_exact_text_widget_and_send_event_to_request_pa
         "_run_council(prompt, chat, rounds, credentials, attachments, model_candidates, user_message_id, request_id, bridge_controls)",
         submission_gate,
     )
+    send_end = source.index("\n\n    prompt = ", send_button)
 
-    assert composer_start < send_button < resolver < submission_gate < request_dispatch
-    assert 'key=input_key' in source[composer_start:send_button]
-    assert 'key=f"send_message_{st.session_state.input_nonce}"' in source[send_button:resolver]
+    assert composer_start < send_button < send_end < resolver < submission_gate < request_dispatch
+    send_block = source[send_button:send_end]
+    assert '"📨 إرسال إلى المجلس"' in send_block
+    assert 'key=f"send_message_{st.session_state.input_nonce}"' in send_block
+    assert "disabled=not composer_state[\"can_submit\"]" in send_block

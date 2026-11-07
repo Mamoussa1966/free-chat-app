@@ -68,8 +68,9 @@ def test_production_preview_and_global_send_are_connected_to_request_path():
 
     resolver_start = source.index("def _pending_voice_recording_for_send(")
     composer_start = source.index('typed_prompt = st.text_area(', resolver_start)
-    global_send = source.index('send_clicked = st.button("📨 إرسال إلى المجلس"', composer_start)
-    handoff = source.index('pending_voice = _pending_voice_recording_for_send(', global_send)
+    global_send = source.index("send_clicked = st.button(", composer_start)
+    send_end = source.index("\n\n    prompt = ", global_send)
+    handoff = source.index("pending_voice = _pending_voice_recording_for_send(", send_end)
     transcription = source.index("transcription = transcribe_audio_gemini(", handoff)
     voice_submission = source.index("voice_submission = (transcript_text, audio_bytes, mime, fingerprint)", transcription)
     request_gate = source.index("if prompt or attachments:", voice_submission)
@@ -79,6 +80,8 @@ def test_production_preview_and_global_send_are_connected_to_request_path():
     )
 
     assert audio_input < cache < preview < discard < room_send
-    assert global_send < handoff < transcription < voice_submission < request_gate < request_dispatch
+    assert global_send < send_end < handoff < transcription < voice_submission < request_gate < request_dispatch
+    assert '"📨 إرسال إلى المجلس"' in source[global_send:send_end]
+    assert "disabled=not composer_state[\"can_submit\"]" in source[global_send:send_end]
     assert 'st.session_state["pending_voice_recording"] = {}' in source
     assert 'st.session_state["pending_voice_recording"] = {}' in source[source.index('def _cleanup_voice_media_after_chat_delete'):]
