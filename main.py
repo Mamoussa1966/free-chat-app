@@ -2925,6 +2925,40 @@ def _run_hotfix141_abc_harness(user_prompt: str, chat: dict, rounds: int, creden
     return reports
 
 
+def _run_cloudflare_only_diagnostic(credentials: dict, model_candidates: dict) -> dict:
+    """Run one bounded, policy-gated Cloudflare diagnostic without Gemini or a Council Request.
+
+    The provider diagnostic path deliberately has no Council-wide deadline. This
+    isolates Cloudflare from a slow earlier Gemini cascade, while call_seat keeps
+    its own configured timeout, exact Free model allowlist, account-binding gate,
+    and zero-retry/reject-if-busy contract.
+    """
+    seat = next(
+        (item for item in get_seats() if item.key == "cloudflare_workers_ai"),
+        None,
+    )
+    if seat is None:
+        return {
+            "seat": "cloudflare_workers_ai",
+            "name": "Cloudflare Workers AI",
+            "label": "🔑 Cloudflare Workers AI",
+            "status": "NOT_CONFIGURED",
+            "classification": "NOT_CONFIGURED",
+            "dispatch_reason": "CREDENTIAL_MISSING",
+            "attempted_models": [],
+            "attempt_summaries": [],
+            "attempt_telemetry": [],
+            "content": "",
+            "request_id": "",
+            "round": 0,
+        }
+    return diagnostic_seat(
+        seat,
+        credentials.get(seat.key),
+        model_candidates.get(seat.key),
+    )
+
+
 def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list[dict]:
     seats = get_seats()
     results: dict[str, dict] = {}
