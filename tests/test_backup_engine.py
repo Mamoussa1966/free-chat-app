@@ -168,3 +168,60 @@ def test_backup_rejects_more_than_the_documented_row_limit_before_export():
     chats = [{}] * 501
     with pytest.raises(ValueError, match="500 conversations"):
         build_conversation_backup(chats)
+
+
+def _refresh_bundle_digest(document: dict) -> None:
+    payload = {key: value for key, value in document.items() if key != "integrity"}
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    document["integrity"]["payload_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def test_verifier_checks_each_canonical_history_digest_even_when_bundle_digest_is_recomputed():
+    document = build_conversation_backup([_chat()])
+    document["conversations"][0]["snapshot"]["canonical_conversation_record"]["messages"][0]["role"] = "assistant"
+    _refresh_bundle_digest(document)
+
+    assert verify_conversation_backup(document) is False
+
+
+def test_verifier_rejects_duplicate_conversation_ids_even_when_bundle_digest_is_recomputed():
+    document = build_conversation_backup([_chat()])
+    document["conversations"].append(copy.deepcopy(document["conversations"][0]))
+    document["conversation_count"] = 2
+    _refresh_bundle_digest(document)
+
+    assert verify_conversation_backup(document) is False
+
+
+def test_verifier_rejects_a_mismatched_conversation_count_even_when_bundle_digest_is_recomputed():
+    document = build_conversation_backup([_chat()])
+    document["conversation_count"] = 2
+    _refresh_bundle_digest(document)
+
+    assert verify_conversation_backup(document) is False
+
+
+def test_verifier_rejects_snapshot_identity_mismatch_even_when_bundle_digest_is_recomputed():
+    document = build_conversation_backup([_chat()])
+    document["conversations"][0]["snapshot"]["conversation_id"] = "another-conversation"
+    _refresh_bundle_digest(document)
+
+    assert verify_conversation_backup(document) is False
+
+
+def test_verifier_rejects_claims_that_provider_credentials_or_binary_media_are_included():
+    document = build_conversation_backup([_chat()])
+    document["secrets"]["provider_credentials_from_application_settings_included"] = True
+    _refresh_bundle_digest(document)
+    assert verify_conversation_backup(document) is False
+
+    document = build_conversation_backup([_chat()])
+    document["media"]["voice_recording_blobs_included"] = True
+    _refresh_bundle_digest(document)
+    assert verify_conversation_backup(document) is False
