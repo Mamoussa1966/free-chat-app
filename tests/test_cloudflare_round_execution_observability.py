@@ -5,14 +5,21 @@ import main
 
 def _seats():
     return [
-        SimpleNamespace(key="deepseek", name="DeepSeek", label="DeepSeek", room_slot=7),
+        SimpleNamespace(
+            key="deepseek", name="DeepSeek", label="DeepSeek",
+            room_slot=7, kind="deepseek_chat",
+        ),
         SimpleNamespace(
             key="cloudflare_workers_ai",
             name="Cloudflare Workers AI",
             label="Cloudflare Workers AI",
             room_slot=8,
+            kind="cloudflare_workers_ai",
         ),
-        SimpleNamespace(key="gemini", name="Gemini", label="Gemini", room_slot=2),
+        SimpleNamespace(
+            key="gemini", name="Gemini", label="Gemini",
+            room_slot=2, kind="gemini",
+        ),
     ]
 
 
