@@ -11,12 +11,13 @@ def test_hotfix156_uses_multiline_mobile_composer_not_chat_input():
     assert "submission = st.chat_input(" not in TEXT
 
 
-def test_hotfix156_submission_is_explicitly_button_gated_and_readiness_gated():
+def test_hotfix156_submission_is_explicitly_button_gated_and_never_ui_disabled():
     send_start = TEXT.index("send_clicked = st.button(")
     send_end = TEXT.index("\n\n    prompt = ", send_start)
     send_block = TEXT[send_start:send_end]
     assert '"📨 إرسال إلى المجلس"' in send_block
-    assert "disabled=not composer_state[\"can_submit\"]" in send_block
+    assert "disabled=not" not in send_block
+    assert "disabled=False" in send_block
     assert "elif send_clicked:" in TEXT
     assert "_text_prompt_for_submission(typed_prompt, send_clicked)" in TEXT
 
