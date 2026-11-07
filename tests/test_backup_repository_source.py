@@ -132,6 +132,14 @@ def test_backup_ui_discloses_remote_or_session_only_source():
     assert "ذاكرة الجلسة الحالية فقط؛ هذه ليست نسخة سحابية دائمة" in source
 
 
+def test_backup_restore_ui_warns_that_sha256_is_not_source_authentication():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert "لا تثبت هوية مصدره" in source
+    assert "مصدر موثوق" in source
+
+
 def test_local_backup_source_is_a_defensive_copy_and_is_labeled_as_session_only(monkeypatch):
     chat = {
         "conversation_id": "local-conversation",
@@ -145,6 +153,17 @@ def test_local_backup_source_is_a_defensive_copy_and_is_labeled_as_session_only(
 
     assert source == "streamlit_session_cache"
     assert truncated is False
-    assert chats == [chat]
+    assert chats[0]["conversation_id"] == chat["conversation_id"]
     assert chats[0] is not chat
     assert chats[0]["messages"] is not chat["messages"]
+    assert chats[0]["_backup_presentation_state"]["messages"] == chat["messages"]
+    assert "_backup_presentation_state" not in chat
+
+def test_backup_restore_ui_explains_auth_and_rls_database_storage():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert "restore_supabase_auth_enabled" in source
+    assert "ستُدرج المحادثات في جدول قاعدة البيانات مع تطبيق سياسات RLS" in source
+    assert "يلزم تفعيل Supabase Storage" not in source
+
