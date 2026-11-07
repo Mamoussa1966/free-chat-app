@@ -193,6 +193,8 @@ def test_cloudflare_round_survives_historical_bridge_result_in_shared_context(mo
         model = (model_candidates or ("test-model",))[0]
         return _fake_success(seat, round_no, request_id, model)
 
+    monkeypatch.setattr(main, "call_seat", fake_call)
+
     # DeepSeek is intentionally disabled by the current zero-cost provider policy.
     # The historical Bridge text must not prevent the next eligible seat (Cloudflare)
     # from reaching its official provider call before Gemini.
