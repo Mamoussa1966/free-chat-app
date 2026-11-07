@@ -167,3 +167,69 @@ def test_provider_call_exception_reports_stage_without_fabricating_attempt(monke
     assert cloudflare["execution_started"] is False
     assert cloudflare["attempted_models"] == []
     assert cloudflare["runtime_execution_events"] == []
+
+
+def test_cloudflare_round_survives_historical_bridge_result_in_shared_context(monkeypatch):
+    seats = _seats()
+    monkeypatch.setattr(main, "get_seats", lambda: seats)
+    monkeypatch.setattr(main, "_render_live_cascade_telemetry", lambda result: None)
+
+    calls = []
+    provider_contexts = {}
+
+    def fake_call(
+        seat, user_prompt, shared_context, round_no, local_fallback,
+        credential, attachments=None, model_candidates=None, deadline=None, request_id="",
+    ):
+        calls.append(seat.key)
+        provider_contexts[seat.key] = shared_context
+        model = (model_candidates or ("test-model",))[0]
+        return _fake_success(seat, round_no, request_id, model)
+
+    # DeepSeek is intentionally disabled by the current zero-cost provider policy.
+    # The historical Bridge text must not prevent the next eligible seat (Cloudflare)
+    # from reaching its official provider call before Gemini.
+    credentials = {
+        "deepseek": None,
+        "cloudflare_workers_ai": "TEST_CREDENTIAL",
+        "gemini": "TEST_CREDENTIAL",
+    }
+    candidates = {
+        "deepseek": ("deepseek-flash",),
+        "cloudflare_workers_ai": ("@cf/zai-org/glm-4.7-flash",),
+        "gemini": ("gemini-test-model",),
+    }
+    chat = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Previous final Bridge closure: TRANSACTIONAL BRIDGE — "
+                    "BRIDGE_RESULT must remain application-owned."
+                ),
+            }
+        ]
+    }
+
+    results = main._run_round(
+        "CF_ROUND_OK",
+        chat,
+        12,
+        credentials,
+        [],
+        candidates,
+        "message-test-12",
+        None,
+        "request-test-12",
+    )
+
+    assert calls == ["cloudflare_workers_ai", "gemini"]
+    cloudflare = next(row for row in results if row["seat"] == "cloudflare_workers_ai")
+    assert cloudflare["status"] == "SUCCESS"
+    assert cloudflare["executed_model"] == "@cf/zai-org/glm-4.7-flash"
+    assert cloudflare["attempted_models"] == ["@cf/zai-org/glm-4.7-flash"]
+    assert "BRIDGE_RESULT" not in provider_contexts["cloudflare_workers_ai"]
+    assert "[REDACTED_BRIDGE_KEY]" in provider_contexts["cloudflare_workers_ai"]
+    main._assert_provider_boundary(
+        "CF_ROUND_OK", provider_contexts["cloudflare_workers_ai"]
+    )
