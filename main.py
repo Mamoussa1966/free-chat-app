@@ -2926,11 +2926,11 @@ def _run_hotfix141_abc_harness(user_prompt: str, chat: dict, rounds: int, creden
 
 
 def _run_cloudflare_only_diagnostic(credentials: dict, model_candidates: dict) -> dict:
-    """Run one bounded, policy-gated Cloudflare diagnostic without Gemini or a Council Request.
+    """Run one policy-gated Cloudflare diagnostic without Gemini or a Council Request.
 
     The provider diagnostic path deliberately has no Council-wide deadline. This
     isolates Cloudflare from a slow earlier Gemini cascade, while call_seat keeps
-    its own configured timeout, exact Free model allowlist, account-binding gate,
+    any configured provider timeout, the exact Free model allowlist, account-binding gate,
     and zero-retry/reject-if-busy contract.
     """
     seat = next(
