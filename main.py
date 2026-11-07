@@ -263,19 +263,41 @@ def _round_count_for_request(rounds: int, user_prompt: str, bridge_controls=None
     return max(1, min(int(rounds), MAX_ROUNDS))
 
 
-def _round_provider_execution_order(seats, strict_live_bridge: bool = False):
-    """Return the provider order; strict live Bridge closure is scoped to its two proof endpoints."""
+def _round_provider_execution_order(
+    seats, strict_live_bridge: bool = False, protect_cloudflare_deadline: bool = False
+):
+    """Order round providers while preserving the strict DeepSeek→Gemini Bridge contract.
+
+    When the operator opts into a whole-request deadline, reserve Cloudflare's
+    execution slot before Gemini's potentially long Free cascade.  Strict live
+    Bridge closure remains limited to its two proof endpoints.
+    """
     by_key = {str(getattr(seat, "key", "") or "").lower(): seat for seat in seats}
     if strict_live_bridge:
         # Cost/security boundary: this diagnostic only needs its real source and target.
         # No unrelated configured provider may be dispatched during strict closure.
         return [by_key[key] for key in ("deepseek", "gemini") if key in by_key]
     bridge_order = []
-    for key in ("deepseek", "gemini"):
-        if key in by_key:
-            bridge_order.append(by_key.pop(key))
+    if "deepseek" in by_key:
+        bridge_order.append(by_key.pop("deepseek"))
+    if protect_cloudflare_deadline and "cloudflare_workers_ai" in by_key:
+        bridge_order.append(by_key.pop("cloudflare_workers_ai"))
+    if "gemini" in by_key:
+        bridge_order.append(by_key.pop("gemini"))
     bridge_order.extend(seat for seat in seats if str(getattr(seat, "key", "") or "").lower() in by_key)
     return bridge_order
+
+
+def _provider_execution_deadline(seat, request_deadline: float | None) -> float | None:
+    """Keep Cloudflare's reserved call independent of the Council-wide deadline.
+
+    Cloudflare still uses its explicitly configured provider timeout in
+    providers.call_seat; this only prevents an earlier slow seat from consuming
+    the Cloudflare call's remaining whole-request budget.
+    """
+    if str(getattr(seat, "key", "") or "").lower() == "cloudflare_workers_ai":
+        return None
+    return request_deadline
 
 
 def _round_model_candidates(seat_key: str, model_candidates: dict, strict_live_bridge: bool = False) -> tuple[str, ...]:
@@ -2138,7 +2160,9 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
     by_key = {seat.key: seat for seat in seats}
     # Keep an immutable lookup for the transaction target identity check.
     seat_by_key = dict(by_key)
-    bridge_order = _round_provider_execution_order(seats, strict_live_bridge)
+    bridge_order = _round_provider_execution_order(
+        seats, strict_live_bridge, protect_cloudflare_deadline=(deadline is not None)
+    )
     # Keep the legacy source-inspection seam while executing the dependency
     # order selected above; the false branch is intentionally unreachable.
     for seat in SEATS if False else bridge_order:
@@ -2223,10 +2247,11 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 # application-owned dispatch decision immediately before transport.
                 bridge._record_bridge_event("TARGET_DISPATCH", seat=2, target_seat=2, provider="Gemini", status="ACCEPTED")
             provider_candidates = _round_model_candidates(seat.key, model_candidates, strict_live_bridge)
+            provider_deadline = _provider_execution_deadline(seat, deadline)
             result = call_seat(
                 seat, provider_user_prompt, provider_prompt, round_no, False,
                 credentials.get(seat.key), attachments, provider_candidates,
-                deadline, request_id,
+                provider_deadline, request_id,
             )
             result["dispatch_decision"] = "DISPATCH_ACCEPTED"
             result["dispatch_reason"] = "READY_FREE_MODEL"
