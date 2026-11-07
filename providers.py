@@ -61,6 +61,7 @@ CLOUDFLARE_WORKERS_AI_MODEL_ALLOWLIST = frozenset({
 })
 CLOUDFLARE_WORKERS_FREE_CONFIRMATION_SETTING = "CLOUDFLARE_WORKERS_FREE_PLAN_CONFIRMED"
 CLOUDFLARE_ACCOUNT_ID_SETTING = "CLOUDFLARE_ACCOUNT_ID"
+CLOUDFLARE_WORKERS_FREE_CONFIRMED_ACCOUNT_SETTING = "CLOUDFLARE_WORKERS_FREE_CONFIRMED_ACCOUNT_ID"
 
 
 
@@ -520,9 +521,18 @@ def gemini_free_tier_is_confirmed() -> bool:
 
 
 def cloudflare_workers_free_plan_is_confirmed() -> bool:
-    """True only after the operator confirms the account is on Workers Free."""
+    """Require a manual Workers Free attestation bound to the exact account ID."""
     value = str(_setting((CLOUDFLARE_WORKERS_FREE_CONFIRMATION_SETTING,)) or "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    account_id = str(_setting((CLOUDFLARE_ACCOUNT_ID_SETTING,)) or "").strip()
+    confirmed_account_id = str(
+        _setting((CLOUDFLARE_WORKERS_FREE_CONFIRMED_ACCOUNT_SETTING,)) or ""
+    ).strip()
+    return (
+        value in {"1", "true", "yes", "on"}
+        and bool(re.fullmatch(r"[0-9a-fA-F]{32}", account_id))
+        and bool(re.fullmatch(r"[0-9a-fA-F]{32}", confirmed_account_id))
+        and account_id.lower() == confirmed_account_id.lower()
+    )
 
 
 def cloudflare_account_id_is_configured() -> bool:
@@ -546,13 +556,14 @@ def provider_zero_cost_policy_block_reason(seat: Seat) -> str:
     if seat.key == CLOUDFLARE_WORKERS_AI_KEY:
         if getattr(seat, "kind", "") != "cloudflare_workers_ai":
             return "موقوف احترازيًا: تعريف Cloudflare AI غير مطابق للعقد الرسمي."
+        if not cloudflare_account_id_is_configured():
+            return "موقوف احترازيًا: CLOUDFLARE_ACCOUNT_ID غير مضبوط أو غير صالح؛ لم يُرسل أي طلب."
         if not cloudflare_workers_free_plan_is_confirmed():
             return (
-                "موقوف احترازيًا: يجب تأكيد أن الحساب على Cloudflare Workers Free "
-                "وليس Workers Paid؛ تجاوز 10,000 Neurons يوميًا على الخطة المدفوعة قد يكلّف مالًا."
+                "موقوف احترازيًا: يلزم تأكيد Workers Free لهذا الحساب تحديدًا؛ "
+                "يجب أن يطابق CLOUDFLARE_WORKERS_FREE_CONFIRMED_ACCOUNT_ID قيمة "
+                "CLOUDFLARE_ACCOUNT_ID، مع تأكيد أن الحساب ليس Workers Paid."
             )
-        if not cloudflare_account_id_is_configured():
-            return "موقوف احترازيًا: CLOUDFLARE_ACCOUNT_ID غير مضبوط؛ لم يُرسل أي طلب."
     return ""
 
 
