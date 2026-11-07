@@ -2421,25 +2421,6 @@ def _run_round(user_prompt: str, chat: dict, round_no: int, credentials: dict, a
                 "execution_id": execution_id,
                 "execution_claim": f"{request_id}:{round_no}:{seat.key}",
             }
-            # an execution/provider-contract failure, not a dispatch rejection.
-            failure = {
-                "seat": seat.key, "name": seat.name, "label": seat.label,
-                "status": "PROVIDER_ERROR", "mode": "official_api",
-                "model": "", "executed_model": "", "content": "",
-                "classification": "PROVIDER_ERROR",
-                "error": f"provider execution failed after dispatch acceptance: {exc.__class__.__name__}",
-                "attempt_summaries": [], "attempt_telemetry": [], "attempted_models": [],
-                "official_authenticated": bool(credentials.get(seat.key)),
-                "execution_started": False, "runtime_execution_events": [],
-                "request_id": request_id, "round": round_no,
-                "dispatch_decision": "DISPATCH_ACCEPTED",
-                "dispatch_reason": "READY_FREE_MODEL",
-                "dispatch_accepted": True, "dispatch_gate": "HOTFIX132",
-                "request_routed": True,
-                "model_candidates_configured": bool(model_candidates.get(seat.key)),
-                "execution_id": execution_id,
-                "execution_claim": f"{request_id}:{round_no}:{seat.key}",
-            }
             if strict_live_bridge and seat.key == "deepseek":
                 bridge.abort("SOURCE_EXECUTION_EXCEPTION")
                 failure["execution_proof"] = "NOT_PROVEN"
