@@ -5768,8 +5768,12 @@ def run_app() -> None:
         type="primary",
         use_container_width=True,
         key=f"send_message_{st.session_state.input_nonce}",
-        disabled=not composer_state["can_submit"],
+        # Keep the control enabled across mobile Streamlit reruns. Empty/invalid
+        # submissions remain blocked by the prompt/attachment gate below.
+        disabled=False,
     )
+    if send_clicked and not composer_state["can_submit"] and not composer_state["over_limit"]:
+        st.warning("اكتب رسالة أو أرفق ملفًا قبل الإرسال؛ لم يُنشأ أي طلب.")
 
     prompt = ""
     attachments: list[dict] = []

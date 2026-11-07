@@ -56,4 +56,5 @@ def test_production_run_app_wires_exact_text_widget_and_send_event_to_request_pa
     send_block = source[send_button:send_end]
     assert '"📨 إرسال إلى المجلس"' in send_block
     assert 'key=f"send_message_{st.session_state.input_nonce}"' in send_block
-    assert "disabled=not composer_state[\"can_submit\"]" in send_block
+    assert "disabled=not" not in send_block
+    assert "disabled=False" in send_block

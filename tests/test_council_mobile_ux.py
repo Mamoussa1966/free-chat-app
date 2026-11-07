@@ -61,7 +61,10 @@ def test_mobile_composer_allows_exact_maximum_character_count():
 def test_production_composer_exposes_count_and_gates_the_send_button():
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     assert "_composer_submission_state(" in source
-    assert "disabled=not composer_state[\"can_submit\"]" in source
+    assert "disabled=False" in source
+    send_start = source.index("send_clicked = st.button(")
+    send_end = source.index("\n\n    prompt = ", send_start)
+    assert "disabled=not" not in source[send_start:send_end]
     assert "عدد الأحرف:" in source
     assert "تجاوزت الرسالة الحد المسموح" in source
 
