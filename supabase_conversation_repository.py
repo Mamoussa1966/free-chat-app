@@ -1,9 +1,10 @@
 """Supabase/PostgREST adapter for owner-scoped canonical conversation snapshots.
 
-This module deliberately is not imported by main.py or app.py. It requires a
-verified Supabase Auth identity and that user's access JWT. The publishable key
-identifies the project; PostgreSQL RLS and the signed JWT authorize every row.
-Never pass a Supabase secret/service-role key to this adapter.
+This adapter is used by main.py's authenticated Supabase conversation-storage
+integration. It requires a verified Supabase Auth identity and that user's
+access JWT. The publishable key identifies the project; PostgreSQL RLS and the
+signed JWT authorize every row. Never pass a Supabase secret/service-role key
+to this adapter.
 """
 from __future__ import annotations
 
@@ -154,8 +155,11 @@ class SupabaseConversationRepository:
     Required migration:
       supabase/migrations/20261024134655_20261023000000_council_conversations.sql
 
-    This adapter has not been wired into the production UI. A real two-account
-    test must be run against a dedicated Supabase project before app integration.
+    main.py constructs this adapter only after the Streamlit Auth session is
+    active and binds it to that session's verified issuer + subject. Unit tests
+    cover owner isolation and insert-only restore; a live two-account acceptance
+    test on an isolated Supabase project is still required before claiming that
+    cross-account restore behavior is proven in a live environment.
     """
 
     def __init__(
@@ -396,6 +400,65 @@ class SupabaseConversationRepository:
         if len(result) != len(set(result)):
             raise ConversationRepositoryError("Supabase returned duplicate conversation IDs")
         return result
+
+    def restore_if_absent(self, snapshot: OwnedConversationSnapshot) -> bool:
+        """Atomically insert a restored snapshot only when its ID is still absent.
+
+        Unlike save(), this method never sends PostgREST upsert semantics. The
+        database primary key decides races: a conflicting INSERT is rejected,
+        and the method returns False only when the same owner can subsequently
+        read the already-existing conversation. An RLS-hidden foreign owner is
+        never overwritten or disclosed.
+        """
+        if not isinstance(snapshot, OwnedConversationSnapshot):
+            raise ValueError("snapshot must be an OwnedConversationSnapshot")
+        self._assert_owner(snapshot.owner)
+        existing = self.load(snapshot.owner, snapshot.conversation_id)
+        if existing is not None:
+            return False
+
+        record = snapshot.canonical_record
+        payload = {
+            "conversation_id": snapshot.conversation_id,
+            "owner_id": self._owner_id,
+            "schema": SUPABASE_CONVERSATION_SCHEMA,
+            "canonical_record": record,
+            "checksum": _checksum(record),
+        }
+        try:
+            # Deliberately omit on_conflict and resolution=merge-duplicates.
+            # A concurrent insert must fail rather than update an existing row.
+            response_rows = self._request(
+                "POST",
+                _TABLE,
+                payload=payload,
+                prefer="return=representation",
+            )
+        except ConversationRepositoryError:
+            # Resolve a same-owner race without exposing foreign-owner existence.
+            existing = self.load(snapshot.owner, snapshot.conversation_id)
+            if existing is not None:
+                return False
+            raise
+
+        if not isinstance(response_rows, list) or len(response_rows) != 1:
+            # RLS may hide a conflicting foreign row. Treat that as a failure,
+            # not as an ordinary duplicate, because ownership cannot be proven.
+            existing = self.load(snapshot.owner, snapshot.conversation_id)
+            if existing is not None:
+                return False
+            raise ConversationRepositoryError(
+                "Supabase did not confirm that the restored conversation was inserted"
+            )
+        restored = self._snapshot_from_row(
+            response_rows[0],
+            expected_conversation_id=snapshot.conversation_id,
+        )
+        if restored.owner != snapshot.owner or restored.canonical_record != record:
+            raise ConversationRepositoryError(
+                "Supabase inserted a snapshot different from the requested restore record"
+            )
+        return True
 
     def delete(self, owner: AccountIdentity, conversation_id: str) -> bool:
         self._assert_owner(owner)
