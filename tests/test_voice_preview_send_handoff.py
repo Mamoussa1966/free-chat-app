@@ -82,6 +82,7 @@ def test_production_preview_and_global_send_are_connected_to_request_path():
     assert audio_input < cache < preview < discard < room_send
     assert global_send < send_end < handoff < transcription < voice_submission < request_gate < request_dispatch
     assert '"📨 إرسال إلى المجلس"' in source[global_send:send_end]
-    assert "disabled=not composer_state[\"can_submit\"]" in source[global_send:send_end]
+    assert "disabled=not" not in source[global_send:send_end]
+    assert "disabled=False" in source[global_send:send_end]
     assert 'st.session_state["pending_voice_recording"] = {}' in source
     assert 'st.session_state["pending_voice_recording"] = {}' in source[source.index('def _cleanup_voice_media_after_chat_delete'):]
