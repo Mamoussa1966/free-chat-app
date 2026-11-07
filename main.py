@@ -531,7 +531,12 @@ class SharedContextBridge:
                 value = str(record.get("value") or "") if isinstance(record, dict) else ""
                 if len(value) >= 8:
                     base = base.replace(value, "[REDACTED_BRIDGE_VALUE]")
-            base = re.sub(r"\bBRIDGE_[A-Z0-9_]+\b", "[REDACTED_BRIDGE_KEY]", base)
+        # HOTFIX165: Bridge control keys are private to the application for
+        # every provider, not only Gemini. Historical user messages can contain
+        # BRIDGE_RESULT from old closure tests; leaving it in a non-Gemini seat's
+        # context causes _assert_provider_boundary to reject that seat before
+        # call_seat() and can silently starve the Cloudflare round-priority slot.
+        base = re.sub(r"\bBRIDGE_[A-Z0-9_]+\b", "[REDACTED_BRIDGE_KEY]", base)
         return base[-self.max_chars:]
 
     def record_provider_input(self, seat, prompt: str, provider_user_prompt: str = "") -> None:
