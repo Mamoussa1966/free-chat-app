@@ -223,7 +223,19 @@ def test_cloudflare_round_survives_historical_bridge_result_in_shared_context(mo
         "request-test-12",
     )
 
-    assert calls == ["cloudflare_workers_ai", "gemini"]
+    assert calls == ["cloudflare_workers_ai", "gemini"], {
+        "calls": calls,
+        "results": [
+            {
+                "seat": row.get("seat"),
+                "status": row.get("status"),
+                "failure_stage": row.get("failure_stage"),
+                "error": row.get("error"),
+                "dispatch_reason": row.get("dispatch_reason"),
+            }
+            for row in results
+        ],
+    }
     cloudflare = next(row for row in results if row["seat"] == "cloudflare_workers_ai")
     assert cloudflare["status"] == "SUCCESS"
     assert cloudflare["executed_model"] == "@cf/zai-org/glm-4.7-flash"
