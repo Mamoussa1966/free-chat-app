@@ -242,6 +242,8 @@ class SupabaseAuthClient:
                         "weak_password",
                         "password_too_short",
                         "password_too_long",
+                        "invalid_credentials",
+                        "invalid_grant",
                     }
                     for container in containers:
                         for field in ("code", "error_code", "type", "error"):
@@ -295,6 +297,11 @@ class SupabaseAuthClient:
                             f"الحد الأدنى لطول كلمة المرور هو {minimum} أحرف وفق سياسة المشروع."
                         )
                 message = "رفض Supabase كلمة المرور للأسباب التالية: " + " ".join(details)
+            elif provider_error_code in {"invalid_credentials", "invalid_grant"}:
+                message = (
+                    "البريد الإلكتروني أو كلمة المرور غير صحيحين. "
+                    "راجع البيانات أو استخدم خيار استعادة كلمة المرور."
+                )
             elif provider_error_code in password_error_messages:
                 message = password_error_messages[provider_error_code]
             elif status in (401, 403):
