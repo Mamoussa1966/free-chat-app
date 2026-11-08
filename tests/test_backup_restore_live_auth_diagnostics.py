@@ -67,6 +67,14 @@ def test_live_restore_email_secret_is_trimmed_by_default(monkeypatch):
     assert required("SUPABASE_TEST_USER_A_EMAIL") == "account-a@example.net"
 
 
+def test_live_restore_accepts_identical_passwords_for_distinct_accounts(monkeypatch):
+    monkeypatch.setenv("SUPABASE_TEST_USER_A_PASSWORD", "Same-Current-Password")
+    monkeypatch.setenv("SUPABASE_TEST_USER_B_PASSWORD", "Same-Current-Password")
+    password_a = required("SUPABASE_TEST_USER_A_PASSWORD", strip=False)
+    password_b = required("SUPABASE_TEST_USER_B_PASSWORD", strip=False)
+    assert password_a == password_b
+
+
 def test_live_restore_password_secret_rejects_blank_value_without_exposing_it(monkeypatch):
     monkeypatch.setenv("SUPABASE_TEST_USER_A_PASSWORD", "   ")
     try:
