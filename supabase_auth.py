@@ -206,15 +206,54 @@ class SupabaseAuthClient:
             # Inspect only an allowlisted pattern to give actionable errors.
             # Never return or log raw response data, which can contain user values.
             provider_message = ""
+            provider_error_code = ""
             try:
                 error_data = response.json()
                 if isinstance(error_data, dict):
                     provider_message = " ".join(
                         str(error_data.get(field) or "")
                         for field in ("msg", "message", "error_description")
+                        if isinstance(error_data.get(field), str)
                     ).lower()
+                    containers = [error_data]
+                    nested_error = error_data.get("error")
+                    if isinstance(nested_error, dict):
+                        containers.append(nested_error)
+                    nested_data = error_data.get("data")
+                    if isinstance(nested_data, dict):
+                        containers.append(nested_data)
+                        if isinstance(nested_data.get("error"), dict):
+                            containers.append(nested_data["error"])
+                    allowed_password_codes = {
+                        "weak_password",
+                        "password_too_short",
+                        "password_too_long",
+                    }
+                    for container in containers:
+                        for field in ("code", "error_code", "type", "error"):
+                            candidate = container.get(field)
+                            if isinstance(candidate, str) and candidate.strip().lower() in allowed_password_codes:
+                                provider_error_code = candidate.strip().lower()
+                                break
+                        if provider_error_code:
+                            break
             except Exception:
                 pass
+
+            password_error_messages = {
+                "weak_password": (
+                    "رفض Supabase كلمة المرور وفق سياسة قوة كلمة المرور في المشروع. "
+                    "اختر كلمة مرور أطول وفريدة؛ فقد يفرض المشروع حدًا أعلى من 8 أحرف."
+                ),
+                "password_too_short": (
+                    "كلمة المرور أقصر من الحد الأدنى الذي يفرضه مشروع Supabase. "
+                    "زِد طولها ثم أعد المحاولة."
+                ),
+                "password_too_long": (
+                    "كلمة المرور أطول من الحد الذي يقبله مشروع Supabase. "
+                    "استخدم كلمة مرور أقصر."
+                ),
+            }
 
             if (
                 "unable to validate email address" in provider_message
@@ -224,6 +263,8 @@ class SupabaseAuthClient:
                     "صيغة البريد الإلكتروني غير صالحة في Supabase؛ "
                     "استخدم عنوانًا حقيقيًا بصيغة name@example.com."
                 )
+            elif provider_error_code in password_error_messages:
+                message = password_error_messages[provider_error_code]
             elif status in (401, 403):
                 message = "بيانات الدخول غير صحيحة أو انتهت الجلسة."
             elif status == 429:
@@ -262,7 +303,24 @@ class SupabaseAuthClient:
                 if is_recovery_request:
                     message += " لا تضغط زر إرسال رابط الاستعادة مرة أخرى خلال هذه المدة."
             elif status in (400, 422):
-                message = "تعذر قبول بيانات المصادقة. راجع البريد الإلكتروني وكلمة المرور."
+                minimum_match = re.search(
+                    r"\bpassword\b.*?\b(?:at least|minimum(?: of)?)\s+([0-9]{1,3})\s+characters?\b",
+                    provider_message,
+                )
+                if minimum_match and 8 <= int(minimum_match.group(1)) <= 1024:
+                    minimum = int(minimum_match.group(1))
+                    message = (
+                        f"كلمة المرور أقصر من الحد الأدنى الذي يفرضه مشروع "
+                        f"Supabase ({minimum} أحرف). استخدم {minimum} أحرف "
+                        "على الأقل ثم أعد المحاولة."
+                    )
+                elif "password" in provider_message and any(
+                    marker in provider_message
+                    for marker in ("weak", "too short", "not strong", "strength")
+                ):
+                    message = password_error_messages["weak_password"]
+                else:
+                    message = "تعذر قبول بيانات المصادقة. راجع البريد الإلكتروني والبيانات المدخلة."
             elif status == 409:
                 message = "تعذر إنشاء الحساب بهذه البيانات."
             else:
