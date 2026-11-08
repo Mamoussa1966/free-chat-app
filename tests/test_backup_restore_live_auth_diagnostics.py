@@ -31,3 +31,14 @@ def test_live_auth_diagnostic_handles_malformed_payload_without_echoing_it():
             raise ValueError("body must not escape")
 
     assert safe_auth_provider_code(BrokenResponse()) == "unclassified"
+
+
+def test_password_grant_http_400_gets_a_safe_actionable_category():
+    response = FakeAuthResponse({
+        "message": "Sensitive response text is deliberately ignored",
+    })
+    assert safe_auth_provider_code(
+        response,
+        request_url="https://test.supabase.co/auth/v1/token?grant_type=password",
+        status=400,
+    ) == "password_grant_rejected"
