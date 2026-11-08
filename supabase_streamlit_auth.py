@@ -520,7 +520,7 @@ def _render_password_recovery(st: Any) -> None:
 
     with st.form("supabase_password_recovery_form"):
         new_password = st.text_input(
-            "كلمة المرور الجديدة (8 أحرف على الأقل)",
+            "كلمة المرور الجديدة (8 أحرف على الأقل؛ قد يطلب المشروع شروطًا إضافية)",
             type="password",
             key=_RECOVERY_PASSWORD_WIDGET_KEY,
         )
@@ -734,7 +734,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
     with sign_up_tab:
         with st.form("supabase_email_password_signup"):
             new_email = st.text_input("البريد الإلكتروني", key="supabase_signup_email")
-            new_password = st.text_input("كلمة المرور (8 أحرف على الأقل)", type="password", key="supabase_signup_password")
+            new_password = st.text_input("كلمة المرور (8 أحرف على الأقل؛ قد يطلب المشروع شروطًا إضافية)", type="password", key="supabase_signup_password")
             confirm_password = st.text_input("تأكيد كلمة المرور", type="password", key="supabase_signup_password_confirm")
             create = st.form_submit_button("إنشاء حساب", type="primary", use_container_width=True)
         if create:
