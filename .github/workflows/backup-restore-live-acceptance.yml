@@ -1,0 +1,65 @@
+name: Supabase backup restore live acceptance
+
+on:
+  pull_request:
+    branches:
+      - gitops-v0.4-final
+    paths:
+      - "backup_engine.py"
+      - "backup_restore.py"
+      - "conversation_repository.py"
+      - "supabase_auth.py"
+      - "supabase_conversation_repository.py"
+      - "scripts/test_backup_restore_live.py"
+      - ".github/workflows/backup-restore-live-acceptance.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  live-backup-restore-isolation:
+    name: Live backup restore / two-account isolation
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'Mamoussa1966'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: \${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: \${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_TEST_USER_A_EMAIL: \${{ secrets.SUPABASE_TEST_USER_A_EMAIL }}
+      SUPABASE_TEST_USER_A_PASSWORD: \${{ secrets.SUPABASE_TEST_USER_A_PASSWORD }}
+      SUPABASE_TEST_USER_B_EMAIL: \${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
+      SUPABASE_TEST_USER_B_PASSWORD: \${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate required secret names (values are never printed)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          names = (
+              "SUPABASE_URL",
+              "SUPABASE_PUBLISHABLE_KEY",
+              "SUPABASE_TEST_USER_A_EMAIL",
+              "SUPABASE_TEST_USER_A_PASSWORD",
+              "SUPABASE_TEST_USER_B_EMAIL",
+              "SUPABASE_TEST_USER_B_PASSWORD",
+          )
+          missing = [name for name in names if not os.environ.get(name, "").strip()]
+          if missing:
+              print("LIVE_BACKUP_RESTORE_CONFIG=BLOCKED; missing secret names: " + ", ".join(missing))
+              raise SystemExit(2)
+          print("LIVE_BACKUP_RESTORE_CONFIG=PASS")
+          PY
+
+      - name: Install the existing minimal HTTP dependency
+        run: python -m pip install "requests>=2.31,<3"
+
+      - name: Run isolated live restore acceptance
+        run: PYTHONPATH=. python scripts/test_backup_restore_live.py
