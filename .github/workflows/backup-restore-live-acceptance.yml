@@ -25,12 +25,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SUPABASE_URL: \${{ secrets.SUPABASE_URL }}
-      SUPABASE_PUBLISHABLE_KEY: \${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_TEST_USER_A_EMAIL: \${{ secrets.SUPABASE_TEST_USER_A_EMAIL }}
-      SUPABASE_TEST_USER_A_PASSWORD: \${{ secrets.SUPABASE_TEST_USER_A_PASSWORD }}
-      SUPABASE_TEST_USER_B_EMAIL: \${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
-      SUPABASE_TEST_USER_B_PASSWORD: \${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
+      SUPABASE_URL: https://pidcepvwsezdrlhxqksg.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_TEST_USER_A_EMAIL: ${{ secrets.SUPABASE_TEST_USER_A_EMAIL }}
+      SUPABASE_TEST_USER_A_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_A_PASSWORD }}
+      SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
+      SUPABASE_TEST_USER_B_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
 
     steps:
       - name: Checkout source
