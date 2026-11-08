@@ -1,4 +1,4 @@
-from scripts.test_backup_restore_live import safe_auth_provider_code
+from scripts.test_backup_restore_live import required, safe_auth_provider_code
 
 
 class FakeAuthResponse:
@@ -54,3 +54,25 @@ def test_password_grant_fallback_survives_nested_error_payload():
         request_url="https://test.supabase.co/auth/v1/token?grant_type=password",
         status=400,
     ) == "password_grant_rejected"
+
+
+
+def test_live_restore_password_secret_preserves_leading_and_trailing_whitespace(monkeypatch):
+    monkeypatch.setenv("SUPABASE_TEST_USER_A_PASSWORD", "  Existing-Password-Value  ")
+    assert required("SUPABASE_TEST_USER_A_PASSWORD", strip=False) == "  Existing-Password-Value  "
+
+
+def test_live_restore_email_secret_is_trimmed_by_default(monkeypatch):
+    monkeypatch.setenv("SUPABASE_TEST_USER_A_EMAIL", "  account-a@example.net  ")
+    assert required("SUPABASE_TEST_USER_A_EMAIL") == "account-a@example.net"
+
+
+def test_live_restore_password_secret_rejects_blank_value_without_exposing_it(monkeypatch):
+    monkeypatch.setenv("SUPABASE_TEST_USER_A_PASSWORD", "   ")
+    try:
+        required("SUPABASE_TEST_USER_A_PASSWORD", strip=False)
+    except RuntimeError as exc:
+        assert "Missing required environment variable" in str(exc)
+        assert "   " not in str(exc)
+    else:
+        raise AssertionError("blank password secret should be rejected")
