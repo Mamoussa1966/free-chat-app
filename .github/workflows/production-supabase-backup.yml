@@ -1,9 +1,9 @@
 name: Production Supabase backup and isolated restore
 
 on:
-  pull_request:
+  push:
     branches:
-      - gitops-v0.4-final
+      - qa/live-backup-restore-acceptance
     paths:
       - ".github/workflows/production-supabase-backup.yml"
 
@@ -14,8 +14,9 @@ jobs:
   backup-and-restore:
     name: Full database export, isolated restore, checksums
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login == 'Mamoussa1966'
+      github.repository == 'Mamoussa1966/free-chat-app' &&
+      github.actor == 'Mamoussa1966' &&
+      github.ref == 'refs/heads/qa/live-backup-restore-acceptance'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
