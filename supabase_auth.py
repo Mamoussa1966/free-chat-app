@@ -285,7 +285,7 @@ class SupabaseAuthClient:
                 }
                 details = [reason_messages[item] for item in ("length", "characters", "pwned") if item in weak_password_reasons]
                 minimum_match = re.search(
-                    r"\\bpassword\\b.*?\\b(?:at least|minimum(?: of)?)\\s+([0-9]{1,3})\\s+characters?\\b",
+                    r"\bpassword\b.*?\b(?:at least|minimum(?: of)?)\s+([0-9]{1,3})\s+characters?\b",
                     provider_message,
                 )
                 if "length" in weak_password_reasons and minimum_match:
