@@ -1,0 +1,88 @@
+name: Production Supabase DB connection preflight
+
+on:
+  push:
+    branches:
+      - qa/live-backup-restore-acceptance
+    paths:
+      - ".github/workflows/production-supabase-db-preflight.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-connection-check:
+    name: Verify production DB connection (read-only)
+    if: >-
+      github.repository == 'Mamoussa1966/free-chat-app' &&
+      github.actor == 'Mamoussa1966' &&
+      github.ref == 'refs/heads/qa/live-backup-restore-acceptance'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SUPABASE_PROD_DB_URL: ${{ secrets.SUPABASE_PROD_DB_URL }}
+      PGSSLMODE: require
+
+    steps:
+      - name: Validate connection URI shape without printing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit, unquote
+
+          raw = os.environ.get("SUPABASE_PROD_DB_URL", "")
+          if not raw or raw != raw.strip() or "\\n" in raw or "\\r" in raw:
+              raise SystemExit("DB_URI_SHAPE=FAIL; secret missing or contains surrounding whitespace/newlines")
+
+          value = raw.strip().strip("'\\\"")
+          try:
+              parsed = urlsplit(value)
+              port = parsed.port
+          except ValueError:
+              raise SystemExit("DB_URI_SHAPE=FAIL; malformed PostgreSQL URI")
+
+          expected_project = "wzhsilufajemyqtednie"
+          valid = (
+              parsed.scheme.lower() in ("postgres", "postgresql")
+              and (parsed.hostname or "").lower().endswith(".pooler.supabase.com")
+              and unquote(parsed.username or "") == f"postgres.{expected_project}"
+              and port == 5432
+              and parsed.path.lstrip("/") == "postgres"
+              and bool(parsed.password)
+          )
+          if not valid:
+              raise SystemExit(
+                  "DB_URI_SHAPE=FAIL; expected production Session Pooler URI, "
+                  "project-scoped postgres user, port 5432 and database postgres; secret hidden"
+              )
+          print("DB_URI_SHAPE=PASS; production Session Pooler target verified; secret hidden")
+          PY
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Execute read-only production connection test
+        shell: bash
+        run: |
+          set -euo pipefail
+          db_name="$(psql "$SUPABASE_PROD_DB_URL" -X -v ON_ERROR_STOP=1 -A -t -c 'SELECT current_database()' 2>/dev/null)"
+          if [ "$db_name" != "postgres" ]; then
+            echo "DB_CONNECTION=FAIL; connected database did not match postgres"
+            exit 1
+          fi
+          server_version="$(psql "$SUPABASE_PROD_DB_URL" -X -v ON_ERROR_STOP=1 -A -t -c 'SHOW server_version_num' 2>/dev/null)"
+          case "$server_version" in
+            ''|*[!0-9]*)
+              echo "DB_CONNECTION=FAIL; server version response was invalid"
+              exit 1
+              ;;
+          esac
+          echo "DB_CONNECTION=PASS; database=postgres; server_version_num=$server_version"
+          echo "DB_OPERATION=READ_ONLY_SELECT_AND_SHOW_ONLY"
+          echo "PRODUCTION_DB_PREFLIGHT=PASS"

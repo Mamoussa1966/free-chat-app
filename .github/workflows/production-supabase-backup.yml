@@ -1,0 +1,519 @@
+name: Production Supabase backup and isolated restore
+
+on:
+  push:
+    branches:
+      - qa/live-backup-restore-acceptance
+    paths:
+      - ".github/workflows/production-supabase-backup.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  backup-and-restore:
+    name: Full database export, isolated restore, checksums
+    if: >-
+      github.repository == 'Mamoussa1966/free-chat-app' &&
+      github.actor == 'Mamoussa1966' &&
+      github.ref == 'refs/heads/qa/live-backup-restore-acceptance'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SUPABASE_PROD_DB_URL: ${{ secrets.SUPABASE_PROD_DB_URL }}
+      PGSSLMODE: require
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify production connection secret is present and pinned
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import re
+          import shlex
+          from urllib.parse import urlsplit, unquote
+          raw = os.environ.get("SUPABASE_PROD_DB_URL", "").strip()
+          if not raw:
+              raise SystemExit("BACKUP_CONFIG=FAIL; SUPABASE_PROD_DB_URL is missing")
+          value = raw.strip("'\" ")
+          project = "wzhsilufajemyqtednie"
+          host = user = database = ""
+          parsed = urlsplit(value)
+          if parsed.scheme.lower() in ("postgres", "postgresql"):
+              host = (parsed.hostname or "").lower()
+              user = unquote(parsed.username or "")
+              database = parsed.path.lstrip("/")
+          else:
+              # Accept libpq keyword/value connection strings (host=... user=... dbname=...).
+              # Also accept a psql command that contains one PostgreSQL URI.
+              match = re.search(r"postgres(?:ql)?://[^\\s'\"]+", value, flags=re.IGNORECASE)
+              if match:
+                  parsed = urlsplit(match.group(0))
+                  host = (parsed.hostname or "").lower()
+                  user = unquote(parsed.username or "")
+                  database = parsed.path.lstrip("/")
+              else:
+                  try:
+                      tokens = shlex.split(value)
+                  except ValueError:
+                      tokens = []
+                  kv = {}
+                  for token in tokens:
+                      if "=" in token:
+                          key, val = token.split("=", 1)
+                          kv[key.lower()] = val
+                  host = kv.get("host", "").lower()
+                  user = kv.get("user", "")
+                  database = kv.get("dbname", kv.get("database", ""))
+                  if not host and tokens:
+                      # Support a psql CLI command using -h/-U/-d without logging arguments.
+                      for index, token in enumerate(tokens[:-1]):
+                          if token in ("-h", "--host"):
+                              host = tokens[index + 1].lower()
+                          elif token in ("-U", "--username"):
+                              user = tokens[index + 1]
+                          elif token in ("-d", "--dbname"):
+                              database = tokens[index + 1]
+          direct_host_ok = host == f"db.{project}.supabase.co"
+          pooler_host_ok = host.endswith(".pooler.supabase.com")
+          pooler_user_ok = user == f"postgres.{project}"
+          database_ok = database in ("postgres", "")
+          project_ok = direct_host_ok or (pooler_host_ok and pooler_user_ok)
+          if not (project_ok and database_ok):
+              user_shape = (
+                  "postgres.<expected-project>" if pooler_user_ok else
+                  "postgres" if user == "postgres" else
+                  "other-or-unparsed"
+              )
+              print(
+                  "BACKUP_CONFIG_DIAGNOSTIC "
+                  f"host={host or 'unparsed'} user_shape={user_shape} "
+                  f"database={database or 'unparsed'} direct_host_ok={direct_host_ok} "
+                  f"pooler_host_ok={pooler_host_ok} database_ok={database_ok}"
+              )
+              raise SystemExit("BACKUP_CONFIG=FAIL; connection format does not identify the pinned production project")
+          print("BACKUP_CONFIG=PASS; production project pin verified; secret value hidden")
+          PY
+
+      - name: Verify backup encryption secret is configured
+        env:
+          SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          phrase = os.environ.get("SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE", "")
+          if len(phrase.encode("utf-8")) < 16:
+              raise SystemExit("BACKUP_ENCRYPTION_CONFIG=FAIL; passphrase missing or too short")
+          print("BACKUP_ENCRYPTION_CONFIG=PASS; user-controlled passphrase present; value hidden")
+          PY
+
+      - name: Prepare isolated Supabase PostgreSQL 17
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y zip unzip
+          python -m pip install --disable-pip-version-check "cryptography==50.0.2"
+          npm install --global supabase@3.0.0
+          sed -i 's/major_version = 15/major_version = 17/' supabase/config.toml
+          supabase start -x studio,imgproxy,mailpit,edge-runtime,analytics,vector
+          supabase status -o env > /tmp/local-supabase.env
+          grep -q 'DB_URL=' /tmp/local-supabase.env
+
+      - name: Full database export and isolated restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p backup-work transfer
+          cat > backup-work/run_dump_restore.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          SOURCE="$SUPABASE_PROD_DB_URL"
+          LOCAL_ADMIN="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
+          LOCAL_RESTORE="postgresql://postgres:postgres@127.0.0.1:54322/restore_validation?sslmode=disable"
+
+          # Supabase local may expose CREATE DATABASE to postgres while reserving
+          # SUSET-only function settings for supabase_admin. Use an actual
+          # superuser for the isolated restore; never broaden production grants.
+          local_superuser=$(psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+          if [ "$local_superuser" != "t" ]; then
+            candidate_admin="postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres?sslmode=disable"
+            candidate_superuser=""
+            if candidate_superuser=$(psql "$candidate_admin" -X -v ON_ERROR_STOP=1 -At \
+              -c "SELECT rolsuper FROM pg_roles WHERE rolname = current_user" 2>/dev/null); then
+              if [ "$candidate_superuser" = "t" ]; then
+                LOCAL_ADMIN="$candidate_admin"
+                LOCAL_RESTORE="postgresql://supabase_admin:postgres@127.0.0.1:54322/restore_validation?sslmode=disable"
+                local_superuser="t"
+              fi
+            fi
+          fi
+          if [ "$local_superuser" != "t" ]; then
+            echo "RESTORE_ADMIN=FAIL; isolated local PostgreSQL superuser access is unavailable"
+            exit 24
+          fi
+          echo "RESTORE_ADMIN=PASS; isolated restore uses a verified local superuser"
+
+          # Full logical dump: all database schemas, table data and large objects.
+          # The source connection is used only by pg_dump / read-only catalog queries.
+          pg_dump --no-owner --no-acl --format=custom --blobs \
+            --file=/backup/database.dump "$SOURCE"
+
+          # Preserve global role definitions and memberships without exporting password hashes.
+          pg_dumpall --roles-only --no-role-passwords --dbname="$SOURCE" > /backup/roles.sql
+
+          # Inventory every non-system schema, active extension, RLS policy and table row count.
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp_%' AND nspname NOT LIKE 'pg_toast_temp_%' ORDER BY 1" \
+            > /backup/source_schemas.txt
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
+            > /backup/source_extensions.tsv
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,replace(COALESCE(qual,''),'auth.uid()','uid()'),replace(COALESCE(with_check,''),'auth.uid()','uid()') FROM pg_policies ORDER BY 1,2,3" \
+            > /backup/source_policies.tsv
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') AND schemaname NOT LIKE 'pg_toast%' ORDER BY 1,2" \
+            > /backup/source_tables.list
+
+          # Generate table-count statements server-side with safely quoted identifiers.
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT format('SELECT %L || chr(9) || count(*)::text FROM %I.%I;', schemaname || '.' || tablename, schemaname, tablename) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') AND schemaname NOT LIKE 'pg_toast%' ORDER BY schemaname,tablename" \
+            > /backup/count_queries.sql
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -f /backup/count_queries.sql \
+            > /backup/source_rows.tsv
+
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations), (SELECT count(*) FROM pg_largeobject_metadata)" \
+            > /backup/source_key_counts.tsv
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT current_setting('server_version')" > /backup/source_server_version.txt
+
+          # Create an empty, distinct restore database inside local Supabase Postgres.
+          psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE restore_validation TEMPLATE template0"
+
+          # Ensure roles referenced by RLS policies exist in the isolated restore cluster.
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT DISTINCT unnest(roles)::text FROM pg_policies ORDER BY 1" \
+            > /backup/policy_roles.list
+          while IFS= read -r role; do
+            [ -n "$role" ] || continue
+            case "$role" in
+              *[!a-zA-Z0-9_]*)
+                echo "Unsupported role identifier in policy; refusing restore"
+                exit 20
+                ;;
+            esac
+            exists=$(psql "$LOCAL_ADMIN" -X -At -c "SELECT 1 FROM pg_roles WHERE rolname = '$role'")
+            if [ "$exists" != "1" ]; then
+              psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 -c "CREATE ROLE \"$role\" NOLOGIN"
+            fi
+          done < /backup/policy_roles.list
+
+          # Actual restore, not an archive-list-only check.
+          pg_restore --exit-on-error --no-owner --no-acl \
+            --dbname="$LOCAL_RESTORE" /backup/database.dump
+
+          # Compare schemas, extension versions, exact RLS policy definitions and all table row counts.
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp_%' AND nspname NOT LIKE 'pg_toast_temp_%' ORDER BY 1" \
+            > /backup/restored_schemas.txt
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
+            > /backup/restored_extensions.tsv
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,replace(COALESCE(qual,''),'auth.uid()','uid()'),replace(COALESCE(with_check,''),'auth.uid()','uid()') FROM pg_policies ORDER BY 1,2,3" \
+            > /backup/restored_policies.tsv
+          # Execute the same safely quoted count statements against the isolated restore.
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -f /backup/count_queries.sql \
+            > /backup/restored_rows.tsv
+
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations), (SELECT count(*) FROM pg_largeobject_metadata)" \
+            > /backup/restored_key_counts.tsv
+
+          diff -u /backup/source_schemas.txt /backup/restored_schemas.txt
+          diff -u /backup/source_extensions.tsv /backup/restored_extensions.tsv
+          diff -u /backup/source_policies.tsv /backup/restored_policies.tsv
+          diff -u /backup/source_rows.tsv /backup/restored_rows.tsv
+          diff -u /backup/source_key_counts.tsv /backup/restored_key_counts.tsv
+          pg_restore --list /backup/database.dump > /backup/archive_toc.txt
+          test -s /backup/archive_toc.txt
+          test -s /backup/roles.sql
+          # Storage binary objects live outside PostgreSQL; fail closed if any exist.
+          IFS='|' read -r auth_users storage_buckets storage_objects conversations large_objects < /backup/source_key_counts.tsv
+          if [ "$storage_objects" != "0" ]; then
+            echo "STORAGE_BINARY_EXPORT=BLOCKED; nonzero object count requires independent binary export and restore validation"
+            exit 23
+          fi
+          echo "STORAGE_BINARY_EXPORT=NOT_REQUIRED; snapshot object count is zero"
+          echo "FULL_DATABASE_EXPORT=PASS"
+          echo "ISOLATED_DATABASE_RESTORE=PASS"
+          echo "SCHEMA_EXTENSION_POLICY_AND_ROWCOUNT_MATCH=PASS"
+          SCRIPT
+          chmod 700 backup-work/run_dump_restore.sh
+
+          docker run --rm --network host \
+            -e SUPABASE_PROD_DB_URL \
+            -e PGSSLMODE \
+            -v "$PWD/backup-work:/backup" \
+            postgres:17.11-bookworm bash /backup/run_dump_restore.sh
+
+      - name: Document coverage and create SHA-256 ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backup-work/README-RESTORE-REPORT.md <<'EOF'
+          # Supabase production database backup and isolated restore report
+
+          - Source project: `wzhsilufajemyqtednie`
+          - PostgreSQL server version: recorded in `source_server_version.txt`.
+          - Export method: PostgreSQL 17 `pg_dump` custom archive with large objects.
+          - Global roles: exported separately using `pg_dumpall --roles-only --no-role-passwords`; role passwords are deliberately excluded.
+          - Database schemas: all non-system schemas from the source catalog, including `public`, `auth`, `storage`, `realtime`, `extensions`, `supabase_migrations`, and `vault` where present.
+          - Database content: table data, DDL, indexes, functions, triggers, RLS policies, installed extensions and large objects.
+          - Auth: raw database archive includes `auth.users` and related Auth tables. Password hashes and Auth-related data are sensitive and require private storage.
+          - Storage: bucket/object metadata is included through the database archive. PostgreSQL dumps do not contain the external binary payloads served by the Storage API; the source object count is recorded. A zero count means no Storage API objects were listed in `storage.objects` at export time.
+          - Vault: encrypted database values, if present, remain encrypted. Project-level JWT secrets, API keys, Edge Function secrets and dashboard settings are outside the database dump.
+          - Restore target: newly created `restore_validation` database in a separate local Supabase PostgreSQL 17 Docker stack. No production DDL or data writes are performed.
+          - Acceptance: restore must succeed and exact schema inventory, extension versions, RLS policy definitions, every table row count, Auth/Storage/conversation counts and large-object counts must match.
+          EOF
+
+          cat > backup-work/RESTORE-VALIDATION.txt <<EOF
+          FULL_DATABASE_EXPORT=PASS
+          ISOLATED_DATABASE_RESTORE=PASS
+          SCHEMA_EXTENSION_POLICY_AND_ROWCOUNT_MATCH=PASS
+          VALIDATED_AT_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          SOURCE_PROJECT=wzhsilufajemyqtednie
+          POSTGRES_SERVER_VERSION=$(cat backup-work/source_server_version.txt)
+          AUTH_USERS|STORAGE_BUCKETS|STORAGE_OBJECTS|COUNCIL_CONVERSATIONS|LARGE_OBJECTS
+          $(cat backup-work/source_key_counts.tsv)
+          EOF
+
+          (cd backup-work && sha256sum database.dump roles.sql \
+            source_schemas.txt source_tables.list count_queries.sql \
+            source_extensions.tsv source_policies.tsv source_rows.tsv \
+            source_key_counts.tsv source_server_version.txt \
+            README-RESTORE-REPORT.md RESTORE-VALIDATION.txt \
+            > SHA256SUMS)
+          mkdir -p package
+          cp backup-work/{database.dump,roles.sql,source_schemas.txt,source_tables.list,count_queries.sql,source_extensions.tsv,source_policies.tsv,source_rows.tsv,source_key_counts.tsv,source_server_version.txt,README-RESTORE-REPORT.md,RESTORE-VALIDATION.txt,SHA256SUMS} package/
+          (cd package && zip -q -9 -r ../supabase-db-dump-2026-11-08.zip .)
+          unzip -t supabase-db-dump-2026-11-08.zip
+          sha256sum supabase-db-dump-2026-11-08.zip > package-sha256.txt
+          echo "BACKUP_ZIP_SHA256=$(cut -d ' ' -f1 package-sha256.txt)" >> "$GITHUB_ENV"
+          echo "BACKUP_ZIP_SIZE=$(stat -c '%s' supabase-db-dump-2026-11-08.zip)" >> "$GITHUB_ENV"
+
+      - name: Encrypt backup with user-controlled passphrase and verify round trip
+        env:
+          SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import hmac
+          import io
+          import os
+          import shutil
+          import zipfile
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+          PASSPHRASE = os.environ.get("SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE", "")
+          if len(PASSPHRASE.encode("utf-8")) < 16:
+              raise SystemExit("BACKUP_ENCRYPTION_CONFIG=FAIL; passphrase missing or too short")
+
+          SOURCE_ZIP = Path("supabase-db-dump-2026-11-08.zip")
+          TRANSFER = Path("transfer")
+          TRANSFER.mkdir(exist_ok=True)
+          if not SOURCE_ZIP.is_file() or SOURCE_ZIP.stat().st_size == 0:
+              raise SystemExit("BACKUP_ENCRYPTION=FAIL; plaintext ZIP missing or empty")
+
+          plaintext = SOURCE_ZIP.read_bytes()
+          expected_plain_sha = hashlib.sha256(plaintext).hexdigest()
+          try:
+              with zipfile.ZipFile(io.BytesIO(plaintext)) as archive:
+                  bad_member = archive.testzip()
+                  if bad_member:
+                      raise SystemExit("BACKUP_ARCHIVE=FAIL; corrupt ZIP member")
+                  required = {
+                      "database.dump", "roles.sql", "source_schemas.txt", "source_tables.list", "count_queries.sql",
+                      "source_extensions.tsv", "source_policies.tsv",
+                      "source_rows.tsv", "source_key_counts.tsv",
+                      "README-RESTORE-REPORT.md", "RESTORE-VALIDATION.txt", "SHA256SUMS"
+                  }
+                  if not required.issubset(set(archive.namelist())):
+                      raise SystemExit("BACKUP_ARCHIVE=FAIL; required content missing")
+                  for line in archive.read("SHA256SUMS").decode("utf-8").splitlines():
+                      digest, name = line.split(maxsplit=1)
+                      name = name.lstrip("*")
+                      if not hmac.compare_digest(hashlib.sha256(archive.read(name)).hexdigest(), digest):
+                          raise SystemExit("BACKUP_ARCHIVE=FAIL; internal SHA-256 mismatch")
+          except (OSError, zipfile.BadZipFile, KeyError, ValueError) as exc:
+              raise SystemExit(f"BACKUP_ARCHIVE=FAIL; validation error: {type(exc).__name__}")
+
+          SALT = os.urandom(16)
+          NONCE = os.urandom(12)
+          N, R, P = 2**15, 8, 1
+          AAD = b"AI-COUNCIL-SUPABASE-BACKUP-V1"
+          MAGIC = b"AICBKP1"
+
+          def derive_key(salt):
+              return Scrypt(salt=salt, length=32, n=N, r=R, p=P).derive(PASSPHRASE.encode("utf-8"))
+
+          envelope = MAGIC + SALT + NONCE + AESGCM(derive_key(SALT)).encrypt(NONCE, plaintext, AAD)
+          encrypted_path = TRANSFER / "supabase-db-dump-2026-11-08.zip.enc"
+          encrypted_path.write_bytes(envelope)
+
+          encoded = encrypted_path.read_bytes()
+          if encoded[:len(MAGIC)] != MAGIC:
+              raise SystemExit("ENCRYPTION_ROUNDTRIP=FAIL; envelope header mismatch")
+          offset = len(MAGIC)
+          read_salt = encoded[offset:offset + 16]
+          offset += 16
+          read_nonce = encoded[offset:offset + 12]
+          offset += 12
+          recovered = AESGCM(derive_key(read_salt)).decrypt(read_nonce, encoded[offset:], AAD)
+          if not hmac.compare_digest(hashlib.sha256(recovered).hexdigest(), expected_plain_sha):
+              raise SystemExit("ENCRYPTION_ROUNDTRIP=FAIL; decrypted SHA-256 mismatch")
+          with zipfile.ZipFile(io.BytesIO(recovered)) as archive:
+              if archive.testzip():
+                  raise SystemExit("ENCRYPTION_ROUNDTRIP=FAIL; decrypted ZIP integrity check failed")
+
+          (TRANSFER / "BACKUP-PACKAGE-SHA256.txt").write_text(
+              f"{expected_plain_sha}  supabase-db-dump-2026-11-08.zip (decrypted payload)\n",
+              encoding="utf-8",
+          )
+          encrypted_sha = hashlib.sha256(envelope).hexdigest()
+          (TRANSFER / "ENCRYPTED-PAYLOAD-SHA256.txt").write_text(
+              f"{encrypted_sha}  supabase-db-dump-2026-11-08.zip.enc\n",
+              encoding="utf-8",
+          )
+
+          decrypt_helper = r'''#!/usr/bin/env python3
+          """Decrypt and verify an AI Council Supabase backup."""
+          import argparse
+          import getpass
+          import hashlib
+          import hmac
+          import os
+          import sys
+          from pathlib import Path
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+          MAGIC = b"AICBKP1"
+          AAD = b"AI-COUNCIL-SUPABASE-BACKUP-V1"
+          N, R, P = 2**15, 8, 1
+
+          def main():
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument("encrypted_file", type=Path)
+              parser.add_argument("output_zip", type=Path)
+              args = parser.parse_args()
+              if args.output_zip.exists():
+                  print("Refusing to overwrite an existing output file.", file=sys.stderr)
+                  return 2
+              phrase = getpass.getpass("Backup passphrase: ")
+              if len(phrase.encode("utf-8")) < 16:
+                  print("Passphrase is too short.", file=sys.stderr)
+                  return 2
+              blob = args.encrypted_file.read_bytes()
+              if blob[:len(MAGIC)] != MAGIC:
+                  print("Unrecognized encrypted backup format.", file=sys.stderr)
+                  return 2
+              pos = len(MAGIC)
+              salt, nonce, ciphertext = blob[pos:pos+16], blob[pos+16:pos+28], blob[pos+28:]
+              key = Scrypt(salt=salt, length=32, n=N, r=R, p=P).derive(phrase.encode("utf-8"))
+              try:
+                  payload = AESGCM(key).decrypt(nonce, ciphertext, AAD)
+              except Exception:
+                  print("Decryption failed: incorrect passphrase or damaged file.", file=sys.stderr)
+                  return 1
+              digest = hashlib.sha256(payload).hexdigest()
+              sidecar = args.encrypted_file.parent / "BACKUP-PACKAGE-SHA256.txt"
+              if sidecar.exists():
+                  expected = sidecar.read_text(encoding="utf-8").split()[0]
+                  if not hmac.compare_digest(digest, expected):
+                      print("Decrypted archive SHA-256 mismatch.", file=sys.stderr)
+                      return 1
+              fd = os.open(args.output_zip, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(fd, "wb") as output:
+                  output.write(payload)
+              print("Decrypted archive created:", args.output_zip)
+              print("SHA-256:", digest)
+              return 0
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          '''
+          (TRANSFER / "decrypt_backup.py").write_text(decrypt_helper, encoding="utf-8")
+
+          readme = """Encrypted database backup bundle.
+          The database backup is not stored as plaintext in this bundle.
+          Payload: supabase-db-dump-2026-11-08.zip.enc
+          Encryption: AES-256-GCM; passphrase KDF: scrypt (N=32768, r=8, p=1).
+          The passphrase is intentionally not included.
+          1. Extract this outer ZIP.
+          2. Install Python 3 and cryptography: python -m pip install cryptography
+          3. Run: python decrypt_backup.py supabase-db-dump-2026-11-08.zip.enc restored-backup.zip
+          4. Enter the separately stored SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE when prompted.
+          5. Verify restored-backup.zip using BACKUP-PACKAGE-SHA256.txt.
+          """
+          (TRANSFER / "ENCRYPTION-README.md").write_text(readme, encoding="utf-8")
+
+          # Preserve the previously confirmed Dropbox filename as a valid ZIP bundle;
+          # its database payload remains encrypted and requires the separately held passphrase.
+          outer_zip = Path("supabase-db-dump-2026-11-08.zip")
+          with zipfile.ZipFile(outer_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+              for item in sorted(TRANSFER.iterdir()):
+                  if item.is_file():
+                      archive.write(item, arcname=item.name)
+          with zipfile.ZipFile(outer_zip) as archive:
+              if archive.testzip():
+                  raise SystemExit("TRANSFER_BUNDLE=FAIL; outer ZIP integrity check failed")
+
+          outer_sha = hashlib.sha256(outer_zip.read_bytes()).hexdigest()
+          outer_size = outer_zip.stat().st_size
+          bundle_path = TRANSFER / outer_zip.name
+          outer_zip.replace(bundle_path)
+          (TRANSFER / "TRANSFER-BUNDLE-SHA256.txt").write_text(
+              f"{outer_sha}  {outer_zip.name}\n", encoding="utf-8"
+          )
+          if not bundle_path.is_file() or bundle_path.stat().st_size != outer_size:
+              raise SystemExit("TRANSFER_BUNDLE=FAIL; final ZIP was not placed in artifact folder")
+
+          if SOURCE_ZIP.exists():
+              SOURCE_ZIP.unlink()
+          shutil.rmtree("backup-work", ignore_errors=True)
+          shutil.rmtree("package", ignore_errors=True)
+          if SOURCE_ZIP.exists() or Path("backup-work").exists() or Path("package").exists():
+              raise SystemExit("PLAINTEXT_BACKUP_REMOVED=FAIL")
+          print("BACKUP_ARCHIVE=PASS")
+          print("ENCRYPTION_ROUNDTRIP=PASS")
+          print("TRANSFER_BUNDLE=PASS")
+          print("PLAINTEXT_BACKUP_REMOVED=PASS")
+          print(f"TRANSFER_BUNDLE_SHA256={outer_sha}")
+          print(f"TRANSFER_BUNDLE_SIZE={outer_size}")
+          PY
+
+      - name: Upload encrypted one-day transfer artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: supabase-prod-backup-2026-11-08-passphrase-encrypted
+          path: transfer/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
