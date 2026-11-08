@@ -34,6 +34,7 @@ CANONICAL_CONTRACT = "V26_3_CANONICAL_CONVERSATION_STORE"
 
 SAFE_AUTH_ERROR_CODES = frozenset({
     "invalid_credentials",
+    "invalid_grant",
     "email_not_confirmed",
     "user_banned",
     "invalid_api_key",
@@ -54,24 +55,60 @@ SAFE_AUTH_ERROR_CODES = frozenset({
 
 
 def safe_auth_provider_code(response, *, request_url: str = "", status: int | None = None) -> str:
-    """Return only an allowlisted Auth error code; never echo response body text."""
+    """Extract only a known Auth code from supported response shapes; never echo body text."""
     try:
         payload = response.json()
     except Exception:
         return "unclassified"
     if not isinstance(payload, dict):
+        if status == 400 and "token?grant_type=password" in request_url:
+            return "password_grant_rejected"
         return "unclassified"
-    candidate = payload.get("code") or payload.get("error_code") or payload.get("error")
-    if isinstance(candidate, str):
-        code = candidate.strip().lower()
-        if code in SAFE_AUTH_ERROR_CODES:
-            return code
-    # GoTrue also records invalid_credentials internally for password-grant
-    # HTTP 400 responses; the REST payload may omit or nest the code in some versions.
+
+    # Supabase/GoTrue versions may expose the code at the top level or under
+    # an `error` object. Inspect only known keys and return allowlisted labels.
+    containers = [payload]
+    nested_error = payload.get("error")
+    if isinstance(nested_error, dict):
+        containers.append(nested_error)
+    nested_data = payload.get("data")
+    if isinstance(nested_data, dict):
+        containers.append(nested_data)
+        if isinstance(nested_data.get("error"), dict):
+            containers.append(nested_data["error"])
+
+    for container in containers:
+        for field in ("code", "error_code", "type"):
+            candidate = container.get(field)
+            if isinstance(candidate, str):
+                code = candidate.strip().lower()
+                if code in SAFE_AUTH_ERROR_CODES:
+                    return code
+
+        # Some OAuth-shaped responses carry the canonical grant error in
+        # `error` rather than `code`.
+        candidate = container.get("error")
+        if isinstance(candidate, str):
+            code = candidate.strip().lower()
+            if code in SAFE_AUTH_ERROR_CODES:
+                return code
+
+    # Map only exact, well-known generic descriptions. The original message
+    # is never returned, printed, or attached to an exception.
+    for field in ("msg", "message", "error_description"):
+        candidate = payload.get(field)
+        if isinstance(candidate, str):
+            normalized = " ".join(candidate.strip().lower().split())
+            if normalized in {"invalid login credentials", "invalid email or password"}:
+                return "invalid_credentials"
+            if normalized == "email not confirmed":
+                return "email_not_confirmed"
+            if normalized == "user is banned":
+                return "user_banned"
+
     if status == 400 and "token?grant_type=password" in request_url:
         return "password_grant_rejected"
     return "unclassified"
-
 
 class DiagnosticAuthTransport:
     """Capture only HTTP status and allowlisted Auth code for test diagnostics."""
