@@ -366,14 +366,19 @@ def main() -> int:
 
     existing_id = f"restore-live-existing-{uuid.uuid4().hex}"
     missing_id = f"restore-live-missing-{uuid.uuid4().hex}"
-    seeded = False
-    created_ids: list[str] = []
+    # Refuse to touch any row if a generated identifier unexpectedly exists.
+    assert_live(
+        repo_a.load(owner_a, existing_id) is None
+        and repo_a.load(owner_a, missing_id) is None,
+        "generated conversation IDs are absent before test writes",
+    )
+    # Register both possible write targets before the first mutation, so a
+    # partial restore failure cannot leave the synthetic missing ID behind.
+    created_ids: list[str] = [existing_id, missing_id]
 
     try:
         original_existing = make_record(existing_id, "original-owner-A-content")
         repo_a.save(OwnedConversationSnapshot(owner_a, original_existing))
-        seeded = True
-        created_ids.append(existing_id)
         assert_live(
             repo_a.load(owner_a, existing_id).canonical_record == original_existing,
             "account A seeded one disposable pre-existing conversation",
@@ -400,10 +405,10 @@ def main() -> int:
             and result["skipped_existing"] == 1
             and result["existing_conversations_overwritten"] == 0
             and result["writes_are_insert_only"] is True
-            and result["provider_api_calls"] == 0,
+            and result["provider_api_calls"] == 0
+            and result["restored_conversation_ids"] == [missing_id],
             "restore inserted exactly one missing ID and skipped the existing ID",
         )
-        created_ids.extend(result["restored_conversation_ids"])
 
         stored_existing = repo_a.load(owner_a, existing_id)
         stored_missing = repo_a.load(owner_a, missing_id)
@@ -467,16 +472,15 @@ def main() -> int:
             "account A's original content remains unchanged after account B's attempt",
         )
     finally:
-        # Remove only the unique synthetic rows created by this test, using A's
-        # authenticated owner-scoped repository. Never touch other IDs.
-        if seeded:
-            for conversation_id in reversed(created_ids):
-                repo_a.delete(owner_a, conversation_id)
-            assert_live(
-                repo_a.load(owner_a, existing_id) is None
-                and repo_a.load(owner_a, missing_id) is None,
-                "all synthetic test conversations were removed",
-            )
+        # Remove only the two preflight-confirmed unique synthetic IDs using
+        # A's authenticated owner-scoped repository, even after partial failure.
+        for conversation_id in reversed(created_ids):
+            repo_a.delete(owner_a, conversation_id)
+        assert_live(
+            repo_a.load(owner_a, existing_id) is None
+            and repo_a.load(owner_a, missing_id) is None,
+            "all synthetic test conversations were removed",
+        )
 
     print("LIVE_BACKUP_RESTORE_ACCEPTANCE=PASS")
     return 0
