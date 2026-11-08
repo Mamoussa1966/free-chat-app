@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -114,31 +115,111 @@ def check_file_preservation() -> dict[str, Any]:
     }
 
 
-def _pytest_env() -> dict[str, str]:
+def _pytest_copy_ignore(directory: str, names: list[str]) -> set[str]:
+    """Exclude runtime secrets/config from the temporary, offline pytest tree."""
+    current_dir = Path(directory)
+    ignored: set[str] = set()
+    for name in names:
+        candidate = current_dir / name
+        try:
+            relative = candidate.relative_to(ROOT).as_posix()
+        except ValueError:
+            relative = candidate.name
+        lowered = name.lower()
+        if lowered in IGNORED:
+            ignored.add(name)
+            continue
+        if lowered == "secrets.toml" or lowered == ".env" or lowered.startswith(".env."):
+            ignored.add(name)
+            continue
+        # Streamlit may resolve custom global secret paths from project config.
+        # Tests do not need project runtime config; isolate it with the secrets file.
+        if relative == ".streamlit/config.toml":
+            ignored.add(name)
+            continue
+        if candidate.is_symlink():
+            raise GateFailure(f"Refusing to follow a symlink in the pytest sandbox: {relative}")
+    return ignored
+
+
+def _copy_pytest_workspace(destination: Path) -> Path:
+    """Copy source/tests into a disposable tree without runtime credentials."""
+    if destination.exists():
+        raise GateFailure("Pytest sandbox destination already exists")
+    shutil.copytree(ROOT, destination, ignore=_pytest_copy_ignore)
+    # A secrets example is safe and remains available to file-contract tests;
+    # an actual secrets.toml is never copied, regardless of whether it is a link.
+    if (destination / ".streamlit" / "secrets.toml").exists():
+        raise GateFailure("Runtime secrets unexpectedly entered the pytest sandbox")
+    return destination
+
+
+def _pytest_env(project_root: Path, isolated_home: Path) -> dict[str, str]:
+    """Build an environment independent of deployed provider/Streamlit settings."""
     env = os.environ.copy()
+    secret_markers = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")
+    application_prefixes = (
+        "AI_COUNCIL_", "COUNCIL_", "OPENAI_", "GEMINI_", "GOOGLE_",
+        "ANTHROPIC_", "CLAUDE_", "GROK_", "XAI_", "KIMI_", "MOONSHOT_",
+        "DEEPSEEK_", "CLOUDFLARE_", "SUPABASE_", "STREAMLIT_",
+    )
     for key in list(env):
         upper = key.upper()
-        if any(marker in upper for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")):
+        if any(marker in upper for marker in secret_markers):
             env.pop(key, None)
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["PYTHONPATH"] = str(ROOT)
+            continue
+        if upper.startswith(application_prefixes) or upper in {
+            "MAX_OUTPUT_TOKENS",
+            "REQUEST_TIMEOUT",
+            "CASCADE_MODEL_TIMEOUT_SECONDS",
+            "PROVIDER_SEAT_BUDGET_SECONDS",
+            "GEMINI_REQUEST_TIMEOUT_SECONDS",
+        }:
+            env.pop(key, None)
+    isolated_home.mkdir(parents=True, exist_ok=True)
+    env.update({
+        "HOME": str(isolated_home),
+        "USERPROFILE": str(isolated_home),
+        "XDG_CONFIG_HOME": str(isolated_home / ".config"),
+        "PYTHONPATH": str(project_root),
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    })
     return env
 
 
 def run_pytest() -> dict[str, Any]:
+    """Run pytest from a disposable, credential-free project copy.
+
+    Streamlit exposes project/global secrets to child processes through its
+    secrets.toml lookup and may export top-level secret settings as environment
+    variables. Running tests from the live checkout therefore makes outcomes
+    depend on deployed account configuration (timeouts, dynamic seats, model
+    lists) rather than the code contract. The temporary copy removes those
+    sources and is deleted after the run; the live checkout is never modified.
+    """
     started = time.perf_counter()
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "tests", "--tb=short", "-rA"],
-        cwd=ROOT,
-        env=_pytest_env(),
-        text=True,
-        capture_output=True,
-    )
+    with tempfile.TemporaryDirectory(prefix="ai_council_core_pytest_") as tmp:
+        temporary_root = Path(tmp)
+        project_root = _copy_pytest_workspace(temporary_root / "project")
+        isolated_home = temporary_root / "home"
+        env = _pytest_env(project_root, isolated_home)
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "tests", "--tb=short", "-rA"],
+            cwd=project_root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
     return {
         "passed": proc.returncode == 0,
         "returncode": proc.returncode,
         "duration_seconds": round(time.perf_counter() - started, 3),
+        "workspace_mode": "TEMPORARY_CREDENTIAL_FREE_COPY",
+        "project_secrets_excluded": True,
+        "global_secrets_home_isolated": True,
+        "provider_configuration_environment_removed": True,
+        "live_checkout_modified": False,
         "stdout": proc.stdout,
         "stderr": proc.stderr,
     }
