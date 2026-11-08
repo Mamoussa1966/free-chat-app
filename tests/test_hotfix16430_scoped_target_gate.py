@@ -382,6 +382,7 @@ def test_target_request_cannot_be_downgraded_to_non_target_not_proven(tmp_path):
 
     blocked = _load_gate().verify(evidence_path, manifest, archive, checksum, DEPLOYED_SHA)
     assert blocked["status"] == "NOT_PROVEN"
+    assert blocked["targeted_scope_status"] == "NOT_PROVEN"
     assert any(error.startswith(f"TARGET_DIAGNOSTIC_NOT_PASS:{target_id}") for error in blocked["errors"])
 
 
