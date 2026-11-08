@@ -300,12 +300,12 @@ jobs:
           $(cat backup-work/source_key_counts.tsv)
           EOF
 
-          sha256sum backup-work/database.dump backup-work/roles.sql \
-            backup-work/source_schemas.txt backup-work/source_tables.list backup-work/count_queries.sql \
-            backup-work/source_extensions.tsv backup-work/source_policies.tsv backup-work/source_rows.tsv \
-            backup-work/source_key_counts.tsv backup-work/source_server_version.txt \
-            backup-work/README-RESTORE-REPORT.md backup-work/RESTORE-VALIDATION.txt \
-            > backup-work/SHA256SUMS
+          (cd backup-work && sha256sum database.dump roles.sql \
+            source_schemas.txt source_tables.list count_queries.sql \
+            source_extensions.tsv source_policies.tsv source_rows.tsv \
+            source_key_counts.tsv source_server_version.txt \
+            README-RESTORE-REPORT.md RESTORE-VALIDATION.txt \
+            > SHA256SUMS)
           mkdir -p package
           cp backup-work/{database.dump,roles.sql,source_schemas.txt,source_tables.list,count_queries.sql,source_extensions.tsv,source_policies.tsv,source_rows.tsv,source_key_counts.tsv,source_server_version.txt,README-RESTORE-REPORT.md,RESTORE-VALIDATION.txt,SHA256SUMS} package/
           (cd package && zip -q -9 -r ../supabase-db-dump-2026-11-08.zip .)
