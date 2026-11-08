@@ -210,7 +210,7 @@ def test_explicit_targets_pass_while_global_history_remains_14_and_non_target_ga
 
 
 def test_target_request_cannot_be_downgraded_to_non_target_not_proven(tmp_path):
-    result, evidence_path, *_ = _verify(tmp_path)
+    result, evidence_path, manifest, archive, checksum = _verify(tmp_path)
     report = json.loads(evidence_path.read_text(encoding="utf-8"))
     target_id = report["target_request_ids"][0]
     row = next(item for item in report["requests"] if item["request_id"] == target_id)
@@ -231,7 +231,6 @@ def test_target_request_cannot_be_downgraded_to_non_target_not_proven(tmp_path):
     evidence_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
 
     gate = _load_gate()
-    _, manifest, archive, checksum = _[0], _[1], _[2], _[3]
     blocked = gate.verify(evidence_path, manifest, archive, checksum, DEPLOYED_SHA)
     assert blocked["status"] == "NOT_PROVEN"
     assert any(error.startswith(f"TARGET_DIAGNOSTIC_NOT_PASS:{target_id}") for error in blocked["errors"])
