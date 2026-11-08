@@ -243,7 +243,9 @@ def main() -> int:
 
     # Emit only booleans about password-secret shape. Never emit lengths,
     # fingerprints, values, or any token material.
-    print(f"PASSWORD_SECRETS_DISTINCT={password_a != password_b}")
+    # Distinct Auth users may legitimately share the same password.
+    # This is informational only; equality is not a reason to reject a test account.
+    print(f"PASSWORD_SECRETS_IDENTICAL={password_a == password_b}")
     print(f"PASSWORD_A_EDGE_WHITESPACE={password_a != password_a.strip()}")
     print(f"PASSWORD_B_EDGE_WHITESPACE={password_b != password_b.strip()}")
 
