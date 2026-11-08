@@ -121,11 +121,14 @@ def sign_in_with_safe_diagnostic(auth, transport, label: str, email: str, passwo
     return session
 
 
-def required(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
+def required(name: str, *, strip: bool = True) -> str:
+    value = os.environ.get(name, "")
+    if not value.strip():
         raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+    # Email addresses and project settings may be normalized, but passwords
+    # must be passed byte-for-byte as stored: leading/trailing whitespace can
+    # be part of a valid password and must never be silently removed.
+    return value.strip() if strip else value
 
 
 def assert_live(condition: bool, label: str) -> None:
@@ -216,9 +219,9 @@ def main() -> int:
     project_url = required("SUPABASE_URL").rstrip("/")
     publishable_key = required("SUPABASE_PUBLISHABLE_KEY")
     email_a = required("SUPABASE_TEST_USER_A_EMAIL")
-    password_a = required("SUPABASE_TEST_USER_A_PASSWORD")
+    password_a = required("SUPABASE_TEST_USER_A_PASSWORD", strip=False)
     email_b = required("SUPABASE_TEST_USER_B_EMAIL")
-    password_b = required("SUPABASE_TEST_USER_B_PASSWORD")
+    password_b = required("SUPABASE_TEST_USER_B_PASSWORD", strip=False)
 
     parsed = urlsplit(project_url)
     # Fail closed before authentication or writes if the configured secret
