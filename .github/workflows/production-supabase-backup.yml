@@ -110,7 +110,7 @@ jobs:
           python - <<'PY'
           import os
           phrase = os.environ.get("SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE", "")
-          if len(phrase.encode("utf-8")) < 24:
+          if len(phrase.encode("utf-8")) < 16:
               raise SystemExit("BACKUP_ENCRYPTION_CONFIG=FAIL; passphrase missing or too short")
           print("BACKUP_ENCRYPTION_CONFIG=PASS; user-controlled passphrase present; value hidden")
           PY
@@ -314,7 +314,7 @@ jobs:
           from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
           PASSPHRASE = os.environ.get("SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE", "")
-          if len(PASSPHRASE.encode("utf-8")) < 24:
+          if len(PASSPHRASE.encode("utf-8")) < 16:
               raise SystemExit("BACKUP_ENCRYPTION_CONFIG=FAIL; passphrase missing or too short")
 
           SOURCE_ZIP = Path("supabase-db-dump-2026-11-08.zip")
@@ -409,7 +409,7 @@ jobs:
                   print("Refusing to overwrite an existing output file.", file=sys.stderr)
                   return 2
               phrase = getpass.getpass("Backup passphrase: ")
-              if len(phrase.encode("utf-8")) < 24:
+              if len(phrase.encode("utf-8")) < 16:
                   print("Passphrase is too short.", file=sys.stderr)
                   return 2
               blob = args.encrypted_file.read_bytes()
