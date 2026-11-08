@@ -71,6 +71,9 @@ def _check_attestation(row: dict, rid: str, round_id: str, ordinal: int, errors:
     _eq(att, "prepared_request_verified", "YES", prefix, errors)
     _eq(att, "payload_hash_integrity", "PASS", prefix, errors)
     _eq(att, "http_payload_attested", "YES", prefix, errors)
+    _eq(att, "transport_attempt_status", "HTTP_RESPONSE_RECEIVED", prefix, errors)
+    _eq(att, "transport_http_status_code", 200, prefix, errors)
+    _eq(att, "bridge_id_hash", row.get("bridge_id_hash"), prefix, errors)
     for field in (
         "request_binding_status", "round_binding_status", "target_binding_status",
         "response_binding_status", "canonical_round_binding_status",
@@ -131,6 +134,234 @@ def _check_attestation(row: dict, rid: str, round_id: str, ordinal: int, errors:
         errors.append(f"{prefix}_PHASE_ORDER_MISMATCH")
 
 
+
+def _validate_historical_scope(evidence: dict, target_ids: list[str], errors: list[str]) -> dict:
+    """Validate the complete canonical history while scoping closure to two explicit targets.
+
+    Non-target NOT_PROVEN diagnostics remain visible and are accepted only when
+    each one is an identity-consistent, non-failing historical record whose exact
+    missing-artifact and execution blockers can be reconstructed. No target
+    blocker, generic blocker, identity conflict, or counter mismatch is waived.
+    """
+    start_errors = len(errors)
+    counts = evidence.get("canonical_counts")
+    if not isinstance(counts, dict):
+        counts = {}
+        errors.append("HISTORY_CANONICAL_COUNTS_MISSING")
+
+    count_keys = ("canonical_message_count", "canonical_request_count", "canonical_round_count")
+    values = [counts.get(key) for key in count_keys]
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 2 for value in values):
+        errors.append("HISTORY_CANONICAL_COUNTS_INVALID")
+        canonical_request_count = 0
+    else:
+        canonical_request_count = int(counts["canonical_request_count"])
+        if len(set(values)) != 1:
+            errors.append("HISTORY_MESSAGE_REQUEST_ROUND_COUNTS_DIVERGE")
+
+    for field in (
+        "canonical_request_ids_count",
+        "persisted_request_record_count",
+        "request_created_count",
+        "request_diagnostic_count",
+    ):
+        if evidence.get(field) != canonical_request_count:
+            errors.append(f"HISTORY_{field.upper()}_DOES_NOT_MATCH_CANONICAL_COUNT")
+
+    for field in (
+        "canonical_counter_consistent",
+        "canonical_identity_chain_valid",
+        "canonical_history_hash_stable_during_audit",
+        "historical_records_preserved",
+        "read_only_live_state_unchanged",
+    ):
+        if evidence.get(field) is not True:
+            errors.append(f"HISTORY_{field.upper()}_NOT_TRUE")
+    for field in ("canonical_counter_status", "canonical_vs_persisted_request_counter_status"):
+        if evidence.get(field) != "PASS":
+            errors.append(f"HISTORY_{field.upper()}_NOT_PASS")
+    if evidence.get("duplicate_canonical_request_ids") != []:
+        errors.append("HISTORY_DUPLICATE_CANONICAL_REQUEST_IDS")
+    if evidence.get("projection_only_request_ids") != []:
+        errors.append("HISTORY_PROJECTION_ONLY_REQUEST_IDS")
+    if evidence.get("historical_canonical_counts_unchanged") != counts:
+        errors.append("HISTORY_CANONICAL_COUNTS_CHANGED_DURING_AUDIT")
+
+    request_rows = evidence.get("requests")
+    if not isinstance(request_rows, list) or len(request_rows) != canonical_request_count:
+        errors.append("HISTORY_REQUEST_DIAGNOSTIC_ROWS_DO_NOT_MATCH_CANONICAL_COUNT")
+        request_rows = request_rows if isinstance(request_rows, list) else []
+
+    request_by_id: dict[str, dict] = {}
+    ordinals: list[int] = []
+    execution_total = 0
+    non_target_not_proven_ids: list[str] = []
+    expected_non_target_blockers: list[str] = []
+    selected = {str(value) for value in target_ids}
+
+    for index, row in enumerate(request_rows, start=1):
+        if not isinstance(row, dict):
+            errors.append(f"HISTORY_REQUEST_ROW_{index}_INVALID")
+            continue
+        rid = str(row.get("request_id") or "").strip()
+        if not rid or rid in request_by_id:
+            errors.append(f"HISTORY_REQUEST_ID_MISSING_OR_DUPLICATED:{index}")
+            continue
+        request_by_id[rid] = row
+
+        # The identity chain and canonical round binding must be valid for every
+        # historical request, whether selected for closure or not.
+        for field in (
+            "canonical_request_present",
+            "direct_request_projection_present",
+        ):
+            if row.get(field) is not True:
+                errors.append(f"HISTORY_{index}_{field.upper()}_NOT_TRUE")
+        for field in (
+            "message_identity_status",
+            "canonical_round_binding_status",
+            "result_request_identity_status",
+        ):
+            if row.get(field) != "PASS":
+                errors.append(f"HISTORY_{index}_{field.upper()}_NOT_PASS")
+        if row.get("canonical_round_records_for_request") != 1:
+            errors.append(f"HISTORY_{index}_CANONICAL_ROUND_RECORD_COUNT_NOT_ONE")
+
+        row_ordinals = row.get("canonical_round_ordinals")
+        if not isinstance(row_ordinals, list) or len(row_ordinals) != 1:
+            errors.append(f"HISTORY_{index}_CANONICAL_ROUND_ORDINAL_INVALID")
+        else:
+            try:
+                ordinal = int(row_ordinals[0])
+                ordinals.append(ordinal)
+                if ordinal != index:
+                    errors.append(f"HISTORY_{index}_CANONICAL_ROUND_ORDER_MISMATCH")
+            except (TypeError, ValueError):
+                errors.append(f"HISTORY_{index}_CANONICAL_ROUND_ORDINAL_INVALID")
+
+        try:
+            started = int(row.get("execution_started_count"))
+            if started < 0:
+                raise ValueError
+            execution_total += started
+        except (TypeError, ValueError):
+            errors.append(f"HISTORY_{index}_EXECUTION_STARTED_COUNT_INVALID")
+            started = 0
+
+        status = str(row.get("status") or "")
+        request_status = str(row.get("request_execution_status") or "")
+        missing = row.get("missing_required_artifacts")
+        missing = missing if isinstance(missing, list) else None
+        artifacts = row.get("required_artifacts")
+        artifacts = artifacts if isinstance(artifacts, dict) else None
+
+        if rid in selected:
+            if status != "PASS":
+                errors.append(f"TARGET_DIAGNOSTIC_NOT_PASS:{rid}")
+            if request_status != "PASS" or row.get("execution_identity_status") != "PASS":
+                errors.append(f"TARGET_EXECUTION_NOT_PASS:{rid}")
+            if row.get("actual_model_attestation_present") is not True:
+                errors.append(f"TARGET_ACTUAL_MODEL_ATTESTATION_MISSING:{rid}")
+            if row.get("cascade_summary_present") is not True:
+                errors.append(f"TARGET_CASCADE_SUMMARY_MISSING:{rid}")
+            if missing != []:
+                errors.append(f"TARGET_REQUIRED_ARTIFACTS_MISSING:{rid}")
+            if artifacts is None or any(value != "PASS" for value in artifacts.values()):
+                errors.append(f"TARGET_REQUIRED_ARTIFACTS_NOT_PASS:{rid}")
+            if started < 1:
+                errors.append(f"TARGET_EXECUTION_COUNT_INVALID:{rid}")
+            continue
+
+        if status == "PASS":
+            if request_status != "PASS" or row.get("execution_identity_status") != "PASS":
+                errors.append(f"HISTORY_PASS_ROW_EXECUTION_IDENTITY_INVALID:{rid}")
+            if started < 1 or row.get("actual_model_attestation_present") is not True:
+                errors.append(f"HISTORY_PASS_ROW_EXECUTION_NOT_PROVEN:{rid}")
+            if row.get("cascade_summary_present") is not True:
+                errors.append(f"HISTORY_PASS_ROW_CASCADE_SUMMARY_MISSING:{rid}")
+            if missing != []:
+                errors.append(f"HISTORY_PASS_ROW_MISSING_ARTIFACT_LIST_NOT_EMPTY:{rid}")
+            if artifacts is None or any(value not in {"PASS", "NOT_REQUESTED"} for value in artifacts.values()):
+                errors.append(f"HISTORY_PASS_ROW_ARTIFACT_STATUS_INVALID:{rid}")
+            if artifacts is not None and any(
+                artifacts.get(key) != "PASS" for key in ("EXECUTED_MODELS", "CASCADE_SUMMARIES")
+            ):
+                errors.append(f"HISTORY_PASS_ROW_EXECUTION_ARTIFACTS_NOT_PASS:{rid}")
+            continue
+
+        if status != "NOT_PROVEN":
+            errors.append(f"HISTORY_NON_TARGET_STATUS_NOT_ALLOWED:{rid}:{status or 'MISSING'}")
+            continue
+
+        # The only tolerable non-target condition is incomplete historical
+        # execution evidence. It must be accurately classified, not a FAIL.
+        if request_status != "NOT_PROVEN" or row.get("execution_identity_status") != "NOT_PROVEN":
+            errors.append(f"HISTORY_NON_TARGET_NOT_PROVEN_CLASSIFICATION_INVALID:{rid}")
+        if started != 0 or row.get("actual_model_attestation_present") is not False:
+            errors.append(f"HISTORY_NON_TARGET_EXECUTION_STATE_CONFLICT:{rid}")
+        if row.get("cascade_summary_present") is not False:
+            errors.append(f"HISTORY_NON_TARGET_CASCADE_STATE_CONFLICT:{rid}")
+        if not isinstance(missing, list) or set(missing) != {"EXECUTED_MODELS", "CASCADE_SUMMARIES"}:
+            errors.append(f"HISTORY_NON_TARGET_MISSING_ARTIFACT_SET_UNSUPPORTED:{rid}")
+            missing_items: list[str] = []
+        else:
+            missing_items = sorted(str(item) for item in missing)
+        if artifacts is None:
+            errors.append(f"HISTORY_NON_TARGET_ARTIFACT_MAP_MISSING:{rid}")
+        else:
+            if any(value not in {"PASS", "NOT_PROVEN", "NOT_REQUESTED"} for value in artifacts.values()):
+                errors.append(f"HISTORY_NON_TARGET_ARTIFACT_STATUS_CONFLICT:{rid}")
+            if any(artifacts.get(key) != "NOT_PROVEN" for key in missing_items):
+                errors.append(f"HISTORY_NON_TARGET_MISSING_ARTIFACT_STATUS_MISMATCH:{rid}")
+        non_target_not_proven_ids.append(rid)
+        if missing_items:
+            expected_non_target_blockers.append(
+                f"REQUEST_ARTIFACTS_NOT_PROVEN:{rid}:{','.join(missing_items)}"
+            )
+        expected_non_target_blockers.append(f"REQUEST_EXECUTION_NOT_PROVEN:{rid}")
+
+    if len(request_by_id) != canonical_request_count:
+        errors.append("HISTORY_UNIQUE_REQUEST_ID_COUNT_MISMATCH")
+    if len(ordinals) != canonical_request_count or sorted(ordinals) != list(range(1, canonical_request_count + 1)):
+        errors.append("HISTORY_CANONICAL_ROUND_ORDINAL_SET_INVALID")
+    if not selected or not selected.issubset(set(request_by_id)):
+        errors.append("TARGET_IDS_NOT_PRESENT_IN_CANONICAL_HISTORY")
+
+    if evidence.get("execution_started_source") != "PERSISTED_APPLICATION_OWNED_RUNTIME_EXECUTION_EVENTS_ONLY":
+        errors.append("HISTORY_EXECUTION_SOURCE_NOT_AUTHORITATIVE")
+    try:
+        reported_started = int(evidence.get("execution_started_count"))
+        runtime_started = int(evidence.get("runtime_execution_event_count"))
+        if reported_started != runtime_started or reported_started != execution_total:
+            errors.append("HISTORY_RUNTIME_EXECUTION_COUNTER_MISMATCH")
+    except (TypeError, ValueError):
+        errors.append("HISTORY_RUNTIME_EXECUTION_COUNTER_INVALID")
+
+    reported_blockers = evidence.get("blockers")
+    if not isinstance(reported_blockers, list):
+        errors.append("HISTORY_BLOCKER_LIST_INVALID")
+        reported_blockers = []
+    expected_set = set(expected_non_target_blockers)
+    reported_set = set(str(item) for item in reported_blockers)
+    if reported_set != expected_set or len(reported_blockers) != len(reported_set):
+        errors.append("HISTORY_BLOCKERS_NOT_EXACTLY_SCOPED_TO_NON_TARGET_NOT_PROVEN_ROWS")
+
+    expected_report_status = "NOT_PROVEN" if expected_non_target_blockers else "PASS"
+    if evidence.get("status") != expected_report_status:
+        errors.append("HISTORY_GLOBAL_AUDIT_STATUS_DOES_NOT_MATCH_DIAGNOSTICS")
+
+    return {
+        "status": "PASS" if len(errors) == start_errors else "NOT_PROVEN",
+        "canonical_history_count": canonical_request_count,
+        "canonical_message_count": counts.get("canonical_message_count"),
+        "canonical_round_count": counts.get("canonical_round_count"),
+        "persisted_request_record_count": evidence.get("persisted_request_record_count"),
+        "execution_started_count": evidence.get("execution_started_count"),
+        "non_target_not_proven_request_ids": sorted(non_target_not_proven_ids),
+        "non_target_blockers": sorted(expected_non_target_blockers),
+    }
+
+
 def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksum_path: Path | None = None, expected_commit_sha: str | None = None) -> dict:
     errors: list[str] = []
     evidence = _load_json(evidence_path, "LIVE_EVIDENCE", errors)
@@ -141,6 +372,14 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
     _eq(manifest, "deployed_release_label", EXPECTED_APP_IDENTITY, "MANIFEST", errors)
     if (manifest.get("bridge_closure_contract") or {}).get("live_final_closure_proven") is not False:
         errors.append("MANIFEST_MUST_NOT_PRECLAIM_LIVE_CLOSURE")
+    scope_contract = manifest.get("independent_gate_contract") if isinstance(manifest.get("independent_gate_contract"), dict) else {}
+    _eq(scope_contract, "target_count_exactly_two", True, "MANIFEST_SCOPE", errors)
+    _eq(scope_contract, "targeted_canonical_message_request_round_counts_exactly_two", True, "MANIFEST_SCOPE", errors)
+    _eq(scope_contract, "full_canonical_history_counts_preserved_and_checked", True, "MANIFEST_SCOPE", errors)
+    _eq(scope_contract, "non_target_not_proven_rows_must_be_identity_consistent", True, "MANIFEST_SCOPE", errors)
+    _eq(scope_contract, "non_target_blockers_must_be_exactly_reconstructable", True, "MANIFEST_SCOPE", errors)
+    _eq(scope_contract, "target_or_historical_integrity_failures_block_closure", True, "MANIFEST_SCOPE", errors)
+    _eq(scope_contract, "global_audit_may_be_not_proven_only_for_non_target_incomplete_rows", True, "MANIFEST_SCOPE", errors)
     if (manifest.get("guardrails") or {}).get("version_txt_contract_preserved") is not True:
         errors.append("MANIFEST_VERSION_GUARDRAIL_NOT_PASS")
 
@@ -193,7 +432,6 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
     # Independent evidence checks: the old HOTFIX164.28 report cannot pass because
     # it lacks this release identity and request-bound HTTP attestation envelope.
     _eq(evidence, "schema", EXPECTED_REPORT_SCHEMA, "EVIDENCE", errors)
-    _eq(evidence, "status", "PASS", "EVIDENCE", errors)
     _eq(evidence, "mode", "READ_ONLY_EXPLICIT_TARGETS", "EVIDENCE", errors)
     _eq(evidence, "read_only", True, "EVIDENCE", errors)
     _eq(evidence, "application_release_identity", "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE", "EVIDENCE", errors)
@@ -209,11 +447,8 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
     _eq(evidence, "cascade_execution", 0, "EVIDENCE", errors)
     for field in ("new_requests", "new_rounds", "new_bridges"):
         _eq(evidence, field, 0, "EVIDENCE", errors)
-    _eq(evidence, "canonical_counts", {"canonical_message_count": 2, "canonical_request_count": 2, "canonical_round_count": 2}, "EVIDENCE", errors)
     if not HEX64.fullmatch(str(evidence.get("audit_active_chat_binding_sha256") or "").lower()):
         errors.append("EVIDENCE_ACTIVE_CHAT_BINDING_HASH_INVALID")
-    if evidence.get("blockers") != []:
-        errors.append("EVIDENCE_BLOCKERS_NOT_EMPTY")
 
     generated = str(evidence.get("report_generated_at") or "")
     try:
@@ -237,6 +472,7 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
         target_ids = target_ids if isinstance(target_ids, list) else []
     _eq(evidence, "target_request_count", 2, "EVIDENCE", errors)
     _eq(evidence, "target_selection_status", "EXPLICIT_TARGETS_SELECTED", "EVIDENCE", errors)
+    history_scope = _validate_historical_scope(evidence, [str(x) for x in target_ids], errors)
     request_rows = evidence.get("requests") if isinstance(evidence.get("requests"), list) else []
     request_by_id = {str(x.get("request_id") or ""): x for x in request_rows if isinstance(x, dict)}
     strict = evidence.get("strict_live_bridge_proof") if isinstance(evidence.get("strict_live_bridge_proof"), dict) else {}
@@ -312,10 +548,6 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
         errors.append("BRIDGE_IDS_NOT_UNIQUE")
     if evidence.get("target_bridge_independence_status") != "PASS":
         errors.append("TARGET_BRIDGE_INDEPENDENCE_NOT_PASS")
-    if evidence.get("canonical_request_ids_count") != 2 or evidence.get("persisted_request_record_count") != 2:
-        errors.append("CANONICAL_AND_PERSISTED_REQUEST_COUNTS_NOT_TWO")
-    if evidence.get("request_diagnostic_count") != 2 or evidence.get("execution_started_count") < 2:
-        errors.append("REQUEST_DIAGNOSTIC_OR_EXECUTION_COUNTS_INVALID")
 
     # HOTFIX164.30: the exported forensic report must carry a fresh source-tree
     # fingerprint generated by the running deployed application, not only a copied
@@ -389,6 +621,19 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
         "deployment_commit_binding_method": "EXACT_GIT_COMMIT_AND_SOURCE_BUNDLE" if observed_commit == selected_commit and SHA40.fullmatch(selected_commit) else ("SOURCE_BUNDLE_MATCH_WITH_EXPLICIT_COMMIT" if SHA40.fullmatch(selected_commit) else "NOT_PROVEN"),
         "target_request_count": 2 if not errors else len(targets),
         "target_request_ids": [str(x) for x in target_ids],
+        "targeted_scope_status": "PASS" if (
+            len(targets) == 2
+            and all(isinstance(row, dict) and str(row.get("status") or "") == "PASS" for row in targets)
+            and isinstance(target_ids, list) and len(target_ids) == 2
+            and len({str(value) for value in target_ids}) == 2
+            and not any(
+                error.startswith(("TARGET_", "STRICT_PROOF_", "EVIDENCE_TARGET", "TARGET_IDS_", "CANONICAL_ROUND_IDS_"))
+                or error == "BRIDGE_IDS_NOT_UNIQUE"
+                for error in errors
+            )
+        ) else "NOT_PROVEN",
+        "historical_scope_status": history_scope.get("status", "NOT_PROVEN"),
+        "historical_scope": history_scope,
         "errors": sorted(set(errors)),
         "provider_api_calls_made_by_gate": 0,
         "gate_is_read_only": True,

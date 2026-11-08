@@ -18,7 +18,8 @@
     "tests/test_hotfix16425_release_contract.py",
     "tests/test_provider_runtime.py",
     "tests/test_hotfix16430_deployment_attestation.py",
-    "tests/test_hotfix16430_http_schema_alignment.py"
+    "tests/test_hotfix16430_http_schema_alignment.py",
+    "tests/test_hotfix16430_scoped_target_gate.py"
   ],
   "release_contract": {
     "runtime_label_matches_manifest_release": true,
@@ -45,7 +46,6 @@
     "schema": "hotfix164.30-independent-closure-result/v1",
     "live_evidence_schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
     "target_count_exactly_two": true,
-    "canonical_message_request_round_counts_exactly_two": true,
     "request_round_chain_and_target_order_required": true,
     "strict_application_owned_bridge_proof_required": true,
     "prepared_http_body_sha256_and_byte_count_required": true,
@@ -65,7 +65,13 @@
     "runtime_attestation_must_be_fresh_within_minutes": 30,
     "evidence_commit_may_be_separate_from_deployed_source_commit": true,
     "runtime_http_attestation_schema": "hotfix164.29-runtime-http-attestation/v1",
-    "wire_schema_remains_independent_of_release_identity": true
+    "wire_schema_remains_independent_of_release_identity": true,
+    "targeted_canonical_message_request_round_counts_exactly_two": true,
+    "full_canonical_history_counts_preserved_and_checked": true,
+    "non_target_not_proven_rows_must_be_identity_consistent": true,
+    "non_target_blockers_must_be_exactly_reconstructable": true,
+    "target_or_historical_integrity_failures_block_closure": true,
+    "global_audit_may_be_not_proven_only_for_non_target_incomplete_rows": true
   },
   "bridge_closure_contract": {
     "authoritative_v26_3_store_required": true,
