@@ -409,3 +409,20 @@ def test_legacy_browser_storage_bridge_waits_until_recovery_listener_is_ready(mo
 
     assert auth.ensure_supabase_auth(st) is False
     assert browser_calls == []
+
+
+def test_auth_ui_preserves_app_generated_password_validation_message():
+    detail = "كلمة المرور يجب أن تكون بين 8 و1024 حرفًا."
+    assert auth._auth_error_message(ValueError(detail), "fallback") == detail
+
+
+def test_auth_ui_preserves_sanitized_supabase_auth_message():
+    detail = "كلمة المرور لا تحتوي على أنواع الأحرف التي تتطلبها سياسة المشروع."
+    assert auth._auth_error_message(auth.SupabaseAuthError(detail), "fallback") == detail
+
+
+def test_auth_ui_uses_fallback_for_unknown_exception_type():
+    class UnknownError(Exception):
+        pass
+
+    assert auth._auth_error_message(UnknownError("private detail"), "fallback") == "fallback"
