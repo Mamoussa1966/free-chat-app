@@ -109,3 +109,45 @@ def test_password_update_maps_weak_password_code_too():
 
     with pytest.raises(SupabaseAuthError, match="سياسة قوة كلمة المرور"):
         client.update_password("recovery-access-token", TEST_VALUE)
+
+
+@pytest.mark.parametrize(
+    ("reasons", "expected"),
+    [
+        (["length", "characters"], "12 أحرف"),
+        (["characters"], "أنواع الأحرف"),
+        (["pwned"], "كلمات مرور مسرّبة"),
+    ],
+)
+def test_weak_password_reasons_are_translated_to_safe_arabic_guidance(reasons, expected):
+    client, _transport = make_client(
+        422,
+        {
+            "error_code": "weak_password",
+            "weak_password": {"reasons": reasons},
+            "msg": "Password should be at least 12 characters",
+        },
+    )
+
+    with pytest.raises(SupabaseAuthError) as caught:
+        client.sign_up("person@gmail.com", TEST_VALUE)
+
+    assert expected in str(caught.value)
+    assert "Password should" not in str(caught.value)
+
+
+def test_weak_password_ignores_unrecognized_reason_values():
+    client, _transport = make_client(
+        422,
+        {
+            "error_code": "weak_password",
+            "weak_password": {"reasons": ["length", "unexpected-private-detail"]},
+            "msg": "Password should be at least 12 characters",
+        },
+    )
+
+    with pytest.raises(SupabaseAuthError) as caught:
+        client.sign_up("person@gmail.com", TEST_VALUE)
+
+    assert "12 أحرف" in str(caught.value)
+    assert "unexpected-private-detail" not in str(caught.value)
