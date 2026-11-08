@@ -305,3 +305,30 @@ def test_password_update_rejects_missing_access_token_without_network():
     with pytest.raises(SupabaseAuthError, match="جلسة استعادة"):
         client.update_password("", "New-Test-Password-2026")
     assert transport.calls == []
+
+
+def test_login_does_not_apply_new_password_minimum_to_existing_account():
+    client, transport = make_client()
+    session = client.sign_in("a@gmail.com", "short7")
+
+    assert session.user_id == USER_ID
+    login = next(c for c in transport.calls if "grant_type=password" in c["url"])
+    assert login["json"]["password"] == "short7"
+
+
+def test_signup_keeps_minimum_length_policy_for_new_passwords():
+    client, transport = make_client()
+
+    with pytest.raises(ValueError, match="8 و1024"):
+        client.sign_up("a@gmail.com", "short7")
+
+    assert transport.calls == []
+
+
+def test_login_requires_a_non_empty_password_before_network():
+    client, transport = make_client()
+
+    with pytest.raises(ValueError, match="أدخل كلمة المرور"):
+        client.sign_in("a@gmail.com", "")
+
+    assert transport.calls == []
