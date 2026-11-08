@@ -18,7 +18,8 @@
     "tests/test_hotfix16425_release_contract.py",
     "tests/test_provider_runtime.py",
     "tests/test_hotfix16430_deployment_attestation.py",
-    "tests/test_hotfix16430_http_schema_alignment.py"
+    "tests/test_hotfix16430_http_schema_alignment.py",
+    "tests/test_hotfix16430_scoped_target_gate.py"
   ],
   "release_contract": {
     "runtime_label_matches_manifest_release": true,
