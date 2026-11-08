@@ -178,7 +178,7 @@ jobs:
           psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
             > /backup/source_extensions.tsv
-          PGOPTIONS='-c search_path=pg_catalog' PGOPTIONS='-c search_path=pg_catalog' psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+          PGOPTIONS="-c search_path=pg_catalog" psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,''),COALESCE(with_check,'') FROM pg_policies ORDER BY 1,2,3" \
             > /backup/source_policies.tsv
           psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
@@ -231,7 +231,7 @@ jobs:
           psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
             > /backup/restored_extensions.tsv
-          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+          PGOPTIONS="-c search_path=pg_catalog" psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,''),COALESCE(with_check,'') FROM pg_policies ORDER BY 1,2,3" \
             > /backup/restored_policies.tsv
           # Execute the same safely quoted count statements against the isolated restore.
