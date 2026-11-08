@@ -35,39 +35,68 @@ jobs:
           python - <<'PY'
           import os
           import re
+          import shlex
           from urllib.parse import urlsplit, unquote
-          value = os.environ.get("SUPABASE_PROD_DB_URL", "").strip()
-          if not value:
+          raw = os.environ.get("SUPABASE_PROD_DB_URL", "").strip()
+          if not raw:
               raise SystemExit("BACKUP_CONFIG=FAIL; SUPABASE_PROD_DB_URL is missing")
-          # Accept a bare PostgreSQL URI or a psql command containing exactly one URI.
-          value = value.strip("'\" ")
-          if not re.match(r"^postgres(?:ql)?://", value, flags=re.IGNORECASE):
-              match = re.search("postgres(?:ql)?://[^\\s'\"]+", value, flags=re.IGNORECASE)
-              if match:
-                  value = match.group(0)
-          parsed = urlsplit(value)
+          value = raw.strip("'\" ")
           project = "wzhsilufajemyqtednie"
-          host = (parsed.hostname or "").lower()
-          username = unquote(parsed.username or "")
+          host = user = database = ""
+          parsed = urlsplit(value)
+          if parsed.scheme.lower() in ("postgres", "postgresql"):
+              host = (parsed.hostname or "").lower()
+              user = unquote(parsed.username or "")
+              database = parsed.path.lstrip("/")
+          else:
+              # Accept libpq keyword/value connection strings (host=... user=... dbname=...).
+              # Also accept a psql command that contains one PostgreSQL URI.
+              match = re.search(r"postgres(?:ql)?://[^\\s'\"]+", value, flags=re.IGNORECASE)
+              if match:
+                  parsed = urlsplit(match.group(0))
+                  host = (parsed.hostname or "").lower()
+                  user = unquote(parsed.username or "")
+                  database = parsed.path.lstrip("/")
+              else:
+                  try:
+                      tokens = shlex.split(value)
+                  except ValueError:
+                      tokens = []
+                  kv = {}
+                  for token in tokens:
+                      if "=" in token:
+                          key, val = token.split("=", 1)
+                          kv[key.lower()] = val
+                  host = kv.get("host", "").lower()
+                  user = kv.get("user", "")
+                  database = kv.get("dbname", kv.get("database", ""))
+                  if not host and tokens:
+                      # Support a psql CLI command using -h/-U/-d without logging arguments.
+                      for index, token in enumerate(tokens[:-1]):
+                          if token in ("-h", "--host"):
+                              host = tokens[index + 1].lower()
+                          elif token in ("-U", "--username"):
+                              user = tokens[index + 1]
+                          elif token in ("-d", "--dbname"):
+                              database = tokens[index + 1]
           direct_host_ok = host == f"db.{project}.supabase.co"
           pooler_host_ok = host.endswith(".pooler.supabase.com")
-          pooler_user_ok = username == f"postgres.{project}"
-          database_ok = parsed.path in ("/postgres", "")
-          scheme_ok = parsed.scheme in ("postgres", "postgresql")
-          if not (scheme_ok and database_ok and (direct_host_ok or (pooler_host_ok and pooler_user_ok))):
+          pooler_user_ok = user == f"postgres.{project}"
+          database_ok = database in ("postgres", "")
+          project_ok = direct_host_ok or (pooler_host_ok and pooler_user_ok)
+          if not (project_ok and database_ok):
               user_shape = (
                   "postgres.<expected-project>" if pooler_user_ok else
-                  "postgres" if username == "postgres" else
+                  "postgres" if user == "postgres" else
                   "other-or-unparsed"
               )
               print(
                   "BACKUP_CONFIG_DIAGNOSTIC "
-                  f"scheme_ok={scheme_ok} host={host or 'unparsed'} "
-                  f"user_shape={user_shape} path={parsed.path or 'empty'} "
-                  f"direct_host_ok={direct_host_ok} pooler_host_ok={pooler_host_ok} "
-                  f"database_ok={database_ok}"
+                  f"host={host or 'unparsed'} user_shape={user_shape} "
+                  f"database={database or 'unparsed'} direct_host_ok={direct_host_ok} "
+                  f"pooler_host_ok={pooler_host_ok} database_ok={database_ok}"
               )
-              raise SystemExit("BACKUP_CONFIG=FAIL; DSN host/user/project format did not match the pinned production project")
+              raise SystemExit("BACKUP_CONFIG=FAIL; connection format does not identify the pinned production project")
           print("BACKUP_CONFIG=PASS; production project pin verified; secret value hidden")
           PY
 
