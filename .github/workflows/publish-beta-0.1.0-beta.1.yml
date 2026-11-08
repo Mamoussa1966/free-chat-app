@@ -1,0 +1,135 @@
+name: Publish AI Council v0.1.0-beta.1
+
+on:
+  create:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: public-beta-v0-1-0-beta-1
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.event.ref_type == 'branch' && github.event.ref == 'release-trigger/v0.1.0-beta.1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the exact created branch commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Confirm the release commit is the current production branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin gitops-v0.4-final
+          production_sha="$(git rev-parse FETCH_HEAD)"
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$GITHUB_SHA"
+          test "$source_sha" = "$production_sha"
+          echo "RELEASE_SOURCE_SHA=$source_sha"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install release dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Build release only after complete validation
+        run: python build_release.py --output project_release.zip
+
+      - name: Verify release ZIP, checksum, manifest, and safe contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path("project_release.zip")
+          manifest_path = Path("RELEASE_MANIFEST.json")
+          checksum_path = Path("project_release.zip.sha256")
+          for path in (archive, manifest_path, checksum_path):
+              if not path.is_file():
+                  raise SystemExit(f"RELEASE_FILE_MISSING: {path}")
+
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          checksum_line = checksum_path.read_text(encoding="utf-8").strip().split()
+          if not checksum_line or checksum_line[0] != digest:
+              raise SystemExit("RELEASE_SHA256_MISMATCH")
+
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if manifest.get("zip") != archive.name or manifest.get("sha256") != digest:
+              raise SystemExit("RELEASE_MANIFEST_MISMATCH")
+
+          with zipfile.ZipFile(archive) as zf:
+              names = zf.namelist()
+              if len(names) != len(set(names)):
+                  raise SystemExit("ZIP_DUPLICATE_PATHS")
+              for name in names:
+                  path = PurePosixPath(name)
+                  if path.is_absolute() or ".." in path.parts or chr(92) in name:
+                      raise SystemExit(f"ZIP_UNSAFE_PATH: {name}")
+                  if name in {".streamlit/secrets.toml", ".env"} or name.startswith(".env/"):
+                      raise SystemExit(f"ZIP_SECRET_FILE_BLOCKED: {name}")
+              required = {"main.py", "conversation_store.py", "VERSION.txt", "tests"}
+              top_level = {PurePosixPath(name).parts[0] for name in names if PurePosixPath(name).parts}
+              missing = sorted(required - top_level)
+              if missing:
+                  raise SystemExit(f"ZIP_ROOT_LAYOUT_MISSING: {missing}")
+              bad = zf.testzip()
+              if bad:
+                  raise SystemExit(f"ZIP_INTEGRITY_FAILURE: {bad}")
+          print("PUBLIC_BETA_PACKAGE_VALIDATION=PASS")
+          print("PUBLIC_BETA_SHA256=" + digest)
+          PY
+
+      - name: Refuse existing tag or release, then publish the verified public prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v0.1.0-beta.1"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "RELEASE_BLOCKED: $tag already has a release." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "RELEASE_BLOCKED: $tag already exists as a Git tag." >&2
+            exit 1
+          fi
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<'NOTES'
+          # AI Council v0.1.0-beta.1 — Public Beta
+
+          This public beta packages the verified AI Council production source.
+
+          ## Highlights
+          - Deterministic multi-provider Council runtime with explicit Free-tier provider allowlists.
+          - Gemini and Cloudflare Workers AI tested together in a live Council round.
+          - Authenticated conversation storage with user-scoped Supabase Auth and RLS acceptance coverage.
+          - Clear Arabic feedback for known Supabase password-policy rejections during signup and password recovery.
+
+          ## Release integrity
+          - Built from the exact `gitops-v0.4-final` production commit.
+          - Full release validation and regression suite executed before publication.
+          - ZIP integrity, required project layout, secret-file exclusions, release manifest, and SHA-256 verified.
+
+          ## Beta status
+          This is a prerelease intended for controlled beta use. Provider availability remains limited to explicitly approved Free-tier configurations.
+          NOTES
+          gh release create "$tag" project_release.zip project_release.zip.sha256 RELEASE_MANIFEST.json --target "$GITHUB_SHA" --title "AI Council v0.1.0-beta.1 — Public Beta" --prerelease --notes-file "$notes_file"
+          rm -f "$notes_file"
+          gh release view "$tag" --json url,tagName,isPrerelease,assets

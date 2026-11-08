@@ -156,6 +156,15 @@ _BROWSER_SESSION_COMPONENT = declare_component(
 )
 
 
+def _auth_error_message(exc: Exception, fallback: str) -> str:
+    """Preserve only app-generated validation and sanitized Auth messages."""
+    if isinstance(exc, (ValueError, SupabaseAuthError)):
+        detail = str(exc).strip()
+        if detail and len(detail) <= 500:
+            return detail
+    return fallback
+
+
 def _secret(st: Any, name: str) -> str:
     value = ""
     try:
@@ -520,7 +529,7 @@ def _render_password_recovery(st: Any) -> None:
 
     with st.form("supabase_password_recovery_form"):
         new_password = st.text_input(
-            "كلمة المرور الجديدة (8 أحرف على الأقل)",
+            "كلمة المرور الجديدة (8 أحرف على الأقل؛ قد يطلب المشروع شروطًا إضافية)",
             type="password",
             key=_RECOVERY_PASSWORD_WIDGET_KEY,
         )
@@ -553,7 +562,7 @@ def _render_password_recovery(st: Any) -> None:
                 raise SupabaseAuthError("مشروع الاسترداد غير معتمد.")
             user = client.update_password(str(recovery.get("access_token") or ""), new_password)
         except (ValueError, SupabaseAuthError) as exc:
-            st.error(str(exc) if isinstance(exc, SupabaseAuthError) else "كلمة المرور الجديدة غير صالحة.")
+            st.error(_auth_error_message(exc, "كلمة المرور الجديدة غير صالحة."))
             return
 
         state.pop(_RECOVERY_STATE_KEY, None)
@@ -700,7 +709,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                 _activate_session(st, session)
                 _schedule_browser_write(st, session.to_state())
             except (ValueError, SupabaseAuthError) as exc:
-                st.error(str(exc) if isinstance(exc, SupabaseAuthError) else "راجع البريد الإلكتروني وكلمة المرور.")
+                st.error(_auth_error_message(exc, "راجع البريد الإلكتروني وكلمة المرور."))
             else:
                 st.rerun()
 
@@ -722,8 +731,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                 client.send_password_recovery(recovery_email, recovery_redirect)
             except (ValueError, SupabaseAuthError) as exc:
                 st.error(
-                    str(exc) if isinstance(exc, SupabaseAuthError)
-                    else "راجع عنوان البريد الإلكتروني ورابط الاستعادة."
+                    _auth_error_message(exc, "راجع عنوان البريد الإلكتروني ورابط الاستعادة.")
                 )
             else:
                 st.success(
@@ -734,7 +742,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
     with sign_up_tab:
         with st.form("supabase_email_password_signup"):
             new_email = st.text_input("البريد الإلكتروني", key="supabase_signup_email")
-            new_password = st.text_input("كلمة المرور (8 أحرف على الأقل)", type="password", key="supabase_signup_password")
+            new_password = st.text_input("كلمة المرور (8 أحرف على الأقل؛ قد يطلب المشروع شروطًا إضافية)", type="password", key="supabase_signup_password")
             confirm_password = st.text_input("تأكيد كلمة المرور", type="password", key="supabase_signup_password_confirm")
             create = st.form_submit_button("إنشاء حساب", type="primary", use_container_width=True)
         if create:
@@ -744,7 +752,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                 try:
                     session = client.sign_up(new_email, new_password)
                 except (ValueError, SupabaseAuthError) as exc:
-                    st.error(str(exc) if isinstance(exc, SupabaseAuthError) else "راجع البريد الإلكتروني وكلمة المرور.")
+                    st.error(_auth_error_message(exc, "راجع البريد الإلكتروني وكلمة المرور."))
                 else:
                     if session is None:
                         st.success("تم استقبال طلب إنشاء الحساب. افتح رسالة التأكيد التي يرسلها Supabase ثم سجّل الدخول.")
