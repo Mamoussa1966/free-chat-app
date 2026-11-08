@@ -3029,6 +3029,40 @@ def _run_cloudflare_only_diagnostic(credentials: dict, model_candidates: dict) -
     )
 
 
+
+def _run_gemini_only_diagnostic(credentials: dict, model_candidates: dict) -> dict:
+    """Run one policy-gated Gemini diagnostic without Cloudflare or a Council Request.
+
+    diagnostic_seat enforces the explicit Google AI Studio Free Tier confirmation
+    and the pinned Gemini Free model allowlist before any official API dispatch.
+    This isolated path must never invoke another provider or create a Council
+    Request/Round.
+    """
+    seat = next(
+        (item for item in get_seats() if item.key == "gemini"),
+        None,
+    )
+    if seat is None:
+        return {
+            "seat": "gemini",
+            "name": "Gemini",
+            "label": "🔑 Gemini",
+            "status": "NOT_CONFIGURED",
+            "classification": "NOT_CONFIGURED",
+            "dispatch_reason": "CREDENTIAL_MISSING",
+            "attempted_models": [],
+            "attempt_summaries": [],
+            "attempt_telemetry": [],
+            "content": "",
+            "request_id": "",
+            "round": 0,
+        }
+    return diagnostic_seat(
+        seat,
+        credentials.get(seat.key),
+        model_candidates.get(seat.key),
+    )
+
 def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list[dict]:
     seats = get_seats()
     results: dict[str, dict] = {}
@@ -3091,6 +3125,15 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             with st.spinner("اختبار Cloudflare فقط عبر Workers AI Free…"):
                 cloudflare_result = _run_cloudflare_only_diagnostic(credentials, model_candidates)
                 st.session_state.last_diagnostics = [_public_result(cloudflare_result)]
+            st.rerun()
+        if st.button(
+            "🧪 اختبار Gemini فقط",
+            key="gemini_single_provider_diagnostic",
+            use_container_width=True,
+        ):
+            with st.spinner("اختبار Gemini فقط — Free Tier والنماذج المجانية المعتمدة…"):
+                gemini_result = _run_gemini_only_diagnostic(credentials, model_candidates)
+                st.session_state.last_diagnostics = [_public_result(gemini_result)]
             st.rerun()
         if st.button("🧪 Run Production Core Tests", use_container_width=True):
             with st.spinner("تشغيل Test Harness المحلي — بدون أي وكيل AI…"):
