@@ -140,6 +140,29 @@ jobs:
           LOCAL_ADMIN="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
           LOCAL_RESTORE="postgresql://postgres:postgres@127.0.0.1:54322/restore_validation?sslmode=disable"
 
+          # Supabase local may expose CREATE DATABASE to postgres while reserving
+          # SUSET-only function settings for supabase_admin. Use an actual
+          # superuser for the isolated restore; never broaden production grants.
+          local_superuser=$(psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+          if [ "$local_superuser" != "t" ]; then
+            candidate_admin="postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres?sslmode=disable"
+            candidate_superuser=""
+            if candidate_superuser=$(psql "$candidate_admin" -X -v ON_ERROR_STOP=1 -At \
+              -c "SELECT rolsuper FROM pg_roles WHERE rolname = current_user" 2>/dev/null); then
+              if [ "$candidate_superuser" = "t" ]; then
+                LOCAL_ADMIN="$candidate_admin"
+                LOCAL_RESTORE="postgresql://supabase_admin:postgres@127.0.0.1:54322/restore_validation?sslmode=disable"
+                local_superuser="t"
+              fi
+            fi
+          fi
+          if [ "$local_superuser" != "t" ]; then
+            echo "RESTORE_ADMIN=FAIL; isolated local PostgreSQL superuser access is unavailable"
+            exit 24
+          fi
+          echo "RESTORE_ADMIN=PASS; isolated restore uses a verified local superuser"
+
           # Full logical dump: all database schemas, table data and large objects.
           # The source connection is used only by pg_dump / read-only catalog queries.
           pg_dump --no-owner --no-acl --format=custom --blobs \
