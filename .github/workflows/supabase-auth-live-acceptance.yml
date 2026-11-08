@@ -13,10 +13,7 @@ permissions:
 jobs:
   request-test-recovery:
     name: Send recovery links to the two allowlisted test accounts
-    if: >-
-      github.repository == 'Mamoussa1966/free-chat-app' &&
-      github.actor == 'Mamoussa1966' &&
-      github.ref == 'refs/heads/ci/supabase-auth-live-acceptance-dispatch'
+    if: false # one-shot recovery dispatch completed; prevent accidental repeats
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
