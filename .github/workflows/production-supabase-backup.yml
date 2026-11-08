@@ -173,7 +173,7 @@ jobs:
 
           # Inventory every non-system schema, active extension, RLS policy and table row count.
           psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
-            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' ORDER BY 1" \
+            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp_%' AND nspname NOT LIKE 'pg_toast_temp_%' ORDER BY 1" \
             > /backup/source_schemas.txt
           psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
@@ -226,7 +226,7 @@ jobs:
 
           # Compare schemas, extension versions, exact RLS policy definitions and all table row counts.
           psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At \
-            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' ORDER BY 1" \
+            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp_%' AND nspname NOT LIKE 'pg_toast_temp_%' ORDER BY 1" \
             > /backup/restored_schemas.txt
           psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
