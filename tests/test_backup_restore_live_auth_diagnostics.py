@@ -75,6 +75,12 @@ def test_live_restore_accepts_identical_passwords_for_distinct_accounts(monkeypa
     assert password_a == password_b
 
 
+def test_expected_test_publishable_key_fingerprint_is_a_sha256_digest():
+    from scripts.test_backup_restore_live import EXPECTED_TEST_PUBLISHABLE_KEY_SHA256
+
+    assert len(EXPECTED_TEST_PUBLISHABLE_KEY_SHA256) == 64
+    assert all(character in "0123456789abcdef" for character in EXPECTED_TEST_PUBLISHABLE_KEY_SHA256)
+
 def test_live_restore_password_secret_rejects_blank_value_without_exposing_it(monkeypatch):
     monkeypatch.setenv("SUPABASE_TEST_USER_A_PASSWORD", "   ")
     try:
