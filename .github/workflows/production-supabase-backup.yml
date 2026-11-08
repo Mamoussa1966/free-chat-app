@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 60
     env:
       SUPABASE_PROD_DB_URL: ${{ secrets.SUPABASE_PROD_DB_URL }}
+      PGSSLMODE: require
 
     steps:
       - name: Checkout
@@ -98,6 +99,20 @@ jobs:
               )
               raise SystemExit("BACKUP_CONFIG=FAIL; connection format does not identify the pinned production project")
           print("BACKUP_CONFIG=PASS; production project pin verified; secret value hidden")
+          PY
+
+      - name: Verify backup encryption secret is configured
+        env:
+          SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          phrase = os.environ.get("SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE", "")
+          if len(phrase.encode("utf-8")) < 24:
+              raise SystemExit("BACKUP_ENCRYPTION_CONFIG=FAIL; passphrase missing or too short")
+          print("BACKUP_ENCRYPTION_CONFIG=PASS; user-controlled passphrase present; value hidden")
           PY
 
       - name: Prepare isolated Supabase PostgreSQL 17
@@ -217,6 +232,13 @@ jobs:
           pg_restore --list /backup/database.dump > /backup/archive_toc.txt
           test -s /backup/archive_toc.txt
           test -s /backup/roles.sql
+          # Storage binary objects live outside PostgreSQL; fail closed if any exist.
+          IFS='|' read -r auth_users storage_buckets storage_objects conversations large_objects < /backup/source_key_counts.tsv
+          if [ "$storage_objects" != "0" ]; then
+            echo "STORAGE_BINARY_EXPORT=BLOCKED; nonzero object count requires independent binary export and restore validation"
+            exit 23
+          fi
+          echo "STORAGE_BINARY_EXPORT=NOT_REQUIRED; snapshot object count is zero"
           echo "FULL_DATABASE_EXPORT=PASS"
           echo "ISOLATED_DATABASE_RESTORE=PASS"
           echo "SCHEMA_EXTENSION_POLICY_AND_ROWCOUNT_MATCH=PASS"
@@ -225,6 +247,7 @@ jobs:
 
           docker run --rm --network host \
             -e SUPABASE_PROD_DB_URL \
+            -e PGSSLMODE \
             -v "$PWD/backup-work:/backup" \
             postgres:17-bookworm bash /backup/run_dump_restore.sh
 
@@ -273,63 +296,200 @@ jobs:
           echo "BACKUP_ZIP_SHA256=$(cut -d ' ' -f1 package-sha256.txt)" >> "$GITHUB_ENV"
           echo "BACKUP_ZIP_SIZE=$(stat -c '%s' supabase-db-dump-2026-11-08.zip)" >> "$GITHUB_ENV"
 
-      - name: Encrypt the ZIP for private off-site transfer
+      - name: Encrypt backup with user-controlled passphrase and verify round trip
+        env:
+          SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE }}
         shell: bash
         run: |
           set -euo pipefail
-          cat > backup-work/backup-recipient.pem <<'PEM'
-          -----BEGIN PUBLIC KEY-----
-          MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA0dhf+eOP4iJO+uCVC/e6
-          6aMwU5LGuU5px5gYKr5/dyEkZj+meL21XZHymn8Z6VkeKokzier91wmhhI6BgCO5
-          O2yuKd5bI/r1Ez2hg13Jl2PMhpyHJL7KxI/1tK6Qg2TOD0qg6mMVOsUmerpd0mAV
-          4NiK/BKC+cQOOPIUVgR0Plb9aZUhRtQoyECi2mQ0H7FFc8EqwOAfjp7QAkpMDO8M
-          o02MiEbjL7dh7eDbo3qUnWzarah8xLB+cU5qaxSzdqSvyZth4p8fwSOBKLCaafyq
-          Xpjd2k0w+HpMTBXM4cXgRzXJkUaAydcqiLonvup5OayyseSE4388HnL3d8TZ4OiW
-          zILaB4Um5u4U0uJDqtAHMPtVoo9vsVVVxPgS9BYiYPjI43Rgd0fVpcwHEjMWPv5k
-          dYYfM9yqmiLOBZdPzuQ6iimujKEUEcAddw4Oai5ZWFWauKhh97w3Sk7ONCQN4Pfr
-          Vs5ti/bMrlQdEIv2bxgVkdyBcrU2BdHs8zF9CGPSivxDKRizexDcDfMyK21CXUeX
-          rQVq4q+cZWsLQjZaAtCtewJM2X/yqyiTeAKfIQpV3Nhs9YZFof1AV/nzu2ZeuzMK
-          QMOYaGgoip34Fzm/NSHvZ+vcSbeV67BxNc0nOCJwX9k/dDvEIh+mlaFsuzh/wThq
-          61mZw3PowhxNipGoFcrrAtkCAwEAAQ==
-          -----END PUBLIC KEY-----
-          PEM
           python - <<'PY'
           from pathlib import Path
-          import secrets
-          from cryptography.hazmat.primitives import hashes, serialization
-          from cryptography.hazmat.primitives.asymmetric import padding
+          import hashlib
+          import hmac
+          import io
+          import os
+          import shutil
+          import zipfile
           from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-          payload = Path("supabase-db-dump-2026-11-08.zip").read_bytes()
-          public = serialization.load_pem_public_key(Path("backup-work/backup-recipient.pem").read_bytes())
-          key = secrets.token_bytes(32)
-          nonce = secrets.token_bytes(12)
-          aad = b"AI-Council-Supabase-Backup-v1"
-          ciphertext = AESGCM(key).encrypt(nonce, payload, aad)
-          wrapped_key = public.encrypt(
-              key,
-              padding.OAEP(
-                  mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                  algorithm=hashes.SHA256(),
-                  label=aad,
-              ),
+          PASSPHRASE = os.environ.get("SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE", "")
+          if len(PASSPHRASE.encode("utf-8")) < 24:
+              raise SystemExit("BACKUP_ENCRYPTION_CONFIG=FAIL; passphrase missing or too short")
+
+          SOURCE_ZIP = Path("supabase-db-dump-2026-11-08.zip")
+          TRANSFER = Path("transfer")
+          TRANSFER.mkdir(exist_ok=True)
+          if not SOURCE_ZIP.is_file() or SOURCE_ZIP.stat().st_size == 0:
+              raise SystemExit("BACKUP_ENCRYPTION=FAIL; plaintext ZIP missing or empty")
+
+          plaintext = SOURCE_ZIP.read_bytes()
+          expected_plain_sha = hashlib.sha256(plaintext).hexdigest()
+          try:
+              with zipfile.ZipFile(io.BytesIO(plaintext)) as archive:
+                  bad_member = archive.testzip()
+                  if bad_member:
+                      raise SystemExit("BACKUP_ARCHIVE=FAIL; corrupt ZIP member")
+                  required = {
+                      "database.dump", "roles.sql", "source_schemas.txt",
+                      "source_extensions.tsv", "source_policies.tsv",
+                      "source_rows.tsv", "source_key_counts.tsv",
+                      "README-RESTORE-REPORT.md", "RESTORE-VALIDATION.txt", "SHA256SUMS"
+                  }
+                  if not required.issubset(set(archive.namelist())):
+                      raise SystemExit("BACKUP_ARCHIVE=FAIL; required content missing")
+                  for line in archive.read("SHA256SUMS").decode("utf-8").splitlines():
+                      digest, name = line.split(maxsplit=1)
+                      name = name.lstrip("*")
+                      if not hmac.compare_digest(hashlib.sha256(archive.read(name)).hexdigest(), digest):
+                          raise SystemExit("BACKUP_ARCHIVE=FAIL; internal SHA-256 mismatch")
+          except (OSError, zipfile.BadZipFile, KeyError, ValueError) as exc:
+              raise SystemExit(f"BACKUP_ARCHIVE=FAIL; validation error: {type(exc).__name__}")
+
+          SALT = os.urandom(16)
+          NONCE = os.urandom(12)
+          N, R, P = 2**15, 8, 1
+          AAD = b"AI-COUNCIL-SUPABASE-BACKUP-V1"
+          MAGIC = b"AICBKP1"
+
+          def derive_key(salt):
+              return Scrypt(salt=salt, length=32, n=N, r=R, p=P).derive(PASSPHRASE.encode("utf-8"))
+
+          envelope = MAGIC + SALT + NONCE + AESGCM(derive_key(SALT)).encrypt(NONCE, plaintext, AAD)
+          encrypted_path = TRANSFER / "supabase-db-dump-2026-11-08.zip.enc"
+          encrypted_path.write_bytes(envelope)
+
+          encoded = encrypted_path.read_bytes()
+          if encoded[:len(MAGIC)] != MAGIC:
+              raise SystemExit("ENCRYPTION_ROUNDTRIP=FAIL; envelope header mismatch")
+          offset = len(MAGIC)
+          read_salt = encoded[offset:offset + 16]
+          offset += 16
+          read_nonce = encoded[offset:offset + 12]
+          offset += 12
+          recovered = AESGCM(derive_key(read_salt)).decrypt(read_nonce, encoded[offset:], AAD)
+          if not hmac.compare_digest(hashlib.sha256(recovered).hexdigest(), expected_plain_sha):
+              raise SystemExit("ENCRYPTION_ROUNDTRIP=FAIL; decrypted SHA-256 mismatch")
+          with zipfile.ZipFile(io.BytesIO(recovered)) as archive:
+              if archive.testzip():
+                  raise SystemExit("ENCRYPTION_ROUNDTRIP=FAIL; decrypted ZIP integrity check failed")
+
+          (TRANSFER / "BACKUP-PACKAGE-SHA256.txt").write_text(
+              f"{expected_plain_sha}  supabase-db-dump-2026-11-08.zip (decrypted payload)\n",
+              encoding="utf-8",
           )
-          Path("transfer/supabase-db-dump-2026-11-08.zip.enc").write_bytes(nonce + ciphertext)
-          Path("transfer/backup-key.enc").write_bytes(wrapped_key)
+          encrypted_sha = hashlib.sha256(envelope).hexdigest()
+          (TRANSFER / "ENCRYPTED-PAYLOAD-SHA256.txt").write_text(
+              f"{encrypted_sha}  supabase-db-dump-2026-11-08.zip.enc\n",
+              encoding="utf-8",
+          )
+
+          decrypt_helper = r'''#!/usr/bin/env python3
+          """Decrypt and verify an AI Council Supabase backup."""
+          import argparse
+          import getpass
+          import hashlib
+          import hmac
+          import os
+          import sys
+          from pathlib import Path
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+          MAGIC = b"AICBKP1"
+          AAD = b"AI-COUNCIL-SUPABASE-BACKUP-V1"
+          N, R, P = 2**15, 8, 1
+
+          def main():
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument("encrypted_file", type=Path)
+              parser.add_argument("output_zip", type=Path)
+              args = parser.parse_args()
+              if args.output_zip.exists():
+                  print("Refusing to overwrite an existing output file.", file=sys.stderr)
+                  return 2
+              phrase = getpass.getpass("Backup passphrase: ")
+              if len(phrase.encode("utf-8")) < 24:
+                  print("Passphrase is too short.", file=sys.stderr)
+                  return 2
+              blob = args.encrypted_file.read_bytes()
+              if blob[:len(MAGIC)] != MAGIC:
+                  print("Unrecognized encrypted backup format.", file=sys.stderr)
+                  return 2
+              pos = len(MAGIC)
+              salt, nonce, ciphertext = blob[pos:pos+16], blob[pos+16:pos+28], blob[pos+28:]
+              key = Scrypt(salt=salt, length=32, n=N, r=R, p=P).derive(phrase.encode("utf-8"))
+              try:
+                  payload = AESGCM(key).decrypt(nonce, ciphertext, AAD)
+              except Exception:
+                  print("Decryption failed: incorrect passphrase or damaged file.", file=sys.stderr)
+                  return 1
+              digest = hashlib.sha256(payload).hexdigest()
+              sidecar = args.encrypted_file.parent / "BACKUP-PACKAGE-SHA256.txt"
+              if sidecar.exists():
+                  expected = sidecar.read_text(encoding="utf-8").split()[0]
+                  if not hmac.compare_digest(digest, expected):
+                      print("Decrypted archive SHA-256 mismatch.", file=sys.stderr)
+                      return 1
+              fd = os.open(args.output_zip, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(fd, "wb") as output:
+                  output.write(payload)
+              print("Decrypted archive created:", args.output_zip)
+              print("SHA-256:", digest)
+              return 0
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          '''
+          (TRANSFER / "decrypt_backup.py").write_text(decrypt_helper, encoding="utf-8")
+
+          readme = """Encrypted database backup bundle.
+          The database backup is not stored as plaintext in this bundle.
+          Payload: supabase-db-dump-2026-11-08.zip.enc
+          Encryption: AES-256-GCM; passphrase KDF: scrypt (N=32768, r=8, p=1).
+          The passphrase is intentionally not included.
+          1. Extract this outer ZIP.
+          2. Install Python 3 and cryptography: python -m pip install cryptography
+          3. Run: python decrypt_backup.py supabase-db-dump-2026-11-08.zip.enc restored-backup.zip
+          4. Enter the separately stored SUPABASE_BACKUP_ENCRYPTION_PASSPHRASE when prompted.
+          5. Verify restored-backup.zip using BACKUP-PACKAGE-SHA256.txt.
+          """
+          (TRANSFER / "ENCRYPTION-README.md").write_text(readme, encoding="utf-8")
+
+          # Preserve the previously confirmed Dropbox filename as a valid ZIP bundle;
+          # its database payload remains encrypted and requires the separately held passphrase.
+          outer_zip = Path("supabase-db-dump-2026-11-08.zip")
+          with zipfile.ZipFile(outer_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+              for item in sorted(TRANSFER.iterdir()):
+                  if item.is_file():
+                      archive.write(item, arcname=item.name)
+          with zipfile.ZipFile(outer_zip) as archive:
+              if archive.testzip():
+                  raise SystemExit("TRANSFER_BUNDLE=FAIL; outer ZIP integrity check failed")
+
+          outer_sha = hashlib.sha256(outer_zip.read_bytes()).hexdigest()
+          outer_size = outer_zip.stat().st_size
+          Path("package-sha256.txt").write_text(
+              f"{outer_sha}  {outer_zip.name}\n", encoding="utf-8"
+          )
+
+          SOURCE_ZIP.unlink()
+          shutil.rmtree("backup-work", ignore_errors=True)
+          shutil.rmtree("package", ignore_errors=True)
+          if SOURCE_ZIP.exists() or Path("backup-work").exists() or Path("package").exists():
+              raise SystemExit("PLAINTEXT_BACKUP_REMOVED=FAIL")
+          print("BACKUP_ARCHIVE=PASS")
+          print("ENCRYPTION_ROUNDTRIP=PASS")
+          print("TRANSFER_BUNDLE=PASS")
+          print("PLAINTEXT_BACKUP_REMOVED=PASS")
+          print(f"TRANSFER_BUNDLE_SHA256={outer_sha}")
+          print(f"TRANSFER_BUNDLE_SIZE={outer_size}")
           PY
-          cp package-sha256.txt transfer/
-          (cd transfer && sha256sum supabase-db-dump-2026-11-08.zip.enc backup-key.enc > transfer-sha256.txt)
-          rm -rf backup-work package supabase-db-dump-2026-11-08.zip
-          test -s transfer/supabase-db-dump-2026-11-08.zip.enc
-          test -s transfer/backup-key.enc
-          echo "PLAINTEXT_BACKUP_REMOVED=PASS"
-          echo "BACKUP_ZIP_SHA256=$BACKUP_ZIP_SHA256"
-          echo "BACKUP_ZIP_SIZE=$BACKUP_ZIP_SIZE"
 
       - name: Upload encrypted one-day transfer artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: supabase-prod-backup-2026-11-08-encrypted
+          name: supabase-prod-backup-2026-11-08-passphrase-encrypted
           path: transfer/
           if-no-files-found: error
           retention-days: 1
