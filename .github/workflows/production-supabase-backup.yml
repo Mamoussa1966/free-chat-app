@@ -162,13 +162,12 @@ jobs:
             -c "SELECT schemaname,tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') AND schemaname NOT LIKE 'pg_toast%' ORDER BY 1,2" \
             > /backup/source_tables.list
 
-          : > /backup/source_rows.tsv
-          while IFS="|" read -r schema table; do
-            count=$(psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
-              -v schema="$schema" -v table="$table" \
-              -c 'SELECT count(*) FROM :"schema".:"table";')
-            printf "%s.%s\t%s\n" "$schema" "$table" "$count" >> /backup/source_rows.tsv
-          done < /backup/source_tables.list
+          # Generate table-count statements server-side with safely quoted identifiers.
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT format('SELECT %L || chr(9) || count(*)::text FROM %I.%I;', schemaname || '.' || tablename, schemaname, tablename) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') AND schemaname NOT LIKE 'pg_toast%' ORDER BY schemaname,tablename" \
+            > /backup/count_queries.sql
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -f /backup/count_queries.sql \
+            > /backup/source_rows.tsv
 
           psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations), (SELECT count(*) FROM pg_largeobject_metadata)" \
@@ -212,13 +211,9 @@ jobs:
           psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,''),COALESCE(with_check,'') FROM pg_policies ORDER BY 1,2,3" \
             > /backup/restored_policies.tsv
-          : > /backup/restored_rows.tsv
-          while IFS="|" read -r schema table; do
-            count=$(psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At \
-              -v schema="$schema" -v table="$table" \
-              -c 'SELECT count(*) FROM :"schema".:"table";')
-            printf "%s.%s\t%s\n" "$schema" "$table" "$count" >> /backup/restored_rows.tsv
-          done < /backup/source_tables.list
+          # Execute the same safely quoted count statements against the isolated restore.
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -f /backup/count_queries.sql \
+            > /backup/restored_rows.tsv
 
           psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations), (SELECT count(*) FROM pg_largeobject_metadata)" \
@@ -283,13 +278,13 @@ jobs:
           EOF
 
           sha256sum backup-work/database.dump backup-work/roles.sql \
-            backup-work/source_schemas.txt backup-work/source_extensions.tsv \
-            backup-work/source_policies.tsv backup-work/source_rows.tsv \
+            backup-work/source_schemas.txt backup-work/source_tables.list backup-work/count_queries.sql \
+            backup-work/source_extensions.tsv backup-work/source_policies.tsv backup-work/source_rows.tsv \
             backup-work/source_key_counts.tsv backup-work/source_server_version.txt \
             backup-work/README-RESTORE-REPORT.md backup-work/RESTORE-VALIDATION.txt \
             > backup-work/SHA256SUMS
           mkdir -p package
-          cp backup-work/{database.dump,roles.sql,source_schemas.txt,source_extensions.tsv,source_policies.tsv,source_rows.tsv,source_key_counts.tsv,source_server_version.txt,README-RESTORE-REPORT.md,RESTORE-VALIDATION.txt,SHA256SUMS} package/
+          cp backup-work/{database.dump,roles.sql,source_schemas.txt,source_tables.list,count_queries.sql,source_extensions.tsv,source_policies.tsv,source_rows.tsv,source_key_counts.tsv,source_server_version.txt,README-RESTORE-REPORT.md,RESTORE-VALIDATION.txt,SHA256SUMS} package/
           (cd package && zip -q -9 -r ../supabase-db-dump-2026-11-08.zip .)
           unzip -t supabase-db-dump-2026-11-08.zip
           sha256sum supabase-db-dump-2026-11-08.zip > package-sha256.txt
@@ -331,7 +326,7 @@ jobs:
                   if bad_member:
                       raise SystemExit("BACKUP_ARCHIVE=FAIL; corrupt ZIP member")
                   required = {
-                      "database.dump", "roles.sql", "source_schemas.txt",
+                      "database.dump", "roles.sql", "source_schemas.txt", "source_tables.list", "count_queries.sql",
                       "source_extensions.tsv", "source_policies.tsv",
                       "source_rows.tsv", "source_key_counts.tsv",
                       "README-RESTORE-REPORT.md", "RESTORE-VALIDATION.txt", "SHA256SUMS"
@@ -469,9 +464,13 @@ jobs:
 
           outer_sha = hashlib.sha256(outer_zip.read_bytes()).hexdigest()
           outer_size = outer_zip.stat().st_size
-          Path("package-sha256.txt").write_text(
+          bundle_path = TRANSFER / outer_zip.name
+          outer_zip.replace(bundle_path)
+          (TRANSFER / "TRANSFER-BUNDLE-SHA256.txt").write_text(
               f"{outer_sha}  {outer_zip.name}\n", encoding="utf-8"
           )
+          if not bundle_path.is_file() or bundle_path.stat().st_size != outer_size:
+              raise SystemExit("TRANSFER_BUNDLE=FAIL; final ZIP was not placed in artifact folder")
 
           SOURCE_ZIP.unlink()
           shutil.rmtree("backup-work", ignore_errors=True)
