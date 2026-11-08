@@ -752,7 +752,7 @@ def ensure_supabase_auth(st: Any) -> bool | None:
                 try:
                     session = client.sign_up(new_email, new_password)
                 except (ValueError, SupabaseAuthError) as exc:
-                    st.error(str(exc) if isinstance(exc, SupabaseAuthError) else "راجع البريد الإلكتروني وكلمة المرور.")
+                    st.error(_auth_error_message(exc, "راجع البريد الإلكتروني وكلمة المرور."))
                 else:
                     if session is None:
                         st.success("تم استقبال طلب إنشاء الحساب. افتح رسالة التأكيد التي يرسلها Supabase ثم سجّل الدخول.")
