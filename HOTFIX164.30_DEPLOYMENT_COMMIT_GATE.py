@@ -376,6 +376,7 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
     _eq(scope_contract, "non_target_not_proven_rows_must_be_identity_consistent", True, "MANIFEST_SCOPE", errors)
     _eq(scope_contract, "non_target_blockers_must_be_exactly_reconstructable", True, "MANIFEST_SCOPE", errors)
     _eq(scope_contract, "target_or_historical_integrity_failures_block_closure", True, "MANIFEST_SCOPE", errors)
+    _eq(scope_contract, "global_audit_may_be_not_proven_only_for_non_target_incomplete_rows", True, "MANIFEST_SCOPE", errors)
     if (manifest.get("guardrails") or {}).get("version_txt_contract_preserved") is not True:
         errors.append("MANIFEST_VERSION_GUARDRAIL_NOT_PASS")
 
