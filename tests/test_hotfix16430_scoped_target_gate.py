@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import importlib.util
 import json
@@ -11,10 +10,21 @@ import zipfile
 from hotfix16430_deployment_attestation import compute_source_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_TEMPLATE = ROOT / "evidence" / "HOTFIX164.30_DEPLOYMENT_BRIDGE_EVIDENCE.json"
+TARGET_IDS = (
+    "025b74c0d0e044ac9a54cb56d4bd85f8",
+    "947c8cd69e0c4349892423af4751a426",
+)
 DEPLOYED_SHA = "a" * 40
 CORE = "V22.1-HOTFIX123.2-SINGLE-REQUEST-DETERMINISM-LIVE-CASCADE"
 APP_IDENTITY = "HOTFIX164.30 — DEPLOYED-COMMIT-BOUND LIVE CLOSURE"
+PHASES = [
+    "SOURCE_EXECUTION", "WRITE", "VALIDATE", "COMMIT", "BARRIER",
+    "TARGET_DISPATCH", "TARGET_RESPONSE", "READ", "MATCH",
+]
+PHASE_STATUSES = [
+    "SUCCESS", "RECORDED", "PASS", "PASS", "PASS",
+    "ACCEPTED", "SUCCESS", "PASS", "PASS",
+]
 
 
 def _load_gate():
@@ -26,8 +36,8 @@ def _load_gate():
     return module
 
 
-def _artifact_map(*, incomplete: bool = False) -> dict[str, str]:
-    result = {
+def _artifact_map(*, incomplete: bool = False, bridge: bool = False) -> dict[str, str]:
+    return {
         "SESSION_ID": "PASS",
         "USER_MESSAGE": "PASS",
         "REQUEST_ID": "PASS",
@@ -35,14 +45,15 @@ def _artifact_map(*, incomplete: bool = False) -> dict[str, str]:
         "SEAT_RESULTS": "PASS",
         "EXECUTED_MODELS": "NOT_PROVEN" if incomplete else "PASS",
         "CASCADE_SUMMARIES": "NOT_PROVEN" if incomplete else "PASS",
-        "BRIDGE_AUDIT": "NOT_REQUESTED",
+        "BRIDGE_AUDIT": "PASS" if bridge else "NOT_REQUESTED",
         "FINAL_RESULT": "PASS",
         "AUTHORITATIVE_METRICS": "PASS",
     }
-    return result
 
 
-def _historical_request(rid: str, ordinal: int, started: int, *, incomplete: bool = False) -> dict:
+def _request_diagnostic(
+    rid: str, ordinal: int, started: int, *, incomplete: bool = False, bridge: bool = False
+) -> dict:
     return {
         "request_id": rid,
         "canonical_request_present": True,
@@ -60,10 +71,10 @@ def _historical_request(rid: str, ordinal: int, started: int, *, incomplete: boo
         "cascade_summary_present": not incomplete,
         "synthesis_record_present": True,
         "authoritative_metrics_present": True,
-        "bridge_requested": False,
-        "bridge_contract": "NOT_REQUESTED",
-        "strict_live_bridge_status": "NOT_REQUESTED",
-        "required_artifacts": _artifact_map(incomplete=incomplete),
+        "bridge_requested": bridge,
+        "bridge_contract": "STRICT_LIVE" if bridge else "NOT_REQUESTED",
+        "strict_live_bridge_status": "PASS" if bridge else "NOT_REQUESTED",
+        "required_artifacts": _artifact_map(incomplete=incomplete, bridge=bridge),
         "missing_required_artifacts": (
             ["CASCADE_SUMMARIES", "EXECUTED_MODELS"] if incomplete else []
         ),
@@ -71,32 +82,123 @@ def _historical_request(rid: str, ordinal: int, started: int, *, incomplete: boo
     }
 
 
+def _target_request_row(rid: str, ordinal: int) -> dict:
+    round_id = f"test-conversation:{rid}:r{ordinal}"
+    bridge_hash = hashlib.sha256(f"bridge-{ordinal}".encode()).hexdigest()
+    payload_hash = hashlib.sha256(f"prepared-body-{ordinal}".encode()).hexdigest()
+    endpoint_hash = hashlib.sha256(b"https://generativelanguage.googleapis.com").hexdigest()
+    phases = [
+        {
+            "seq": index,
+            "phase": phase,
+            "status": PHASE_STATUSES[index - 1],
+            "request_identity_status": "PASS",
+            "round_identity_status": "PASS",
+            "role_identity_status": "PASS",
+        }
+        for index, phase in enumerate(PHASES, start=1)
+    ]
+    attestation = {
+        "schema": "hotfix164.29-runtime-http-attestation/v1",
+        "request_id": rid,
+        "canonical_round_id": round_id,
+        "canonical_round_ordinal": str(ordinal),
+        "bridge_id_hash": bridge_hash,
+        "source_provider": "DeepSeek",
+        "source_seat": "7",
+        "target_provider": "Gemini",
+        "target_seat": "2",
+        "executed_model": "gemini-3.6-flash",
+        "payload_sha256": payload_hash,
+        "endpoint_sha256": endpoint_hash,
+        "payload_bytes": 2048 + ordinal,
+        "payload_hash_integrity": "PASS",
+        "http_payload_attested": "YES",
+        "transport_attempt_status": "HTTP_RESPONSE_RECEIVED",
+        "transport_http_status_code": 200,
+        "transport_error_class": "NOT_PROVEN",
+        "transport_boundary": "requests.PreparedRequest.body",
+        "prepared_request_verified": "YES",
+        "request_binding_status": "PASS",
+        "round_binding_status": "PASS",
+        "target_binding_status": "PASS",
+        "response_binding_status": "PASS",
+        "canonical_round_binding_status": "PASS",
+        "runtime_sequence_valid": "PASS",
+        "source_execution_proven": "PASS",
+        "write_status": "PASS",
+        "validate_status": "PASS",
+        "commit_status": "PASS",
+        "barrier_status": "PASS",
+        "target_dispatch_status": "PASS",
+        "target_response_status": "PASS",
+        "read_status": "PASS",
+        "match_status": "PASS",
+        "user_prompt_contains_value": "NO",
+        "target_prompt_contains_value": "NO",
+        "http_payload_contains_value": "NO",
+        "http_payload_contains_bridge_key": "NO",
+        "http_payload_contains_bridge_id": "NO",
+        "http_payload_contains_request_id": "NO",
+        "http_payload_contains_canonical_round_id": "NO",
+        "user_prompt_contains_bridge_id": "NO",
+        "provider_prompt_contains_bridge_id": "NO",
+        "target_prompt_contains_bridge_id": "NO",
+        "target_prompt_contains_bridge_key": "NO",
+        "target_prompt_contains_request_id": "NO",
+        "target_prompt_contains_canonical_round_id": "NO",
+        "control_plane_identity_leak": "NO",
+        "sanitized_representation_only": "PASS",
+        "application_owned": "PASS",
+        "bridge_gate_status": "PASS",
+        "terminal_state": "COMMITTED",
+        "bridge_state_terminal": "COMMITTED",
+        "phase_sequence": phases,
+        "expected_phase_sequence": PHASES,
+        "raw_payload_exported": False,
+        "raw_prompt_exported": False,
+        "raw_bridge_value_exported": False,
+        "raw_bridge_id_exported": False,
+    }
+    return {
+        "target_slot": ordinal,
+        "request_id": rid,
+        "canonical_request_status": "PASS",
+        "message_request_binding_status": "PASS",
+        "canonical_round_binding_status": "PASS",
+        "canonical_round_id": round_id,
+        "canonical_round_ordinal": str(ordinal),
+        "required_request_artifacts_status": "PASS",
+        "bridge_runtime_evidence_record_count_for_request": 1,
+        "bridge_projection_record_count_for_request": 1,
+        "bridge_projection_binding_status": "PASS",
+        "bridge_request_round_binding_status": "PASS",
+        "bridge_proof_status": "PASS",
+        "bridge_id_hash": bridge_hash,
+        "runtime_http_attestation": attestation,
+        "missing_evidence": [],
+        "failure_reasons": [],
+        "status": "PASS",
+    }
+
+
 def _valid_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
-    """Create a deterministic 14-row history around the two real target proofs.
+    """Build a provider-free 14-row fixture with two explicit, fully attested targets."""
+    target_rows = [_target_request_row(rid, slot) for slot, rid in enumerate(TARGET_IDS, start=1)]
+    requests = [
+        _request_diagnostic(rid, slot, 2, bridge=True)
+        for slot, rid in enumerate(TARGET_IDS, start=1)
+    ]
 
-    The target Bridge/HTTP attestations are copied intact from the repository's
-    historical sample; only timestamps, deployment hashes and additional
-    non-target history diagnostics are prepared for this isolated unit test.
-    """
-    report = json.loads(EVIDENCE_TEMPLATE.read_text(encoding="utf-8"))
-    report = copy.deepcopy(report)
-    target_ids = list(report["target_request_ids"])
-    assert len(target_ids) == 2
-    assert [row["request_id"] for row in report["target_requests"]] == target_ids
-    requests = copy.deepcopy(report["requests"])
-    assert len(requests) == 2
-    assert [row["request_id"] for row in requests] == target_ids
-
-    # Ten non-target Requests have complete historical diagnostics. Their
-    # persisted execution counts sum to 22; the two selected targets add four.
+    # Ten other historical Requests have complete execution diagnostics.
     pass_counts = [2, 2, 2, 2, 2, 2, 3, 3, 2, 2]
-    for offset, started in enumerate(pass_counts, start=3):
-        requests.append(_historical_request(f"{offset:032x}", offset, started))
-    # Two other, unselected historical Requests are incomplete but identity-
-    # consistent. These are the only permissible global NOT_PROVEN blockers.
+    for ordinal, started in enumerate(pass_counts, start=3):
+        requests.append(_request_diagnostic(f"{ordinal:032x}", ordinal, started))
+    # These two unselected rows are incomplete, not contradictory: their
+    # canonical identity chain is valid, but their execution artifacts are absent.
     for ordinal in (13, 14):
         requests.append(
-            _historical_request(f"{ordinal:032x}", ordinal, 0, incomplete=True)
+            _request_diagnostic(f"{ordinal:032x}", ordinal, 0, incomplete=True)
         )
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -105,38 +207,87 @@ def _valid_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "canonical_request_count": 14,
         "canonical_round_count": 14,
     }
-    report.update({
+    blockers = [
+        f"REQUEST_ARTIFACTS_NOT_PROVEN:{13:032x}:CASCADE_SUMMARIES,EXECUTED_MODELS",
+        f"REQUEST_ARTIFACTS_NOT_PROVEN:{14:032x}:CASCADE_SUMMARIES,EXECUTED_MODELS",
+        f"REQUEST_EXECUTION_NOT_PROVEN:{13:032x}",
+        f"REQUEST_EXECUTION_NOT_PROVEN:{14:032x}",
+    ]
+    evidence = {
+        "schema": "hotfix164.23-explicit-target-read-only-forensics/v1",
         "status": "NOT_PROVEN",
+        "mode": "READ_ONLY_EXPLICIT_TARGETS",
+        "read_only": True,
+        "authoritative_source": "V26_3_CANONICAL_CONVERSATION_STORE_AND_APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE",
         "canonical_counts": canonical_counts,
         "canonical_counter_consistent": True,
         "canonical_counter_status": "PASS",
         "canonical_vs_persisted_request_counter_status": "PASS",
         "canonical_identity_chain_valid": True,
         "canonical_history_hash_stable_during_audit": True,
-        "historical_records_preserved": True,
-        "historical_canonical_counts_unchanged": canonical_counts,
-        "canonical_request_ids_count": 14,
-        "persisted_request_record_count": 14,
         "request_created_count": 14,
         "request_diagnostic_count": 14,
-        "requests": requests,
         "execution_started_count": 26,
         "runtime_execution_event_count": 26,
         "execution_started_source": "PERSISTED_APPLICATION_OWNED_RUNTIME_EXECUTION_EVENTS_ONLY",
+        "requests": requests,
+        "target_request_count": 2,
+        "target_request_ids": list(TARGET_IDS),
+        "target_selection_status": "EXPLICIT_TARGETS_SELECTED",
+        "target_requests": target_rows,
+        "target_bridge_independence_status": "PASS",
+        "security_audit_status": "PASS",
+        "blockers": blockers,
+        "read_side_effects": "NONE_OBSERVED",
+        "read_only_side_effects": "NONE_OBSERVED",
+        "read_only_live_state_unchanged": True,
+        "live_state_unchanged": True,
+        "provider_execution": 0,
+        "cascade_execution": 0,
+        "new_requests": 0,
+        "new_rounds": 0,
+        "new_bridges": 0,
+        "application_release_identity": APP_IDENTITY,
+        "provider_core_identity": CORE,
+        "report_generated_at": now,
+        "historical_records_preserved": True,
+        "historical_canonical_counts_unchanged": canonical_counts,
+        "persisted_request_record_count": 14,
+        "canonical_request_ids_count": 14,
+        "canonical_vs_persisted_request_counter_status": "PASS",
         "duplicate_canonical_request_ids": [],
         "projection_only_request_ids": [],
-        "report_generated_at": now,
-        "blockers": [
-            "REQUEST_ARTIFACTS_NOT_PROVEN:" + f"{13:032x}" + ":CASCADE_SUMMARIES,EXECUTED_MODELS",
-            "REQUEST_ARTIFACTS_NOT_PROVEN:" + f"{14:032x}" + ":CASCADE_SUMMARIES,EXECUTED_MODELS",
-            "REQUEST_EXECUTION_NOT_PROVEN:" + f"{13:032x}",
-            "REQUEST_EXECUTION_NOT_PROVEN:" + f"{14:032x}",
-        ],
-    })
+        "canonical_counter_status": "PASS",
+        "audit_active_chat_binding_sha256": hashlib.sha256(b"active-chat").hexdigest(),
+        "request_diagnostic_count": 14,
+        "strict_live_bridge_proof": {
+            "schema": "strict-live-bridge-proof-diagnostics/v1",
+            "status": "PASS",
+            "request_count": 2,
+            "records": [
+                {
+                    "request_id": rid,
+                    "status": "PASS",
+                    "evidence_record_present": True,
+                    "request_identity_status": "PASS",
+                    "canonical_round_binding_status": "PASS",
+                    "missing_evidence": [],
+                    "failure_reasons": [],
+                    "conflicting_cache_fields": [],
+                }
+                for rid in TARGET_IDS
+            ],
+            "authoritative_source": "APPLICATION_OWNED_BRIDGE_RUNTIME_EVIDENCE_STORE",
+            "fail_closed_rule": "MISSING_OR_INCOMPLETE_EVIDENCE_NEVER_PASSES",
+            "raw_bridge_id_exported": False,
+            "raw_bridge_value_exported": False,
+            "raw_prompt_or_http_body_exported": False,
+        },
+    }
 
     bundle = compute_source_bundle(ROOT)
     assert bundle["source_bundle_complete"] is True
-    report["deployment_attestation"] = {
+    evidence["deployment_attestation"] = {
         "schema": "hotfix164.30-deployment-source-attestation/v1",
         "repository": "Mamoussa1966/free-chat-app",
         "expected_deployment_branch": "gitops-v0.4-final",
@@ -157,7 +308,7 @@ def _valid_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     }
 
     evidence_path = tmp_path / "evidence.json"
-    evidence_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
     manifest_path = ROOT / "HOTFIX164.30_RELEASE_MANIFEST.json"
     manifest_copy = tmp_path / "manifest.json"
@@ -184,9 +335,8 @@ def _valid_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 
 
 def _verify(tmp_path: Path):
-    gate = _load_gate()
     evidence, manifest, archive, checksum = _valid_inputs(tmp_path)
-    result = gate.verify(evidence, manifest, archive, checksum, DEPLOYED_SHA)
+    result = _load_gate().verify(evidence, manifest, archive, checksum, DEPLOYED_SHA)
     return result, evidence, manifest, archive, checksum
 
 
@@ -210,7 +360,7 @@ def test_explicit_targets_pass_while_global_history_remains_14_and_non_target_ga
 
 
 def test_target_request_cannot_be_downgraded_to_non_target_not_proven(tmp_path):
-    result, evidence_path, manifest, archive, checksum = _verify(tmp_path)
+    _, evidence_path, manifest, archive, checksum = _verify(tmp_path)
     report = json.loads(evidence_path.read_text(encoding="utf-8"))
     target_id = report["target_request_ids"][0]
     row = next(item for item in report["requests"] if item["request_id"] == target_id)
@@ -222,7 +372,7 @@ def test_target_request_cannot_be_downgraded_to_non_target_not_proven(tmp_path):
         "actual_model_attestation_present": False,
         "cascade_summary_present": False,
         "missing_required_artifacts": ["CASCADE_SUMMARIES", "EXECUTED_MODELS"],
-        "required_artifacts": _artifact_map(incomplete=True),
+        "required_artifacts": _artifact_map(incomplete=True, bridge=True),
     })
     report["blockers"].extend([
         f"REQUEST_ARTIFACTS_NOT_PROVEN:{target_id}:CASCADE_SUMMARIES,EXECUTED_MODELS",
@@ -230,14 +380,13 @@ def test_target_request_cannot_be_downgraded_to_non_target_not_proven(tmp_path):
     ])
     evidence_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
 
-    gate = _load_gate()
-    blocked = gate.verify(evidence_path, manifest, archive, checksum, DEPLOYED_SHA)
+    blocked = _load_gate().verify(evidence_path, manifest, archive, checksum, DEPLOYED_SHA)
     assert blocked["status"] == "NOT_PROVEN"
     assert any(error.startswith(f"TARGET_DIAGNOSTIC_NOT_PASS:{target_id}") for error in blocked["errors"])
 
 
 def test_historical_counter_mismatch_still_blocks_target_closure(tmp_path):
-    result, evidence_path, manifest, archive, checksum = _verify(tmp_path)
+    _, evidence_path, manifest, archive, checksum = _verify(tmp_path)
     report = json.loads(evidence_path.read_text(encoding="utf-8"))
     report["canonical_counts"]["canonical_request_count"] = 13
     evidence_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
@@ -249,7 +398,7 @@ def test_historical_counter_mismatch_still_blocks_target_closure(tmp_path):
 
 
 def test_unclassified_global_blocker_is_not_ignored(tmp_path):
-    result, evidence_path, manifest, archive, checksum = _verify(tmp_path)
+    _, evidence_path, manifest, archive, checksum = _verify(tmp_path)
     report = json.loads(evidence_path.read_text(encoding="utf-8"))
     report["blockers"].append("UNRELATED_GLOBAL_BLOCKER")
     evidence_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
@@ -260,7 +409,7 @@ def test_unclassified_global_blocker_is_not_ignored(tmp_path):
 
 
 def test_non_target_identity_failure_is_not_waived_as_historical_incompleteness(tmp_path):
-    result, evidence_path, manifest, archive, checksum = _verify(tmp_path)
+    _, evidence_path, manifest, archive, checksum = _verify(tmp_path)
     report = json.loads(evidence_path.read_text(encoding="utf-8"))
     row = next(item for item in report["requests"] if item["request_id"] == f"{13:032x}")
     row["canonical_round_binding_status"] = "FAIL"
