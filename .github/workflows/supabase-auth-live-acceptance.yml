@@ -1,157 +1,80 @@
-name: Supabase Auth live acceptance
+name: Authorized test-project Auth recovery request (one-shot)
 
 on:
-  # Test-branch pushes run the dedicated test-project acceptance check so a
-  # user need not repeat the manual dispatch after a test-only diagnostic fix.
   push:
     branches:
       - "ci/supabase-auth-live-acceptance-dispatch"
-  workflow_dispatch:
-    inputs:
-      confirm_test_project:
-        description: "Type I_CONFIRM_TEST_PROJECT only for the dedicated Supabase test project"
-        required: true
-        type: string
-      phase:
-        description: "Request recovery emails, run signup, or run Auth/PostgREST acceptance"
-        required: true
-        type: choice
-        options:
-          - request-recovery
-          - signup
-          - auth-postgrest
+    paths:
+      - ".ci-triggers/test-auth-recovery-2026-11-08"
 
 permissions:
   contents: read
 
 jobs:
-  live-auth-postgrest-isolation:
-    name: Real Auth sessions, refresh, and PostgREST RLS
-    if: ${{ github.event_name == 'push' || inputs.confirm_test_project == 'I_CONFIRM_TEST_PROJECT' }}
+  request-test-recovery:
+    name: Send recovery links to the two allowlisted test accounts
+    if: >-
+      github.repository == 'Mamoussa1966/free-chat-app' &&
+      github.actor == 'Mamoussa1966' &&
+      github.ref == 'refs/heads/ci/supabase-auth-live-acceptance-dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_URL: https://pidcepvwsezdrlhxqksg.supabase.co
       SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_PROD_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PROD_PUBLISHABLE_KEY }}
       SUPABASE_TEST_USER_A_EMAIL: ${{ secrets.SUPABASE_TEST_USER_A_EMAIL }}
-      SUPABASE_TEST_USER_A_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_A_PASSWORD }}
       SUPABASE_TEST_USER_B_EMAIL: ${{ secrets.SUPABASE_TEST_USER_B_EMAIL }}
-      SUPABASE_TEST_USER_B_PASSWORD: ${{ secrets.SUPABASE_TEST_USER_B_PASSWORD }}
+
     steps:
-      - name: Checkout source
+      - name: Checkout the isolated QA branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Validate required secrets and exact project key fingerprints
+      - name: Validate test-only inputs without printing secrets
         shell: bash
         run: |
           python - <<'PY'
           import hashlib
           import os
 
-          names = (
-              "SUPABASE_URL",
-              "SUPABASE_PUBLISHABLE_KEY",
-              "SUPABASE_PROD_PUBLISHABLE_KEY",
-              "SUPABASE_TEST_USER_A_EMAIL",
-              "SUPABASE_TEST_USER_A_PASSWORD",
-              "SUPABASE_TEST_USER_B_EMAIL",
-              "SUPABASE_TEST_USER_B_PASSWORD",
-          )
-          missing = [name for name in names if not os.environ.get(name, "").strip()]
-          if missing:
-              print("LIVE_AUTH_ACCEPTANCE=BLOCKED; missing GitHub Actions repository secrets: " + ", ".join(missing))
-              raise SystemExit(2)
-
-          # Safety gate: this workflow is for the dedicated test project only.
           expected_url = "https://pidcepvwsezdrlhxqksg.supabase.co"
-          actual_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
-          if actual_url != expected_url:
-              print("LIVE_AUTH_ACCEPTANCE=BLOCKED; SUPABASE_URL does not match the dedicated test project")
-              raise SystemExit(2)
+          if os.environ.get("SUPABASE_URL", "").rstrip("/") != expected_url:
+              raise SystemExit("RECOVERY_TARGET=BLOCKED; test project URL mismatch")
 
-          # Fingerprints were calculated from the active keys returned by the
-          # corresponding Supabase projects. Never print either key or its hash.
-          expected_fingerprints = {
-              "SUPABASE_PUBLISHABLE_KEY": "4466db377d54ad52d16b78002fa97e0cadfff82cd3691b143ecd93ffb0377b32",
-              "SUPABASE_PROD_PUBLISHABLE_KEY": "0bc1ae2476f8070a5ff1a4010892f27b78238ddcda24a6645f7a07eb7afaf81c",
-          }
-          for secret_name, expected_sha256 in expected_fingerprints.items():
-              supplied = os.environ.get(secret_name, "")
-              actual_sha256 = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
-              label = "TEST" if secret_name == "SUPABASE_PUBLISHABLE_KEY" else "PROD"
-              if actual_sha256 != expected_sha256:
-                  print(f"LIVE_AUTH_{label}_PUBLISHABLE_KEY_MATCH=FAIL")
-                  raise SystemExit(2)
-              print(f"LIVE_AUTH_{label}_PUBLISHABLE_KEY_MATCH=PASS")
+          required = (
+              "SUPABASE_PUBLISHABLE_KEY",
+              "SUPABASE_TEST_USER_A_EMAIL",
+              "SUPABASE_TEST_USER_B_EMAIL",
+          )
+          missing = [name for name in required if not os.environ.get(name, "").strip()]
+          if missing:
+              raise SystemExit("RECOVERY_CONFIG=BLOCKED; missing required test secret names: " + ", ".join(missing))
 
-          # Compare normalized email fingerprints with the two Auth identities
-          # observed in this dedicated test project. Never print email values.
-          expected_email_fingerprints = {
+          expected_key = "4466db377d54ad52d16b78002fa97e0cadfff82cd3691b143ecd93ffb0377b32"
+          actual_key = hashlib.sha256(os.environ["SUPABASE_PUBLISHABLE_KEY"].encode("utf-8")).hexdigest()
+          if actual_key != expected_key:
+              raise SystemExit("RECOVERY_CONFIG=BLOCKED; publishable key is not the pinned test-project key")
+
+          expected_emails = {
               "SUPABASE_TEST_USER_A_EMAIL": "f6cfaac879514b2d2f5ace8c2fe076d14c08639d669d40eb2f8cf3af87273d31",
               "SUPABASE_TEST_USER_B_EMAIL": "6c53ece92c5e1dcbe3785e183b66ee39f96e61f9b10ff8b4ee497baa54ae3e68",
           }
-          for secret_name, expected_sha256 in expected_email_fingerprints.items():
-              supplied = os.environ.get(secret_name, "").strip().casefold()
-              actual_sha256 = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
-              label = "A" if secret_name.endswith("_A_EMAIL") else "B"
-              if actual_sha256 != expected_sha256:
-                  print(f"LIVE_AUTH_EMAIL_{label}_MATCH=FAIL; GitHub email Secret does not exactly match its Auth user")
-                  raise SystemExit(2)
-              print(f"LIVE_AUTH_EMAIL_{label}_MATCH=PASS")
+          for name, expected in expected_emails.items():
+              value = os.environ[name].strip().casefold()
+              actual = hashlib.sha256(value.encode("utf-8")).hexdigest()
+              if actual != expected:
+                  raise SystemExit("RECOVERY_CONFIG=BLOCKED; allowlisted test identity mismatch")
+          if os.environ["SUPABASE_TEST_USER_A_EMAIL"].strip().casefold() == os.environ["SUPABASE_TEST_USER_B_EMAIL"].strip().casefold():
+              raise SystemExit("RECOVERY_CONFIG=BLOCKED; test email identities are not distinct")
 
-          print("LIVE_AUTH_ACCEPTANCE_CONFIG=PASS")
-          print("LIVE_AUTH_ACCEPTANCE_TARGET=PASS (dedicated test project)")
+          print("RECOVERY_TARGET=PASS; dedicated test project only")
+          print("RECOVERY_KEY=PASS; pinned test publishable key")
+          print("RECOVERY_IDENTITIES=PASS; both allowlisted test users")
           PY
 
       - name: Install minimal HTTP dependency
         run: python -m pip install "requests>=2.31,<3"
 
-      - name: Diagnose credential-secret metadata without revealing values
-        shell: bash
-        run: |
-          python - <<'PY'
-          import os
-
-          def mask_email(value):
-              value = value.strip()
-              if "@" not in value:
-                  return "<invalid-email-format>"
-              local, domain = value.split("@", 1)
-              if len(local) <= 3:
-                  visible = local[:1] + "*" * max(0, len(local) - 1)
-              else:
-                  visible = local[:2] + "*" * (len(local) - 4) + local[-2:]
-              return f"{visible}@{domain.lower()}"
-
-          email_a = os.environ.get("SUPABASE_TEST_USER_A_EMAIL", "")
-          email_b = os.environ.get("SUPABASE_TEST_USER_B_EMAIL", "")
-          password_a = os.environ.get("SUPABASE_TEST_USER_A_PASSWORD", "")
-          password_b = os.environ.get("SUPABASE_TEST_USER_B_PASSWORD", "")
-
-          print("LIVE_AUTH_SECRET_DIAGNOSTICS_BEGIN")
-          print("A_EMAIL_MASKED=" + mask_email(email_a))
-          print("B_EMAIL_MASKED=" + mask_email(email_b))
-          print("EMAILS_DISTINCT_CASE_INSENSITIVE=" + str(email_a.strip().casefold() != email_b.strip().casefold()))
-          for label, password in (("A", password_a), ("B", password_b)):
-              print(f"{label}_PASSWORD_LENGTH={len(password)}")
-              print(f"{label}_PASSWORD_HAS_EDGE_WHITESPACE={password != password.strip()}")
-              print(f"{label}_PASSWORD_HAS_CR_OR_LF={chr(10) in password or chr(13) in password}")
-              print(f"{label}_PASSWORD_HAS_TAB={chr(9) in password}")
-          print("PASSWORD_SECRETS_DISTINCT=" + str(password_a != password_b))
-          print("LIVE_AUTH_SECRET_DIAGNOSTICS_END")
-          PY
-
-      - name: Request recovery emails for the two allowlisted test users
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.phase == 'request-recovery' }}
+      - name: Request recovery emails for test accounts A and B
         run: PYTHONPATH=. python scripts/request_test_supabase_auth_recovery.py
-
-      - name: Run real Auth signup smoke test
-        if: ${{ inputs.phase == 'signup' }}
-        run: PYTHONPATH=. python scripts/test_supabase_auth_signup_live.py
-
-      - name: Run real Auth sign-in/refresh and PostgREST two-owner isolation
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.phase == 'auth-postgrest' }}
-        run: PYTHONPATH=. python scripts/test_supabase_auth_postgrest_live.py
