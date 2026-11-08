@@ -60,13 +60,12 @@ def safe_auth_provider_code(response, *, request_url: str = "", status: int | No
     if not isinstance(payload, dict):
         return "unclassified"
     candidate = payload.get("code") or payload.get("error_code") or payload.get("error")
-    if not isinstance(candidate, str):
-        return "unclassified"
-    code = candidate.strip().lower()
-    if code in SAFE_AUTH_ERROR_CODES:
-        return code
+    if isinstance(candidate, str):
+        code = candidate.strip().lower()
+        if code in SAFE_AUTH_ERROR_CODES:
+            return code
     # GoTrue also records invalid_credentials internally for password-grant
-    # HTTP 400 responses; the REST payload may omit the code in some versions.
+    # HTTP 400 responses; the REST payload may omit or nest the code in some versions.
     if status == 400 and "token?grant_type=password" in request_url:
         return "password_grant_rejected"
     return "unclassified"
