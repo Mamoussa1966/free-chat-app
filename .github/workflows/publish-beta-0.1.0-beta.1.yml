@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   publish:
-    if: github.event.ref_type == 'branch' && github.event.ref == 'release-trigger/v0.1.0-beta.1'
+    if: ${{ github.event.ref_type == 'branch' && github.event.ref == 'release-trigger/v0.1.0-beta.1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -79,7 +79,7 @@ jobs:
                   raise SystemExit("ZIP_DUPLICATE_PATHS")
               for name in names:
                   path = PurePosixPath(name)
-                  if path.is_absolute() or ".." in path.parts or "\\\\" in name:
+                  if path.is_absolute() or ".." in path.parts or chr(92) in name:
                       raise SystemExit(f"ZIP_UNSAFE_PATH: {name}")
                   if name in {".streamlit/secrets.toml", ".env"} or name.startswith(".env/"):
                       raise SystemExit(f"ZIP_SECRET_FILE_BLOCKED: {name}")
@@ -130,10 +130,6 @@ jobs:
           ## Beta status
           This is a prerelease intended for controlled beta use. Provider availability remains limited to explicitly approved Free-tier configurations.
           NOTES
-          gh release create "$tag" project_release.zip project_release.zip.sha256 RELEASE_MANIFEST.json \\
-            --target "$GITHUB_SHA" \\
-            --title "AI Council v0.1.0-beta.1 — Public Beta" \\
-            --prerelease \\
-            --notes-file "$notes_file"
+          gh release create "$tag" project_release.zip project_release.zip.sha256 RELEASE_MANIFEST.json --target "$GITHUB_SHA" --title "AI Council v0.1.0-beta.1 — Public Beta" --prerelease --notes-file "$notes_file"
           rm -f "$notes_file"
-          gh release view "$tag" --json url,tagName,isPrerelease,targetCommitish,assets
+          gh release view "$tag" --json url,tagName,isPrerelease,assets
