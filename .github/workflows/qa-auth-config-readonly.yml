@@ -1,0 +1,131 @@
+name: QA Supabase Auth configuration (read-only)
+
+on:
+  push:
+    branches:
+      - qa/live-backup-restore-acceptance
+    paths:
+      - ".github/workflows/qa-auth-config-readonly.yml"
+  pull_request:
+    branches:
+      - gitops-v0.4-final
+    paths:
+      - ".github/workflows/qa-auth-config-readonly.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-auth-config-readonly
+  cancel-in-progress: false
+
+jobs:
+  read-test-auth-config:
+    name: Read-only Email/Password configuration
+    if: >-
+      github.repository == 'Mamoussa1966/free-chat-app' &&
+      github.actor == 'Mamoussa1966' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_MANAGEMENT_API_TOKEN: ${{ secrets.SUPABASE_TEST_AUTH_CONFIG_READ_TOKEN }}
+
+    steps:
+      - name: Checkout QA source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read only the allowlisted Auth settings from the isolated test project
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          token = os.environ.get("SUPABASE_MANAGEMENT_API_TOKEN", "")
+          if not token.strip():
+              print("AUTH_CONFIG_READ=BLOCKED; missing secret SUPABASE_TEST_AUTH_CONFIG_READ_TOKEN")
+              raise SystemExit(2)
+
+          # Pinned to the dedicated test project; never follows caller-supplied URLs.
+          endpoint = "https://api.supabase.com/v1/projects/pidcepvwsezdrlhxqksg/config/auth"
+          request = urllib.request.Request(
+              endpoint,
+              headers={
+                  "Authorization": "Bearer " + token,
+                  "Accept": "application/json",
+                  "User-Agent": "AI-Council-QA-Auth-Config-ReadOnly/1.0",
+              },
+              method="GET",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=25) as response:
+                  status = int(response.status)
+                  if status != 200:
+                      print(f"AUTH_CONFIG_READ=FAIL; http_status={status}")
+                      raise SystemExit(1)
+                  raw = response.read(1024 * 1024 + 1)
+          except urllib.error.HTTPError as error:
+              # Do not emit response body: it can contain configuration details.
+              print(f"AUTH_CONFIG_READ=FAIL; http_status={int(error.code)}")
+              raise SystemExit(1)
+          except (urllib.error.URLError, TimeoutError, OSError):
+              print("AUTH_CONFIG_READ=FAIL; transport_error")
+              raise SystemExit(1)
+
+          if len(raw) > 1024 * 1024:
+              print("AUTH_CONFIG_READ=FAIL; response_too_large")
+              raise SystemExit(1)
+          try:
+              config = json.loads(raw.decode("utf-8"))
+          except (UnicodeDecodeError, json.JSONDecodeError):
+              print("AUTH_CONFIG_READ=FAIL; invalid_json")
+              raise SystemExit(1)
+          if not isinstance(config, dict):
+              print("AUTH_CONFIG_READ=FAIL; unexpected_response_shape")
+              raise SystemExit(1)
+
+          # Print a strict allowlist only. Never print raw config, provider secrets,
+          # SMTP credentials, OAuth credentials, hook secrets, email templates, or URLs.
+          fields = {
+              "email_provider_enabled": ("external_email_enabled", "bool"),
+              "new_user_signup_disabled": ("disable_signup", "bool"),
+              "email_autoconfirm": ("mailer_autoconfirm", "bool"),
+              "allow_unverified_email_signins": ("mailer_allow_unverified_email_sign_ins", "bool"),
+              "password_min_length": ("password_min_length", "int"),
+              "password_hibp_check_enabled": ("password_hibp_enabled", "bool"),
+              "password_verification_hook_enabled": ("hook_password_verification_attempt_enabled", "bool"),
+              "captcha_enabled": ("security_captcha_enabled", "bool"),
+              "captcha_provider": ("security_captcha_provider", "short_string"),
+              "verify_rate_limit": ("rate_limit_verify", "int"),
+              "email_send_rate_limit": ("rate_limit_email_sent", "int"),
+              "secure_email_change_enabled": ("mailer_secure_email_change_enabled", "bool"),
+              "smtp_host_configured": ("smtp_host", "presence"),
+              "smtp_user_configured": ("smtp_user", "presence"),
+          }
+
+          result = {}
+          for label, (source, kind) in fields.items():
+              value = config.get(source)
+              if value is None:
+                  result[label] = "not_returned"
+              elif kind == "bool":
+                  result[label] = value if isinstance(value, bool) else "unexpected_type"
+              elif kind == "int":
+                  result[label] = value if isinstance(value, int) and not isinstance(value, bool) else "unexpected_type"
+              elif kind == "short_string":
+                  result[label] = value if isinstance(value, str) and len(value) <= 40 else "unexpected_type"
+              elif kind == "presence":
+                  result[label] = isinstance(value, str) and bool(value.strip())
+
+          print("AUTH_CONFIG_READ=PASS; source_project=pidcepvwsezdrlhxqksg; method=GET")
+          print("AUTH_CONFIG_ALLOWLIST_BEGIN")
+          print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+          print("AUTH_CONFIG_ALLOWLIST_END")
+          PY
