@@ -17,7 +17,7 @@ jobs:
       github.repository == 'Mamoussa1966/free-chat-app' &&
       github.actor == 'Mamoussa1966' &&
       github.ref == 'refs/heads/qa/live-backup-restore-acceptance'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       SUPABASE_PROD_DB_URL: ${{ secrets.SUPABASE_PROD_DB_URL }}
