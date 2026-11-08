@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import unicodedata
 import uuid
 
 import requests
@@ -176,6 +177,29 @@ def assert_live(condition: bool, label: str) -> None:
     print(f"PASS — {label}")
 
 
+
+def safe_password_shape(password: str) -> str:
+    """Return boolean-only password-shape metadata; never expose secret content."""
+    flags = {
+        "wrapped_single_quotes": len(password) >= 2 and password.startswith("'") and password.endswith("'"),
+        "wrapped_double_quotes": len(password) >= 2 and password.startswith('"') and password.endswith('"'),
+        "contains_quote": "'" in password or '"' in password,
+        "contains_control_or_format_char": any(
+            unicodedata.category(character) in {"Cc", "Cf"} for character in password
+        ),
+        "nfc_normalized": unicodedata.normalize("NFC", password) == password,
+        "nfkc_normalized": unicodedata.normalize("NFKC", password) == password,
+        "ascii_only": password.isascii(),
+        "contains_non_ascii_whitespace": any(
+            character.isspace() and not character.isascii() for character in password
+        ),
+    }
+    return ";".join(
+        f"{name}={'true' if enabled else 'false'}"
+        for name, enabled in flags.items()
+    )
+
+
 def make_record(conversation_id: str, content: str) -> dict:
     session_id = f"restore-live-session-{uuid.uuid4().hex}"
     message_id = f"restore-live-message-{uuid.uuid4().hex}"
@@ -286,6 +310,8 @@ def main() -> int:
     print(f"PASSWORD_SECRETS_IDENTICAL={password_a == password_b}")
     print(f"PASSWORD_A_EDGE_WHITESPACE={password_a != password_a.strip()}")
     print(f"PASSWORD_B_EDGE_WHITESPACE={password_b != password_b.strip()}")
+    print(f"PASSWORD_A_SHAPE={safe_password_shape(password_a)}")
+    print(f"PASSWORD_B_SHAPE={safe_password_shape(password_b)}")
 
     parsed = urlsplit(project_url)
     # Fail closed before authentication or writes if the configured secret
