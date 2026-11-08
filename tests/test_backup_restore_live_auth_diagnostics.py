@@ -102,3 +102,30 @@ def test_live_restore_password_secret_rejects_blank_value_without_exposing_it(mo
         assert "   " not in str(exc)
     else:
         raise AssertionError("blank password secret should be rejected")
+
+
+
+def test_safe_password_shape_reports_only_boolean_metadata():
+    from scripts.test_backup_restore_live import safe_password_shape
+
+    secret = '"example-secret"'
+    report = safe_password_shape(secret)
+    assert report == (
+        "wrapped_single_quotes=false;wrapped_double_quotes=true;"
+        "contains_quote=true;contains_control_or_format_char=false;"
+        "nfc_normalized=true;nfkc_normalized=true;ascii_only=true;"
+        "contains_non_ascii_whitespace=false"
+    )
+    assert secret not in report
+
+
+def test_safe_password_shape_detects_invisible_unicode_and_normalization():
+    from scripts.test_backup_restore_live import safe_password_shape
+
+    report = safe_password_shape("e\u0301\u200b\u00a0")
+    assert "contains_control_or_format_char=true" in report
+    assert "nfc_normalized=false" in report
+    assert "nfkc_normalized=false" in report
+    assert "ascii_only=false" in report
+    assert "contains_non_ascii_whitespace=true" in report
+    assert "e\u0301" not in report
