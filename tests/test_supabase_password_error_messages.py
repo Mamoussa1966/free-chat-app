@@ -151,3 +151,19 @@ def test_weak_password_ignores_unrecognized_reason_values():
 
     assert "12 أحرف" in str(caught.value)
     assert "unexpected-private-detail" not in str(caught.value)
+
+
+def test_invalid_login_credentials_return_safe_actionable_message():
+    client, _transport = make_client(
+        400,
+        {
+            "error_code": "invalid_credentials",
+            "msg": "provider-only credential detail",
+        },
+    )
+
+    with pytest.raises(SupabaseAuthError) as caught:
+        client.sign_in("person@gmail.com", TEST_VALUE)
+
+    assert "البريد الإلكتروني أو كلمة المرور غير صحيحين" in str(caught.value)
+    assert "provider-only credential detail" not in str(caught.value)
