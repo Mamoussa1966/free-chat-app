@@ -288,13 +288,17 @@ def _round_provider_execution_order(seats, strict_live_bridge: bool = False):
 
 
 def _provider_execution_deadline(seat, request_deadline: float | None) -> float | None:
-    """Keep Cloudflare's reserved call independent of the Council-wide deadline.
+    """Keep both explicitly approved zero-cost providers independent of the Council deadline.
 
-    Cloudflare still uses its explicitly configured provider timeout in
-    providers.call_seat; this only prevents an earlier slow seat from consuming
-    the Cloudflare call's remaining whole-request budget.
+    Normal rounds dispatch Cloudflare before Gemini.  If Gemini inherits the
+    shared request deadline, a slow Cloudflare response can consume the budget
+    before Gemini starts or before its Free cascade reaches the next candidate.
+    Both currently dispatchable providers therefore receive an independent
+    cascade budget.  Any explicit per-attempt provider timeout remains enforced
+    inside providers.call_seat; this does not enable paid models or add retries.
     """
-    if str(getattr(seat, "key", "") or "").lower() == "cloudflare_workers_ai":
+    key = str(getattr(seat, "key", "") or "").lower()
+    if key in {"cloudflare_workers_ai", "gemini"}:
         return None
     return request_deadline
 
