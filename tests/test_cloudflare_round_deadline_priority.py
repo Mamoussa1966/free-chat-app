@@ -63,11 +63,17 @@ def test_strict_live_bridge_still_dispatches_only_deepseek_then_gemini():
     assert [seat.key for seat in ordered] == ["deepseek", "gemini"]
 
 
-def test_cloudflare_does_not_inherit_council_deadline_but_gemini_does():
+def test_zero_cost_providers_do_not_inherit_council_deadline():
     deadline = 12345.0
 
+    # Cloudflare runs first in normal rounds. Gemini must retain enough budget
+    # to complete its own Free cascade even when Cloudflare uses the shared
+    # request budget; both adapters still enforce explicit per-attempt timeouts.
     assert main._provider_execution_deadline(
         _seat("cloudflare_workers_ai"), deadline
     ) is None
-    assert main._provider_execution_deadline(_seat("gemini"), deadline) == deadline
+    assert main._provider_execution_deadline(_seat("gemini"), deadline) is None
+    assert main._provider_execution_deadline(_seat("deepseek"), deadline) == deadline
+    assert main._provider_execution_deadline(_seat("chatgpt"), deadline) == deadline
     assert main._provider_execution_deadline(_seat("cloudflare_workers_ai"), None) is None
+    assert main._provider_execution_deadline(_seat("gemini"), None) is None
