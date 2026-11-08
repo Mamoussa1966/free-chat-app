@@ -34,10 +34,17 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os
+          import re
           from urllib.parse import urlsplit, unquote
-          value = os.environ.get("SUPABASE_PROD_DB_URL", "").strip().strip("'\\\"")
+          value = os.environ.get("SUPABASE_PROD_DB_URL", "").strip()
           if not value:
               raise SystemExit("BACKUP_CONFIG=FAIL; SUPABASE_PROD_DB_URL is missing")
+          # Accept a bare PostgreSQL URI or a psql command containing exactly one URI.
+          value = value.strip("'\" ")
+          if not re.match(r"^postgres(?:ql)?://", value, flags=re.IGNORECASE):
+              match = re.search("postgres(?:ql)?://[^\\s'\"]+", value, flags=re.IGNORECASE)
+              if match:
+                  value = match.group(0)
           parsed = urlsplit(value)
           project = "wzhsilufajemyqtednie"
           host = (parsed.hostname or "").lower()
