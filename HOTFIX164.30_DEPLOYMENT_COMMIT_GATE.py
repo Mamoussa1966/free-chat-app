@@ -71,6 +71,9 @@ def _check_attestation(row: dict, rid: str, round_id: str, ordinal: int, errors:
     _eq(att, "prepared_request_verified", "YES", prefix, errors)
     _eq(att, "payload_hash_integrity", "PASS", prefix, errors)
     _eq(att, "http_payload_attested", "YES", prefix, errors)
+    _eq(att, "transport_attempt_status", "HTTP_RESPONSE_RECEIVED", prefix, errors)
+    _eq(att, "transport_http_status_code", 200, prefix, errors)
+    _eq(att, "bridge_id_hash", row.get("bridge_id_hash"), prefix, errors)
     for field in (
         "request_binding_status", "round_binding_status", "target_binding_status",
         "response_binding_status", "canonical_round_binding_status",
@@ -618,7 +621,17 @@ def verify(evidence_path: Path, manifest_path: Path, archive_path: Path, checksu
         "deployment_commit_binding_method": "EXACT_GIT_COMMIT_AND_SOURCE_BUNDLE" if observed_commit == selected_commit and SHA40.fullmatch(selected_commit) else ("SOURCE_BUNDLE_MATCH_WITH_EXPLICIT_COMMIT" if SHA40.fullmatch(selected_commit) else "NOT_PROVEN"),
         "target_request_count": 2 if not errors else len(targets),
         "target_request_ids": [str(x) for x in target_ids],
-        "targeted_scope_status": "PASS" if all(str(row.get("status") or "") == "PASS" for row in targets if isinstance(row, dict)) and len(targets) == 2 else "NOT_PROVEN",
+        "targeted_scope_status": "PASS" if (
+            len(targets) == 2
+            and all(isinstance(row, dict) and str(row.get("status") or "") == "PASS" for row in targets)
+            and isinstance(target_ids, list) and len(target_ids) == 2
+            and len({str(value) for value in target_ids}) == 2
+            and not any(
+                error.startswith(("TARGET_", "STRICT_PROOF_", "EVIDENCE_TARGET", "TARGET_IDS_", "CANONICAL_ROUND_IDS_"))
+                or error == "BRIDGE_IDS_NOT_UNIQUE"
+                for error in errors
+            )
+        ) else "NOT_PROVEN",
         "historical_scope_status": history_scope.get("status", "NOT_PROVEN"),
         "historical_scope": history_scope,
         "errors": sorted(set(errors)),
