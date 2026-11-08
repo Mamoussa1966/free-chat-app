@@ -137,8 +137,8 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           SOURCE="$SUPABASE_PROD_DB_URL"
-          LOCAL_ADMIN="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
-          LOCAL_RESTORE="postgresql://postgres:postgres@127.0.0.1:54322/restore_validation"
+          LOCAL_ADMIN="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
+          LOCAL_RESTORE="postgresql://postgres:postgres@127.0.0.1:54322/restore_validation?sslmode=disable"
 
           # Full logical dump: all database schemas, table data and large objects.
           # The source connection is used only by pg_dump / read-only catalog queries.
@@ -472,7 +472,8 @@ jobs:
           if not bundle_path.is_file() or bundle_path.stat().st_size != outer_size:
               raise SystemExit("TRANSFER_BUNDLE=FAIL; final ZIP was not placed in artifact folder")
 
-          SOURCE_ZIP.unlink()
+          if SOURCE_ZIP.exists():
+              SOURCE_ZIP.unlink()
           shutil.rmtree("backup-work", ignore_errors=True)
           shutil.rmtree("package", ignore_errors=True)
           if SOURCE_ZIP.exists() or Path("backup-work").exists() or Path("package").exists():
