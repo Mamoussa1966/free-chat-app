@@ -35,17 +35,32 @@ jobs:
           python - <<'PY'
           import os
           from urllib.parse import urlsplit, unquote
-          value = os.environ.get("SUPABASE_PROD_DB_URL", "").strip()
+          value = os.environ.get("SUPABASE_PROD_DB_URL", "").strip().strip("'\\\"")
           if not value:
               raise SystemExit("BACKUP_CONFIG=FAIL; SUPABASE_PROD_DB_URL is missing")
           parsed = urlsplit(value)
           project = "wzhsilufajemyqtednie"
-          host_ok = parsed.hostname == f"db.{project}.supabase.co"
-          pooler_user_ok = unquote(parsed.username or "") == f"postgres.{project}"
-          if parsed.scheme not in ("postgres", "postgresql") or not (host_ok or pooler_user_ok):
-              raise SystemExit("BACKUP_CONFIG=FAIL; connection is not pinned to the production project")
-          if parsed.path not in ("/postgres", ""):
-              raise SystemExit("BACKUP_CONFIG=FAIL; unexpected database name")
+          host = (parsed.hostname or "").lower()
+          username = unquote(parsed.username or "")
+          direct_host_ok = host == f"db.{project}.supabase.co"
+          pooler_host_ok = host.endswith(".pooler.supabase.com")
+          pooler_user_ok = username == f"postgres.{project}"
+          database_ok = parsed.path in ("/postgres", "")
+          scheme_ok = parsed.scheme in ("postgres", "postgresql")
+          if not (scheme_ok and database_ok and (direct_host_ok or (pooler_host_ok and pooler_user_ok))):
+              user_shape = (
+                  "postgres.<expected-project>" if pooler_user_ok else
+                  "postgres" if username == "postgres" else
+                  "other-or-unparsed"
+              )
+              print(
+                  "BACKUP_CONFIG_DIAGNOSTIC "
+                  f"scheme_ok={scheme_ok} host={host or 'unparsed'} "
+                  f"user_shape={user_shape} path={parsed.path or 'empty'} "
+                  f"direct_host_ok={direct_host_ok} pooler_host_ok={pooler_host_ok} "
+                  f"database_ok={database_ok}"
+              )
+              raise SystemExit("BACKUP_CONFIG=FAIL; DSN host/user/project format did not match the pinned production project")
           print("BACKUP_CONFIG=PASS; production project pin verified; secret value hidden")
           PY
 
