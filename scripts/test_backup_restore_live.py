@@ -28,6 +28,7 @@ from supabase_conversation_repository import SupabaseConversationRepository
 
 
 EXPECTED_TEST_HOST = "pidcepvwsezdrlhxqksg.supabase.co"
+EXPECTED_TEST_PUBLISHABLE_KEY_SHA256 = "4466db377d54ad52d16b78002fa97e0cadfff82cd3691b143ecd93ffb0377b32"
 CANONICAL_CONTRACT = "V26_3_CANONICAL_CONVERSATION_STORE"
 
 
@@ -259,6 +260,11 @@ def main() -> int:
         and not parsed.query
         and not parsed.fragment,
         "configured Supabase URL is pinned to the dedicated test project",
+    )
+    actual_key_fingerprint = hashlib.sha256(publishable_key.encode("utf-8")).hexdigest()
+    assert_live(
+        actual_key_fingerprint == EXPECTED_TEST_PUBLISHABLE_KEY_SHA256,
+        "publishable key fingerprint matches the dedicated test project",
     )
 
     auth_transport = DiagnosticAuthTransport()
