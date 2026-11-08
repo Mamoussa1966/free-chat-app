@@ -298,7 +298,10 @@ class SupabaseAuthClient:
             elif provider_error_code in password_error_messages:
                 message = password_error_messages[provider_error_code]
             elif status in (401, 403):
-                message = "بيانات الدخول غير صحيحة أو انتهت الجلسة."
+                message = (
+                    "البريد الإلكتروني أو كلمة المرور غير صحيحين، أو انتهت الجلسة. "
+                    "راجع البيانات أو استخدم خيار استعادة كلمة المرور."
+                )
             elif status == 429:
                 # Supabase Auth returns a structured minimum-wait message for
                 # recovery throttling. Extract only the integer duration; never
@@ -431,6 +434,18 @@ class SupabaseAuthClient:
             raise ValueError("كلمة المرور غير صالحة.")
         return value
 
+    @staticmethod
+    def _validate_login_password(password: str) -> str:
+        """Validate an existing credential without applying new-password policy."""
+        value = str(password or "")
+        if not value:
+            raise ValueError("أدخل كلمة المرور.")
+        if len(value) > 1024:
+            raise ValueError("كلمة المرور أطول من الحد الذي تقبله خدمة المصادقة.")
+        if "\x00" in value:
+            raise ValueError("كلمة المرور غير صالحة.")
+        return value
+
     def sign_up(self, email: str, password: str) -> SupabaseAuthSession | None:
         """Register an email/password user.
 
@@ -495,7 +510,9 @@ class SupabaseAuthClient:
 
     def sign_in(self, email: str, password: str) -> SupabaseAuthSession:
         email = self._normalized_email(email)
-        password = self._validate_password(password)
+        # Existing accounts may have credentials created under an earlier
+        # minimum-length policy. Do not apply sign-up/update rules to login.
+        password = self._validate_login_password(password)
         data = self._request(
             "POST",
             "token?grant_type=password",
