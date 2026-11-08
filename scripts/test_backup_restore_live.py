@@ -7,6 +7,7 @@ attempts to delete only the synthetic rows it creates.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import uuid
@@ -222,6 +223,29 @@ def main() -> int:
     password_a = required("SUPABASE_TEST_USER_A_PASSWORD", strip=False)
     email_b = required("SUPABASE_TEST_USER_B_EMAIL")
     password_b = required("SUPABASE_TEST_USER_B_PASSWORD", strip=False)
+
+    # Match the two pre-authorized disposable Auth identities. These SHA-256
+    # fingerprints disclose neither email address and prevent a stale/wrong
+    # account pair from being mistaken for a password failure.
+    expected_email_fingerprints = {
+        "A": "f6cfaac879514b2d2f5ace8c2fe076d14c08639d669d40eb2f8cf3af87273d31",
+        "B": "6c53ece92c5e1dcbe3785e183b66ee39f96e61f9b10ff8b4ee497baa54ae3e68",
+    }
+    actual_email_fingerprints = {
+        "A": hashlib.sha256(email_a.strip().casefold().encode("utf-8")).hexdigest(),
+        "B": hashlib.sha256(email_b.strip().casefold().encode("utf-8")).hexdigest(),
+    }
+    for label in ("A", "B"):
+        matched = actual_email_fingerprints[label] == expected_email_fingerprints[label]
+        print(f"AUTH_ACCOUNT_{label}_EMAIL_IDENTITY_MATCH={'PASS' if matched else 'FAIL'}")
+        if not matched:
+            raise RuntimeError("configured test email does not match its designated disposable Auth identity")
+
+    # Emit only booleans about password-secret shape. Never emit lengths,
+    # fingerprints, values, or any token material.
+    print(f"PASSWORD_SECRETS_DISTINCT={password_a != password_b}")
+    print(f"PASSWORD_A_EDGE_WHITESPACE={password_a != password_a.strip()}")
+    print(f"PASSWORD_B_EDGE_WHITESPACE={password_b != password_b.strip()}")
 
     parsed = urlsplit(project_url)
     # Fail closed before authentication or writes if the configured secret
