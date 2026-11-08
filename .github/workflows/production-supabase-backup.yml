@@ -48,7 +48,7 @@ jobs:
           print("BACKUP_CONFIG=PASS; production project pin verified; secret value hidden")
           PY
 
-      - name: Prepare local Supabase PostgreSQL 17 restore environment
+      - name: Prepare isolated Supabase PostgreSQL 17
         shell: bash
         run: |
           set -euo pipefail
@@ -58,121 +58,125 @@ jobs:
           npm install --global supabase
           sed -i 's/major_version = 15/major_version = 17/' supabase/config.toml
           supabase start -x studio,imgproxy,mailpit,edge-runtime,analytics,vector
-          supabase status
+          supabase status -o env > /tmp/local-supabase.env
+          grep -q 'DB_URL=' /tmp/local-supabase.env
 
-      - name: Full logical export and restore into a new isolated local database
+      - name: Full database export and isolated restore
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p backup-work transfer
+          cat > backup-work/run_dump_restore.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          SOURCE="$SUPABASE_PROD_DB_URL"
+          LOCAL_ADMIN="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          LOCAL_RESTORE="postgresql://postgres:postgres@127.0.0.1:54322/restore_validation"
+
+          # Full logical dump: all database schemas, table data and large objects.
+          # The source connection is used only by pg_dump / read-only catalog queries.
+          pg_dump --no-owner --no-acl --format=custom --blobs \
+            --file=/backup/database.dump "$SOURCE"
+
+          # Preserve global role definitions and memberships without exporting password hashes.
+          pg_dumpall --roles-only --no-role-passwords --dbname="$SOURCE" > /backup/roles.sql
+
+          # Inventory every non-system schema, active extension, RLS policy and table row count.
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' ORDER BY 1" \
+            > /backup/source_schemas.txt
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
+            > /backup/source_extensions.tsv
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,''),COALESCE(with_check,'') FROM pg_policies ORDER BY 1,2,3" \
+            > /backup/source_policies.tsv
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') AND schemaname NOT LIKE 'pg_toast%' ORDER BY 1,2" \
+            > /backup/source_tables.list
+
+          : > /backup/source_rows.tsv
+          while IFS="|" read -r schema table; do
+            count=$(psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+              -v schema="$schema" -v table="$table" \
+              -c 'SELECT count(*) FROM :"schema".:"table";')
+            printf "%s.%s\t%s\n" "$schema" "$table" "$count" >> /backup/source_rows.tsv
+          done < /backup/source_tables.list
+
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations), (SELECT count(*) FROM pg_largeobject_metadata)" \
+            > /backup/source_key_counts.tsv
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT current_setting('server_version')" > /backup/source_server_version.txt
+
+          # Create an empty, distinct restore database inside local Supabase Postgres.
+          psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE restore_validation TEMPLATE template0"
+
+          # Ensure roles referenced by RLS policies exist in the isolated restore cluster.
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT DISTINCT unnest(roles)::text FROM pg_policies ORDER BY 1" \
+            > /backup/policy_roles.list
+          while IFS= read -r role; do
+            [ -n "$role" ] || continue
+            case "$role" in
+              *[!a-zA-Z0-9_]*)
+                echo "Unsupported role identifier in policy; refusing restore"
+                exit 20
+                ;;
+            esac
+            exists=$(psql "$LOCAL_ADMIN" -X -At -c "SELECT 1 FROM pg_roles WHERE rolname = '$role'")
+            if [ "$exists" != "1" ]; then
+              psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 -c "CREATE ROLE \"$role\" NOLOGIN"
+            fi
+          done < /backup/policy_roles.list
+
+          # Actual restore, not an archive-list-only check.
+          pg_restore --exit-on-error --no-owner --no-acl \
+            --dbname="$LOCAL_RESTORE" /backup/database.dump
+
+          # Compare schemas, extension versions, exact RLS policy definitions and all table row counts.
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname NOT LIKE 'pg_toast%' ORDER BY 1" \
+            > /backup/restored_schemas.txt
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
+            > /backup/restored_extensions.tsv
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,''),COALESCE(with_check,'') FROM pg_policies ORDER BY 1,2,3" \
+            > /backup/restored_policies.tsv
+          : > /backup/restored_rows.tsv
+          while IFS="|" read -r schema table; do
+            count=$(psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At \
+              -v schema="$schema" -v table="$table" \
+              -c 'SELECT count(*) FROM :"schema".:"table";')
+            printf "%s.%s\t%s\n" "$schema" "$table" "$count" >> /backup/restored_rows.tsv
+          done < /backup/source_tables.list
+
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations), (SELECT count(*) FROM pg_largeobject_metadata)" \
+            > /backup/restored_key_counts.tsv
+
+          diff -u /backup/source_schemas.txt /backup/restored_schemas.txt
+          diff -u /backup/source_extensions.tsv /backup/restored_extensions.tsv
+          diff -u /backup/source_policies.tsv /backup/restored_policies.tsv
+          diff -u /backup/source_rows.tsv /backup/restored_rows.tsv
+          diff -u /backup/source_key_counts.tsv /backup/restored_key_counts.tsv
+          pg_restore --list /backup/database.dump > /backup/archive_toc.txt
+          test -s /backup/archive_toc.txt
+          test -s /backup/roles.sql
+          echo "FULL_DATABASE_EXPORT=PASS"
+          echo "ISOLATED_DATABASE_RESTORE=PASS"
+          echo "SCHEMA_EXTENSION_POLICY_AND_ROWCOUNT_MATCH=PASS"
+          SCRIPT
+          chmod 700 backup-work/run_dump_restore.sh
+
           docker run --rm --network host \
             -e SUPABASE_PROD_DB_URL \
             -v "$PWD/backup-work:/backup" \
-            postgres:17-bookworm bash -euo pipefail -c '
-              SOURCE="$SUPABASE_PROD_DB_URL"
-              LOCAL_ADMIN="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
-              LOCAL_RESTORE="postgresql://postgres:postgres@127.0.0.1:54322/restore_validation"
+            postgres:17-bookworm bash /backup/run_dump_restore.sh
 
-              # Full database archive: all database schemas/data and large objects.
-              # No production writes are issued by this job.
-              pg_dump --no-owner --no-acl --format=custom --blobs \
-                --file=/backup/database.dump "$SOURCE"
-
-              # Global role definitions without password hashes.
-              pg_dumpall --roles-only --no-role-passwords --dbname="$SOURCE" \
-                > /backup/roles.sql
-
-              # Schema inventory, active extensions, RLS policy definitions.
-              psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN (\x27pg_catalog\x27,\x27information_schema\x27) AND nspname NOT LIKE \x27pg_toast%\x27 ORDER BY 1" \
-                > /backup/source_schemas.txt
-              psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,\x27\x27) FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
-                > /backup/source_extensions.tsv
-              psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,\x27\x27),COALESCE(with_check,\x27\x27) FROM pg_policies ORDER BY 1,2,3" \
-                > /backup/source_policies.tsv
-
-              # Enumerate every user table and capture row counts without exporting values to logs.
-              psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT schemaname,tablename FROM pg_tables WHERE schemaname NOT IN (\x27pg_catalog\x27,\x27information_schema\x27) AND schemaname NOT LIKE \x27pg_toast%\x27 ORDER BY 1,2" \
-                > /backup/source_tables.list
-              : > /backup/source_rows.tsv
-              while IFS="|" read -r schema table; do
-                count=$(psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
-                  -v s="$schema" -v t="$table" \
-                  -c "SELECT count(*) FROM :\"s\".:\"t\"")
-                printf "%s.%s\t%s\n" "$schema" "$table" "$count" >> /backup/source_rows.tsv
-              done < /backup/source_tables.list
-
-              psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT current_setting(\x27server_version\x27), (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations)" \
-                > /backup/source_key_counts.tsv
-
-              # Make a genuinely empty database in the local Supabase PostgreSQL 17 instance.
-              psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 \
-                -c "CREATE DATABASE restore_validation TEMPLATE template0"
-
-              # Create any database roles referenced by RLS policies but absent locally.
-              psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At \
-                -c "SELECT DISTINCT unnest(roles)::text FROM pg_policies ORDER BY 1" \
-                > /backup/policy_roles.list
-              while IFS= read -r role; do
-                [ -n "$role" ] || continue
-                case "$role" in *[!a-zA-Z0-9_]*)
-                  echo "Unsupported role identifier in policy; refusing restore"
-                  exit 20
-                esac
-                exists=$(psql "$LOCAL_ADMIN" -X -At -v r="$role" \
-                  -c "SELECT 1 FROM pg_roles WHERE rolname = :\x27r\x27")
-                if [ "$exists" != "1" ]; then
-                  psql "$LOCAL_ADMIN" -X -v ON_ERROR_STOP=1 \
-                    -c "CREATE ROLE \"$role\" NOLOGIN"
-                fi
-              done < /backup/policy_roles.list
-
-              # Real restore, not merely archive-list validation.
-              pg_restore --exit-on-error --no-owner --no-acl \
-                --dbname="$LOCAL_RESTORE" /backup/database.dump
-
-              # Compare schema inventory, installed extension versions, all table row counts,
-              # and exact RLS policy definitions after the isolated restore.
-              psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT nspname FROM pg_namespace WHERE nspname NOT IN (\x27pg_catalog\x27,\x27information_schema\x27) AND nspname NOT LIKE \x27pg_toast%\x27 ORDER BY 1" \
-                > /backup/restored_schemas.txt
-              psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,\x27\x27) FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
-                > /backup/restored_extensions.tsv
-              psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,\x27\x27),COALESCE(with_check,\x27\x27) FROM pg_policies ORDER BY 1,2,3" \
-                > /backup/restored_policies.tsv
-              : > /backup/restored_rows.tsv
-              while IFS="|" read -r schema table; do
-                count=$(psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At \
-                  -v s="$schema" -v t="$table" \
-                  -c "SELECT count(*) FROM :\"s\".:\"t\"")
-                printf "%s.%s\t%s\n" "$schema" "$table" "$count" >> /backup/restored_rows.tsv
-              done < /backup/source_tables.list
-
-              diff -u /backup/source_schemas.txt /backup/restored_schemas.txt
-              diff -u /backup/source_extensions.tsv /backup/restored_extensions.tsv
-              diff -u /backup/source_policies.tsv /backup/restored_policies.tsv
-              diff -u /backup/source_rows.tsv /backup/restored_rows.tsv
-
-              psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-                -c "SELECT current_setting(\x27server_version\x27), (SELECT count(*) FROM auth.users), (SELECT count(*) FROM storage.buckets), (SELECT count(*) FROM storage.objects), (SELECT count(*) FROM public.council_conversations)" \
-                > /backup/restored_key_counts.tsv
-              diff -u /backup/source_key_counts.tsv /backup/restored_key_counts.tsv
-
-              pg_restore --list /backup/database.dump > /backup/archive_toc.txt
-              test -s /backup/archive_toc.txt
-              test -s /backup/roles.sql
-              echo "FULL_DATABASE_EXPORT=PASS"
-              echo "ISOLATED_DATABASE_RESTORE=PASS"
-              echo "SCHEMA_EXTENSION_POLICY_AND_ROWCOUNT_MATCH=PASS"
-            '
-
-      - name: Document scope and create checksummed ZIP
+      - name: Document coverage and create SHA-256 ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -180,16 +184,16 @@ jobs:
           # Supabase production database backup and isolated restore report
 
           - Source project: `wzhsilufajemyqtednie`
-          - PostgreSQL major version: 17
+          - PostgreSQL server version: recorded in `source_server_version.txt`.
           - Export method: PostgreSQL 17 `pg_dump` custom archive with large objects.
-          - Global roles: exported separately using `pg_dumpall --roles-only --no-role-passwords`.
-          - Included database schemas: all schemas in the source database, including `public`, `auth`, `storage`, `realtime`, `extensions`, `supabase_migrations`, and `vault` where present.
-          - Included content: table data, database DDL, indexes, functions, triggers, RLS policies, extension declarations, and PostgreSQL large objects.
-          - Storage binary objects: the database contains Storage metadata only; the workflow records bucket and object counts. A zero object count means no Storage API files were listed in `storage.objects` at backup time. Storage binary files are not part of a PostgreSQL dump.
-          - Auth data: included in the raw database archive, including `auth.users` and related Auth tables. Password hashes and tokens are sensitive and must remain private.
-          - Secrets/Vault: encrypted database values, if present, remain encrypted; this archive does not export project-level JWT secrets or dashboard configuration.
-          - Restore target: a newly created, separate `restore_validation` database in a local Supabase PostgreSQL 17 Docker stack. The production database is read-only throughout this workflow.
-          - Acceptance checks: schema inventory, extension versions, RLS policy definitions, every table row count, Auth user count, Storage bucket/object counts, and the key conversation table count must match exactly.
+          - Global roles: exported separately using `pg_dumpall --roles-only --no-role-passwords`; role passwords are deliberately excluded.
+          - Database schemas: all non-system schemas from the source catalog, including `public`, `auth`, `storage`, `realtime`, `extensions`, `supabase_migrations`, and `vault` where present.
+          - Database content: table data, DDL, indexes, functions, triggers, RLS policies, installed extensions and large objects.
+          - Auth: raw database archive includes `auth.users` and related Auth tables. Password hashes and Auth-related data are sensitive and require private storage.
+          - Storage: bucket/object metadata is included through the database archive. PostgreSQL dumps do not contain the external binary payloads served by the Storage API; the source object count is recorded. A zero count means no Storage API objects were listed in `storage.objects` at export time.
+          - Vault: encrypted database values, if present, remain encrypted. Project-level JWT secrets, API keys, Edge Function secrets and dashboard settings are outside the database dump.
+          - Restore target: newly created `restore_validation` database in a separate local Supabase PostgreSQL 17 Docker stack. No production DDL or data writes are performed.
+          - Acceptance: restore must succeed and exact schema inventory, extension versions, RLS policy definitions, every table row count, Auth/Storage/conversation counts and large-object counts must match.
           EOF
 
           cat > backup-work/RESTORE-VALIDATION.txt <<EOF
@@ -198,23 +202,26 @@ jobs:
           SCHEMA_EXTENSION_POLICY_AND_ROWCOUNT_MATCH=PASS
           VALIDATED_AT_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SOURCE_PROJECT=wzhsilufajemyqtednie
+          POSTGRES_SERVER_VERSION=$(cat backup-work/source_server_version.txt)
+          AUTH_USERS|STORAGE_BUCKETS|STORAGE_OBJECTS|COUNCIL_CONVERSATIONS|LARGE_OBJECTS
+          $(cat backup-work/source_key_counts.tsv)
           EOF
-          printf '\n## Source key counts (server version | Auth users | Storage buckets | Storage objects | conversations)\n' >> backup-work/RESTORE-VALIDATION.txt
-          cat backup-work/source_key_counts.tsv >> backup-work/RESTORE-VALIDATION.txt
+
           sha256sum backup-work/database.dump backup-work/roles.sql \
             backup-work/source_schemas.txt backup-work/source_extensions.tsv \
             backup-work/source_policies.tsv backup-work/source_rows.tsv \
-            backup-work/source_key_counts.tsv backup-work/README-RESTORE-REPORT.md \
-            backup-work/RESTORE-VALIDATION.txt > backup-work/SHA256SUMS
+            backup-work/source_key_counts.tsv backup-work/source_server_version.txt \
+            backup-work/README-RESTORE-REPORT.md backup-work/RESTORE-VALIDATION.txt \
+            > backup-work/SHA256SUMS
           mkdir -p package
-          cp backup-work/{database.dump,roles.sql,source_schemas.txt,source_extensions.tsv,source_policies.tsv,source_rows.tsv,source_key_counts.tsv,README-RESTORE-REPORT.md,RESTORE-VALIDATION.txt,SHA256SUMS} package/
+          cp backup-work/{database.dump,roles.sql,source_schemas.txt,source_extensions.tsv,source_policies.tsv,source_rows.tsv,source_key_counts.tsv,source_server_version.txt,README-RESTORE-REPORT.md,RESTORE-VALIDATION.txt,SHA256SUMS} package/
           (cd package && zip -q -9 -r ../supabase-db-dump-2026-11-08.zip .)
           unzip -t supabase-db-dump-2026-11-08.zip
           sha256sum supabase-db-dump-2026-11-08.zip > package-sha256.txt
           echo "BACKUP_ZIP_SHA256=$(cut -d ' ' -f1 package-sha256.txt)" >> "$GITHUB_ENV"
           echo "BACKUP_ZIP_SIZE=$(stat -c '%s' supabase-db-dump-2026-11-08.zip)" >> "$GITHUB_ENV"
 
-      - name: Encrypt backup for private off-site transfer
+      - name: Encrypt the ZIP for private off-site transfer
         shell: bash
         run: |
           set -euo pipefail
@@ -222,7 +229,7 @@ jobs:
           -----BEGIN PUBLIC KEY-----
           MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA0dhf+eOP4iJO+uCVC/e6
           6aMwU5LGuU5px5gYKr5/dyEkZj+meL21XZHymn8Z6VkeKokzier91wmhhI6BgCO5
-          O2yuKd5bI/r1Ez2hg13Jl2PMhpyHJL3KxI/1tK6Qg2TOD0qg6mMVOsUmerpd0mAV
+          O2yuKd5bI/r1Ez2hg13Jl2PMhpyHJL7KxI/1tK6Qg2TOD0qg6mMVOsUmerpd0mAV
           4NiK/BKC+cQOOPIUVgR0Plb9aZUhRtQoyECi2mQ0H7FFc8EqwOAfjp7QAkpMDO8M
           o02MiEbjL7dh7eDbo3qUnWzarah8xLB+cU5qaxSzdqSvyZth4p8fwSOBKLCaafyq
           Xpjd2k0w+HpMTBXM4cXgRzXJkUaAydcqiLonvup5OayyseSE4388HnL3d8TZ4OiW
@@ -240,18 +247,23 @@ jobs:
           from cryptography.hazmat.primitives import hashes, serialization
           from cryptography.hazmat.primitives.asymmetric import padding
           from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
           payload = Path("supabase-db-dump-2026-11-08.zip").read_bytes()
           public = serialization.load_pem_public_key(Path("backup-work/backup-recipient.pem").read_bytes())
           key = secrets.token_bytes(32)
           nonce = secrets.token_bytes(12)
-          ciphertext = AESGCM(key).encrypt(nonce, payload, b"AI-Council-Supabase-Backup-v1")
-          wrapped = public.encrypt(
+          aad = b"AI-Council-Supabase-Backup-v1"
+          ciphertext = AESGCM(key).encrypt(nonce, payload, aad)
+          wrapped_key = public.encrypt(
               key,
-              padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                           algorithm=hashes.SHA256(), label=b"AI-Council-Supabase-Backup-v1"),
+              padding.OAEP(
+                  mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                  algorithm=hashes.SHA256(),
+                  label=aad,
+              ),
           )
           Path("transfer/supabase-db-dump-2026-11-08.zip.enc").write_bytes(nonce + ciphertext)
-          Path("transfer/backup-key.enc").write_bytes(wrapped)
+          Path("transfer/backup-key.enc").write_bytes(wrapped_key)
           PY
           cp package-sha256.txt transfer/
           (cd transfer && sha256sum supabase-db-dump-2026-11-08.zip.enc backup-key.enc > transfer-sha256.txt)
@@ -260,6 +272,7 @@ jobs:
           test -s transfer/backup-key.enc
           echo "PLAINTEXT_BACKUP_REMOVED=PASS"
           echo "BACKUP_ZIP_SHA256=$BACKUP_ZIP_SHA256"
+          echo "BACKUP_ZIP_SIZE=$BACKUP_ZIP_SIZE"
 
       - name: Upload encrypted one-day transfer artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
