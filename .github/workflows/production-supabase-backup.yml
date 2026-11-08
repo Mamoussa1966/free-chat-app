@@ -178,8 +178,8 @@ jobs:
           psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
             > /backup/source_extensions.tsv
-          PGOPTIONS="-c search_path=pg_catalog" psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,''),COALESCE(with_check,'') FROM pg_policies ORDER BY 1,2,3" \
+          psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,replace(COALESCE(qual,''),'auth.uid()','uid()'),replace(COALESCE(with_check,''),'auth.uid()','uid()') FROM pg_policies ORDER BY 1,2,3" \
             > /backup/source_policies.tsv
           psql "$SOURCE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT schemaname,tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') AND schemaname NOT LIKE 'pg_toast%' ORDER BY 1,2" \
@@ -231,8 +231,8 @@ jobs:
           psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
             -c "SELECT e.extname,e.extversion,COALESCE(n.nspname,'') FROM pg_extension e LEFT JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1" \
             > /backup/restored_extensions.tsv
-          PGOPTIONS="-c search_path=pg_catalog" psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
-            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,COALESCE(qual,''),COALESCE(with_check,'') FROM pg_policies ORDER BY 1,2,3" \
+          psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -F "|" \
+            -c "SELECT schemaname,tablename,policyname,roles::text,cmd,replace(COALESCE(qual,''),'auth.uid()','uid()'),replace(COALESCE(with_check,''),'auth.uid()','uid()') FROM pg_policies ORDER BY 1,2,3" \
             > /backup/restored_policies.tsv
           # Execute the same safely quoted count statements against the isolated restore.
           psql "$LOCAL_RESTORE" -X -v ON_ERROR_STOP=1 -At -f /backup/count_queries.sql \
