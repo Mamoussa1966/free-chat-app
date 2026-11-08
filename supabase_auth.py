@@ -207,6 +207,7 @@ class SupabaseAuthClient:
             # Never return or log raw response data, which can contain user values.
             provider_message = ""
             provider_error_code = ""
+            weak_password_reasons: list[str] = []
             try:
                 error_data = response.json()
                 if isinstance(error_data, dict):
@@ -224,6 +225,19 @@ class SupabaseAuthClient:
                         containers.append(nested_data)
                         if isinstance(nested_data.get("error"), dict):
                             containers.append(nested_data["error"])
+
+                    # GoTrue's current error shape may put the canonical code
+                    # in error_code and detail reasons in weak_password.reasons.
+                    weak_password_detail = error_data.get("weak_password")
+                    if isinstance(weak_password_detail, dict):
+                        raw_reasons = weak_password_detail.get("reasons")
+                        if isinstance(raw_reasons, list):
+                            weak_password_reasons = [
+                                reason for reason in raw_reasons
+                                if isinstance(reason, str)
+                                and reason in {"length", "characters", "pwned"}
+                            ]
+
                     allowed_password_codes = {
                         "weak_password",
                         "password_too_short",
@@ -263,6 +277,24 @@ class SupabaseAuthClient:
                     "صيغة البريد الإلكتروني غير صالحة في Supabase؛ "
                     "استخدم عنوانًا حقيقيًا بصيغة name@example.com."
                 )
+            elif provider_error_code == "weak_password" and weak_password_reasons:
+                reason_messages = {
+                    "length": "كلمة المرور أقصر من الحد الأدنى الذي يفرضه المشروع.",
+                    "characters": "كلمة المرور لا تحتوي على أنواع الأحرف التي تتطلبها سياسة المشروع.",
+                    "pwned": "كلمة المرور موجودة ضمن كلمات مرور مسرّبة أو مخترقة؛ اختر كلمة مختلفة وفريدة.",
+                }
+                details = [reason_messages[item] for item in ("length", "characters", "pwned") if item in weak_password_reasons]
+                minimum_match = re.search(
+                    r"\\bpassword\\b.*?\\b(?:at least|minimum(?: of)?)\\s+([0-9]{1,3})\\s+characters?\\b",
+                    provider_message,
+                )
+                if "length" in weak_password_reasons and minimum_match:
+                    minimum = int(minimum_match.group(1))
+                    if 8 <= minimum <= 1024:
+                        details[0] = (
+                            f"الحد الأدنى لطول كلمة المرور هو {minimum} أحرف وفق سياسة المشروع."
+                        )
+                message = "رفض Supabase كلمة المرور للأسباب التالية: " + " ".join(details)
             elif provider_error_code in password_error_messages:
                 message = password_error_messages[provider_error_code]
             elif status in (401, 403):
