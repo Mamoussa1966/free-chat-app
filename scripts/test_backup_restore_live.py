@@ -51,7 +51,7 @@ SAFE_AUTH_ERROR_CODES = frozenset({
 })
 
 
-def safe_auth_provider_code(response) -> str:
+def safe_auth_provider_code(response, *, request_url: str = "", status: int | None = None) -> str:
     """Return only an allowlisted Auth error code; never echo response body text."""
     try:
         payload = response.json()
@@ -63,7 +63,13 @@ def safe_auth_provider_code(response) -> str:
     if not isinstance(candidate, str):
         return "unclassified"
     code = candidate.strip().lower()
-    return code if code in SAFE_AUTH_ERROR_CODES else "unclassified"
+    if code in SAFE_AUTH_ERROR_CODES:
+        return code
+    # GoTrue also records invalid_credentials internally for password-grant
+    # HTTP 400 responses; the REST payload may omit the code in some versions.
+    if status == 400 and "token?grant_type=password" in request_url:
+        return "password_grant_rejected"
+    return "unclassified"
 
 
 class DiagnosticAuthTransport:
@@ -72,16 +78,20 @@ class DiagnosticAuthTransport:
     def __init__(self) -> None:
         self._session = requests.Session()
         self.last_status: int | None = None
+        self.last_request_url = ""
         self.last_provider_code = "none"
 
     def request(self, *args, **kwargs):
         self.last_status = None
+        self.last_request_url = str(args[1] if len(args) > 1 else kwargs.get("url", ""))
         self.last_provider_code = "none"
         response = self._session.request(*args, **kwargs)
         status = int(getattr(response, "status_code", 0) or 0)
         self.last_status = status
         if not 200 <= status < 300:
-            self.last_provider_code = safe_auth_provider_code(response)
+            self.last_provider_code = safe_auth_provider_code(
+                response, request_url=self.last_request_url, status=status
+            )
         return response
 
 
