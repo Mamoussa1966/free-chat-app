@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+
+import requests
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -20,12 +22,94 @@ from conversation_repository import (
     ConversationRepositoryError,
     OwnedConversationSnapshot,
 )
-from supabase_auth import SupabaseAuthClient
+from supabase_auth import SupabaseAuthClient, SupabaseAuthError
 from supabase_conversation_repository import SupabaseConversationRepository
 
 
 EXPECTED_TEST_HOST = "pidcepvwsezdrlhxqksg.supabase.co"
 CANONICAL_CONTRACT = "V26_3_CANONICAL_CONVERSATION_STORE"
+
+
+SAFE_AUTH_ERROR_CODES = frozenset({
+    "invalid_credentials",
+    "email_not_confirmed",
+    "user_banned",
+    "invalid_api_key",
+    "bad_api_key",
+    "no_authorization",
+    "validation_failed",
+    "over_request_rate_limit",
+    "over_email_send_rate_limit",
+    "rate_limit_exceeded",
+    "weak_password",
+    "captcha_failed",
+    "bad_jwt",
+    "invalid_token",
+    "bad_code_verifier",
+    "unexpected_audience",
+    "session_not_found",
+})
+
+
+def safe_auth_provider_code(response) -> str:
+    """Return only an allowlisted Auth error code; never echo response body text."""
+    try:
+        payload = response.json()
+    except Exception:
+        return "unclassified"
+    if not isinstance(payload, dict):
+        return "unclassified"
+    candidate = payload.get("code") or payload.get("error_code") or payload.get("error")
+    if not isinstance(candidate, str):
+        return "unclassified"
+    code = candidate.strip().lower()
+    return code if code in SAFE_AUTH_ERROR_CODES else "unclassified"
+
+
+class DiagnosticAuthTransport:
+    """Capture only HTTP status and allowlisted Auth code for test diagnostics."""
+
+    def __init__(self) -> None:
+        self._session = requests.Session()
+        self.last_status: int | None = None
+        self.last_provider_code = "none"
+
+    def request(self, *args, **kwargs):
+        self.last_status = None
+        self.last_provider_code = "none"
+        response = self._session.request(*args, **kwargs)
+        status = int(getattr(response, "status_code", 0) or 0)
+        self.last_status = status
+        if not 200 <= status < 300:
+            self.last_provider_code = safe_auth_provider_code(response)
+        return response
+
+
+def sign_in_with_safe_diagnostic(auth, transport, label: str, email: str, password: str):
+    """Sign in one disposable account without logging its email, password or tokens."""
+    try:
+        session = auth.sign_in(email, password)
+    except SupabaseAuthError:
+        status = transport.last_status
+        provider_code = (
+            transport.last_provider_code if status is not None
+            else "transport_or_client_error"
+        )
+        print(
+            f"AUTH_ACCOUNT_{label}=FAIL; http_status={status or 'unknown'}; "
+            f"provider_code={provider_code}",
+            file=sys.stderr,
+        )
+        return None
+    except ValueError:
+        print(
+            f"AUTH_ACCOUNT_{label}=FAIL; http_status=not_sent; "
+            "provider_code=local_input_validation",
+            file=sys.stderr,
+        )
+        return None
+    print(f"AUTH_ACCOUNT_{label}=PASS")
+    return session
 
 
 def required(name: str) -> str:
@@ -139,12 +223,20 @@ def main() -> int:
         "configured Supabase URL is pinned to the dedicated test project",
     )
 
+    auth_transport = DiagnosticAuthTransport()
     auth = SupabaseAuthClient(
         supabase_url=project_url,
         publishable_key=publishable_key,
+        session=auth_transport,
     )
-    session_a = auth.sign_in(email_a, password_a)
-    session_b = auth.sign_in(email_b, password_b)
+    # Attempt both accounts independently so one invalid pair does not hide
+    # the status of the other. Auth sign-in is read-only: no rows are written.
+    session_a = sign_in_with_safe_diagnostic(auth, auth_transport, "A", email_a, password_a)
+    session_b = sign_in_with_safe_diagnostic(auth, auth_transport, "B", email_b, password_b)
+    if session_a is None or session_b is None:
+        raise RuntimeError(
+            "one or more disposable Auth sign-ins failed; restore test stopped before writes"
+        )
     assert_live(
         session_a.user_id != session_b.user_id,
         "two distinct disposable Auth accounts signed in successfully",
