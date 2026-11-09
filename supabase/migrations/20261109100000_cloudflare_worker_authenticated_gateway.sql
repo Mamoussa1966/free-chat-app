@@ -53,6 +53,16 @@ $constraints$;
 alter table private_cloudflare.worker_admin_operators
   alter column created_by set not null;
 
+alter table private_cloudflare.worker_admin_operators
+  drop constraint if exists worker_admin_operator_actions_check;
+alter table private_cloudflare.worker_admin_operators
+  add constraint worker_admin_operator_actions_check check (
+    allowed_actions <@ array[
+      'inspect','register','refresh_versions','update_metadata',
+      'upload_version','deploy','rollback','set_policy'
+    ]::text[]
+  );
+
 create or replace function private_cloudflare.worker_admin_operator_audit()
 returns trigger
 language plpgsql
