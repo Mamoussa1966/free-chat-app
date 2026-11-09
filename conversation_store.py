@@ -119,16 +119,35 @@ def canonical_create_lifecycle(chat: dict, message: dict, request: dict, round_r
         raise
 
 def _restore_saved_identity_order(target: list, saved: list, identity_key: str) -> list:
-    """Restore canonical historical order from the committed snapshot.
+    """Restore committed history order without rolling lifecycle fields backward.
 
-    Streamlit reruns may leave a narrowed current list (for example Request 2)
-    while the committed snapshot still contains [Request 1, Request 2].  The
-    committed snapshot is the authoritative sequence; never let the narrowed
-    runtime list determine historical ordering. Existing identity rows are
-    merged by immutable ID, then emitted in saved canonical order followed by
-    genuinely new rows.
+    The committed snapshot is authoritative for historical membership and
+    order. A matching row in target is the newer in-flight record and must win
+    for fields it already carries. The saved checkpoint only fills fields
+    absent from the current row; otherwise an old STARTED status can erase a
+    just-written COMPLETED status during the next canonical commit.
     """
-    current_by_id = {str(x.get(identity_key) or ""): x for x in target if isinstance(x, dict) and str(x.get(identity_key) or "")}
+    immutable_fields_by_identity = {
+        "message_id": {
+            "message_id", "conversation_id", "session_id", "role", "request_id", "created_at",
+        },
+        "request_id": {
+            "request_id", "conversation_id", "session_id", "message_id", "created_at",
+            "canonical_round_base", "canonical_request_ordinal",
+        },
+        "round_id": {
+            "round_id", "conversation_id", "session_id", "message_id", "request_id",
+            "round", "round_number", "ordinal", "canonical_round_base",
+            "canonical_round_record_id", "canonical_identity_key",
+            "round_identity_contract", "record_type", "created_at",
+        },
+    }
+    immutable_fields = immutable_fields_by_identity.get(identity_key, {identity_key})
+    current_by_id = {
+        str(x.get(identity_key) or ""): x
+        for x in target
+        if isinstance(x, dict) and str(x.get(identity_key) or "")
+    }
     ordered = []
     seen = set()
     for item in saved if isinstance(saved, list) else []:
@@ -141,14 +160,117 @@ def _restore_saved_identity_order(target: list, saved: list, identity_key: str) 
         if row is None:
             row = copy.deepcopy(item)
         else:
-            for k, v in item.items():
-                if v not in (None, "", [], {}):
-                    row[k] = copy.deepcopy(v)
+            for key, value in item.items():
+                if value in (None, "", [], {}):
+                    continue
+                current_value = row.get(key)
+                if current_value in (None, "", [], {}):
+                    row[key] = copy.deepcopy(value)
+                elif key in immutable_fields and current_value != value:
+                    # Keep the current binding and make the conflict visible to
+                    # canonical audits rather than silently choosing either ID.
+                    row["identity_conflict"] = True
+                # For mutable lifecycle fields, current non-empty data wins.
         ordered.append(row)
         seen.add(ident)
     # Preserve any current-only records after the committed historical prefix.
     ordered.extend(current_by_id.values())
     return ordered
+
+
+def reconcile_canonical_round_completion_statuses(record: dict) -> int:
+    """Repair stale STARTED labels only when complete application-owned proof exists.
+
+    A round is promoted to COMPLETED only when its exact canonical Request is
+    COMPLETED, the Message/Request/Round identity chain agrees, persisted
+    finished_at/result_count are present, and every per-seat result has its
+    exact request_id:round:seat key. No identity, counter, timestamp, or result
+    is invented; uncertain or partial records remain unchanged.
+    """
+    if not isinstance(record, dict):
+        return 0
+    conversation_id = str(record.get("conversation_id") or "").strip()
+    requests = record.get("requests") if isinstance(record.get("requests"), list) else []
+    rounds = record.get("rounds") if isinstance(record.get("rounds"), list) else []
+    requests_by_id: dict[str, list[dict]] = {}
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        request_id = str(request.get("request_id") or "").strip()
+        if request_id:
+            requests_by_id.setdefault(request_id, []).append(request)
+
+    repaired = 0
+    for round_row in rounds:
+        if not isinstance(round_row, dict) or str(round_row.get("status") or "").upper() != "STARTED":
+            continue
+        request_id = str(round_row.get("request_id") or "").strip()
+        message_id = str(round_row.get("message_id") or "").strip()
+        round_id = str(round_row.get("round_id") or "").strip()
+        if not request_id or not message_id or not round_id or not conversation_id:
+            continue
+        matching_requests = requests_by_id.get(request_id, [])
+        if len(matching_requests) != 1:
+            continue
+        request = matching_requests[0]
+        if str(request.get("state") or "").upper() != "COMPLETED":
+            continue
+        if (
+            str(request.get("message_id") or "") != message_id
+            or str(request.get("conversation_id") or "") != conversation_id
+            or str(request.get("session_id") or "") != str(round_row.get("session_id") or "")
+        ):
+            continue
+        try:
+            round_number = int(round_row.get("ordinal"))
+            legacy_round_number = int(round_row.get("round"))
+            expected_result_count = int(round_row.get("result_count"))
+        except (TypeError, ValueError):
+            continue
+        if (
+            round_number < 1
+            or legacy_round_number != round_number
+            or expected_result_count < 1
+            or not str(round_row.get("finished_at") or "").strip()
+            or round_id != f"{conversation_id}:{request_id}:r{round_number}"
+            or str(round_row.get("canonical_round_record_id") or "") != round_id
+            or str(round_row.get("canonical_identity_key") or "")
+                != f"{conversation_id}:{request_id}:r{round_number}"
+            or str(round_row.get("record_type") or "") != "CANONICAL_ROUND_RECORD"
+        ):
+            continue
+
+        results = request.get("results") if isinstance(request.get("results"), list) else []
+        round_results = []
+        valid_results = True
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            if (
+                str(result.get("request_id") or "") != request_id
+                or str(result.get("round") or "") != str(round_number)
+            ):
+                continue
+            seat = str(result.get("seat") or "").strip()
+            result_key = str(result.get("result_key") or "").strip()
+            result_status = str(result.get("status") or "").strip()
+            if not seat or result_key != f"{request_id}:{round_number}:{seat}" or not result_status:
+                valid_results = False
+                break
+            round_results.append((seat, result_key))
+
+        seats = [seat for seat, _ in round_results]
+        result_keys = [key for _, key in round_results]
+        if (
+            not valid_results
+            or len(round_results) != expected_result_count
+            or len(set(seats)) != expected_result_count
+            or len(set(result_keys)) != expected_result_count
+        ):
+            continue
+        round_row["status"] = "COMPLETED"
+        repaired += 1
+    return repaired
 
 
 def commit_canonical_record(chat: dict, session_state=None) -> dict:
