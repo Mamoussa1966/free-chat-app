@@ -482,6 +482,13 @@ begin
      set active_version_ids=coalesce(v_active_ids,array[]::uuid[]),last_reconciled_at=now(),updated_at=now()
    where worker_name=p_worker_name;
 
+  insert into private_cloudflare.worker_admin_audit(worker_name,worker_id,operation,http_status,api_success,result_summary)
+  values(p_worker_name,v_target.worker_id,'refresh_versions',200,true,
+    jsonb_build_object(
+      'tracked_versions',(select count(*) from private_cloudflare.worker_admin_versions where worker_name=p_worker_name),
+      'active_version_ids',coalesce(v_active_ids,array[]::uuid[])
+    ));
+
   return jsonb_build_object('ok',true,'worker_name',p_worker_name,
     'active_version_ids',coalesce(v_active_ids,array[]::uuid[]),
     'tracked_versions',(select count(*) from private_cloudflare.worker_admin_versions where worker_name=p_worker_name));
@@ -744,6 +751,20 @@ begin
         allowed_operations=array(select distinct x from unnest(p_allowed_operations||array['inspect']::text[]) x),
         allow_delete=p_allow_delete,updated_at=now()
    where worker_name=p_worker_name;
+
+  insert into private_cloudflare.worker_admin_audit(worker_name,worker_id,operation,http_status,api_success,result_summary)
+  values(p_worker_name,v_target.worker_id,'set_policy',200,true,
+    jsonb_build_object(
+      'previous_environment',v_target.environment,
+      'environment',p_environment,
+      'previous_allowed_operations',v_target.allowed_operations,
+      'allowed_operations',array(select distinct x from unnest(p_allowed_operations||array['inspect']::text[]) x),
+      'previous_production_protected',v_target.production_protected,
+      'production_protected',v_protected,
+      'previous_allow_delete',v_target.allow_delete,
+      'allow_delete',p_allow_delete
+    ));
+
   return jsonb_build_object('ok',true,'worker_name',p_worker_name,'environment',p_environment,
     'production_protected',v_protected,'allowed_operations',p_allowed_operations,'allow_delete',p_allow_delete);
 end;
