@@ -15,8 +15,16 @@ This implementation is a candidate for review on
 - No Production secret, Cloudflare token, Worker allow-list row, or Worker was
   created or modified by this change.
 - The operator allow-list is deliberately empty by default.
-- Cloudflare Worker operations remain unavailable until an explicit user is
-  enrolled by a database owner and each target Worker is separately registered.
+- `cloudflare_worker_admin_client.py` is a server-side adapter candidate. It
+  is not imported by `main.py` or `app.py`, and no Streamlit management UI
+  is wired to it in this PR.
+- Cloudflare Worker operations remain unavailable until a signed-in user is
+  explicitly enrolled by a database owner and each target Worker is separately
+  registered.
+- Runtime tests cover missing/malformed JWT rejection. A successful call using
+  a real, independently issued test-user JWT has not yet been performed; the
+  21 pgTAP tests validate database authorization logic using controlled test
+  claims, not a live Supabase Auth session.
 
 ## Request path
 
