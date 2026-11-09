@@ -128,7 +128,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     global: { headers: { Authorization: authorization } },
   });
 
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  const userAccessToken = authorization.replace(/^Bearer\\s+/i, "").trim();
+  const { data: userData, error: userError } = await supabase.auth.getUser(userAccessToken);
   if (userError || !userData?.user?.id) {
     return json({ ok: false, code: "invalid_user_session", request_id: requestId }, 401);
   }
