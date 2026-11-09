@@ -247,8 +247,14 @@ def _render_mfa_panel(
             for item in factors
             if isinstance(item, dict) and item.get("status") == "verified" and item.get("id")
         ]
+        verified_labels = {
+            str(item.get("id")): str(item.get("friendly_name") or "عامل المصادقة") + " · موثّق"
+            for item in factors
+            if isinstance(item, dict) and item.get("status") == "verified" and item.get("id")
+        }
     else:
         verified_ids = []
+        verified_labels = {}
         if isinstance(factors, list):
             st.info("لم يُعثر على عامل TOTP موثّق للحساب بعد.")
 
@@ -353,12 +359,15 @@ def _render_mfa_panel(
             selected_factor = st.selectbox(
                 "عامل المصادقة",
                 verified_ids,
+                format_func=lambda factor_id: verified_labels.get(factor_id, "عامل TOTP موثّق"),
                 key="cf_mfa_stepup_factor",
             )
             with st.form("cf_mfa_stepup_form"):
                 stepup_code = st.text_input(
-                    "أدخل الرمز الحالي من تطبيق المصادقة",
-                    max_chars=10,
+                    "أدخل رمز TOTP المؤقت — ستة أرقام فقط",
+                    max_chars=6,
+                    placeholder="123456",
+                    help="هذا ليس UUID الخاص بعامل المصادقة؛ أدخل الرمز المتغير من تطبيق TOTP فقط.",
                     key="cf_mfa_stepup_code",
                 ).strip()
                 stepup_submit = st.form_submit_button("التحقق ورفع مستوى الجلسة", use_container_width=True)
