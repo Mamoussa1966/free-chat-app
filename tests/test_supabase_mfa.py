@@ -106,7 +106,7 @@ def test_totp_enrollment_challenge_and_verify_use_fixed_user_auth_routes():
     assert verified["access_token"] == "new-signed-access-token"
     assert [call[0] for call in session.calls] == ["GET", "POST", "POST", "POST"]
     assert [call[1].split("/auth/v1", 1)[1] for call in session.calls] == [
-        "/user",
+        "/user/",
         "/factors/",
         f"/factors/{FACTOR_ID}/challenge",
         f"/factors/{FACTOR_ID}/verify",
