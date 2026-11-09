@@ -166,7 +166,9 @@ class SupabaseMFAClient:
             raise SupabaseMFAError("invalid_auth_response", status)
         if not 200 <= status < 300:
             code = data.get("code") or data.get("error_code") or data.get("error")
-            if status == 422 and not (isinstance(code, str) and code.strip()):
+            if status == 422 and not (
+                isinstance(code, str) and _SAFE_ERROR_CODE.fullmatch(code.strip())
+            ):
                 code = "mfa_verification_failed"
             raise SupabaseMFAError(code if isinstance(code, str) else "mfa_request_rejected", status)
         return data
