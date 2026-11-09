@@ -1,9 +1,7 @@
 -- Cloudflare Worker Admin Bridge
 -- Self-contained incremental Supabase migration for the test project.
--- All Worker write operations are scoped by private_cloudflare.worker_admin_allowlist.
--- Production Workers cannot be deleted or have metadata mutated by this bridge.
--- Production deployments/rollbacks require exact operation-specific approval.
--- The functions and schema are not exposed to anon, authenticated, or service_role.
+-- Per-Worker allow-list; exact confirmations; production protections; audited deployment and rollback.
+-- Private schema and tables are not exposed to client roles. RLS is enabled as defense in depth.
 
 create schema if not exists extensions;
 create extension if not exists http with schema extensions;
@@ -46,6 +44,10 @@ create table if not exists private_cloudflare.worker_admin_audit (
   created_at timestamptz not null default now()
 );
 
+alter table private_cloudflare.worker_admin_allowlist enable row level security;
+alter table private_cloudflare.worker_admin_versions enable row level security;
+alter table private_cloudflare.worker_admin_audit enable row level security;
+
 create index if not exists worker_admin_versions_worker_name_idx on private_cloudflare.worker_admin_versions(worker_name);
 create index if not exists worker_admin_audit_worker_created_idx on private_cloudflare.worker_admin_audit(worker_name,created_at desc);
 
@@ -53,15 +55,6 @@ revoke all on private_cloudflare.worker_admin_allowlist from public,anon,authent
 revoke all on private_cloudflare.worker_admin_versions from public,anon,authenticated,service_role;
 revoke all on private_cloudflare.worker_admin_audit from public,anon,authenticated,service_role;
 revoke all on schema private_cloudflare from public,anon,authenticated,service_role;
-
-do $migration$
-begin
-  if not exists (select 1 from pg_constraint where conrelid='private_cloudflare.worker_admin_allowlist'::regclass and conname='worker_admin_delete_test_only') then
-    alter table private_cloudflare.worker_admin_allowlist add constraint worker_admin_delete_test_only
-      check (not allow_delete or environment='test');
-  end if;
-end
-$migration$;
 ;
 
 CREATE OR REPLACE FUNCTION private_cloudflare.request(p_method text, p_path text, p_body jsonb DEFAULT NULL::jsonb)
