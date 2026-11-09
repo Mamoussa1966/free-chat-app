@@ -149,26 +149,27 @@ Do not reuse the broad token currently held in the Test Vault. Create a
 separate account-owned API token for Production after a Worker has been
 selected.
 
-Use two narrowly separated Workers permission policies on that token:
+Use a single narrowly scoped Workers permission policy on that token:
 
-1. **Workers product — Metadata Read-Only**: allows the bridge to list the
-   account's Worker names and metadata. It does not permit viewing Worker
-   source content or making changes.
-2. **Individual Workers — Editor**: apply only to the explicitly selected
-   existing Worker or Workers. Editor permits reading/updating/deploying
-   existing Workers but does not permit creating or deleting Workers.
+- **Individual Workers — Editor**: apply only to the explicitly selected
+  existing Worker or Workers. This role covers reading the selected Worker,
+  reading its versions, uploading a new version, deploying that version and
+  editing Worker metadata. It does not permit creating or deleting Workers.
+
+The List Workers and Get Worker APIs, List Worker Versions, Create Worker
+Version, Create Deployment and Edit Worker endpoints all list
+`Individual Workers Editor` as an accepted permission. This avoids granting
+an account-wide Workers product role solely to discover or administer selected
+Workers. The API list must be treated as inventory for the token's permitted
+scope, not as authorization to operate on other Workers.
 
 Do not grant product-level Workers Editor/Admin, Individual Workers Admin,
 Workers Scripts Write as a broad account permission, or any Developer Platform
 Admin role. Do not grant Billing, Account Settings, API Tokens, Secrets Store,
 KV, R2, Workers AI, Tail, logs, DNS, Zone or User permissions.
 
-Cloudflare's current permission model explicitly supports combining
-product-level Metadata Read-Only with Editor on only selected Worker resources.
-The List Workers API accepts Metadata Read-Only; version upload and deployment
-accept Individual Workers Editor; partial metadata editing accepts Individual
-Workers Editor. The Worker role documentation says Editor cannot create or
-delete Worker resources. See:
+Cloudflare's role guide says an Individual Worker Editor can update and deploy
+existing Workers but cannot create or delete them. See:
 - https://developers.cloudflare.com/workers/authorization/workers/
 - https://developers.cloudflare.com/workers/authorization/
 - https://developers.cloudflare.com/changelog/post/2026-09-15-granular-worker-permissions/
@@ -177,12 +178,11 @@ delete Worker resources. See:
 - https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/create/
 - https://developers.cloudflare.com/api/go/resources/workers/subresources/beta/subresources/workers/methods/edit/
 
-The current Cloudflare inventory is empty, so there is no existing Worker to
-place in an Individual Workers Editor scope yet. A product-level
-Metadata Read-Only policy can discover metadata without source access; after
-the application owner selects or creates the specific Worker through the
-normal Cloudflare Dashboard workflow, add Editor for that Worker only. Do not
-widen the token to Admin just to enable creation.
+The current Cloudflare inventory is empty, so there is no existing
+Worker to place in an Individual Workers Editor scope yet. The application
+owner must first create or identify the intended Worker through the normal
+Cloudflare Dashboard workflow. Then scope the token to that exact Worker.
+Do not widen the token to a product-level role or Admin just to enable creation.
 
 Set a short initial expiry (for example, 30 days). Use an IP restriction only
 if the production runtime has a verified stable outbound IP range; do not
@@ -201,7 +201,10 @@ branch has not created or saved a Production token.
 - No `service_role` execute grant on the dispatcher.
 - `authenticated` has access only to the public dispatcher; private schema
   remains unavailable to client roles.
-- The operator table is empty and the Worker allow-list is empty.
+- The operator table is empty. The Worker allow-list has no active
+  entries; it retains one historical test tombstone marked disabled/deleted
+  (the disposable safety-test Worker), with historical version and audit rows.
+  No Worker is active or manageable through the test gateway.
 - Edge Function deployed with `verify_jwt = true`.
 - Calling the Edge Function without a JWT returns HTTP 401.
 - Calling the Edge Function with a malformed JWT returns HTTP 401.
