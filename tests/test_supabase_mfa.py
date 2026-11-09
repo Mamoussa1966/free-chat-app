@@ -64,6 +64,21 @@ def test_totp_enrollment_challenge_and_verify_use_fixed_user_auth_routes():
             _Response(
                 200,
                 {
+                    "id": USER_ID,
+                    "factors": [
+                        {
+                            "id": FACTOR_ID,
+                            "factor_type": "totp",
+                            "status": "unverified",
+                            "friendly_name": "AI Council Cloudflare Admin",
+                            "created_at": "2026-11-09T00:00:00Z",
+                        }
+                    ],
+                },
+            ),
+            _Response(
+                200,
+                {
                     "id": FACTOR_ID,
                     "totp": {
                         "qr_code": "<svg></svg>",
@@ -78,20 +93,25 @@ def test_totp_enrollment_challenge_and_verify_use_fixed_user_auth_routes():
     )
     client = _client(session)
 
+    listed = client.list_factors()
     setup = client.enroll_totp()
     challenge_id = client.challenge(setup["factor_id"])
     verified = client.verify(setup["factor_id"], challenge_id, "123456")
 
+    assert listed["all"][0]["id"] == FACTOR_ID
+    assert listed["totp"] == []  # unverified factors are not sign-in-ready
     assert setup["factor_id"] == FACTOR_ID
     assert setup["secret"] == "TESTSECRET"
     assert challenge_id == CHALLENGE_ID
     assert verified["access_token"] == "new-signed-access-token"
-    assert [call[0] for call in session.calls] == ["POST", "POST", "POST"]
+    assert [call[0] for call in session.calls] == ["GET", "POST", "POST", "POST"]
     assert [call[1].split("/auth/v1", 1)[1] for call in session.calls] == [
-        "/factors",
+        "/user",
+        "/factors/",
         f"/factors/{FACTOR_ID}/challenge",
         f"/factors/{FACTOR_ID}/verify",
     ]
+    assert all(call[2]["allow_redirects"] is False for call in session.calls)
     assert all(call[2]["headers"]["Authorization"] == f"Bearer {_jwt()}" for call in session.calls)
     assert all(call[2]["headers"]["apikey"].startswith("sb_publishable_") for call in session.calls)
     assert session.calls[0][2]["json"]["factor_type"] == "totp"
@@ -105,6 +125,21 @@ def test_verify_rejects_invalid_totp_without_http_request(code: str):
     with pytest.raises(ValueError):
         client.verify(FACTOR_ID, CHALLENGE_ID, code)
     assert session.calls == []
+
+
+def test_auth_redirect_is_not_followed_or_allowed_to_change_http_method():
+    session = _Session([_Response(302, {"location": "/auth/v1/factors/"})])
+    client = _client(session)
+
+    with pytest.raises(SupabaseMFAError) as error:
+        client.enroll_totp()
+
+    assert error.value.code == "auth_unexpected_redirect"
+    assert error.value.status_code == 302
+    assert len(session.calls) == 1
+    assert session.calls[0][0] == "POST"
+    assert session.calls[0][1].endswith("/auth/v1/factors/")
+    assert session.calls[0][2]["allow_redirects"] is False
 
 
 def test_http_error_is_sanitized_and_does_not_retain_raw_body():
