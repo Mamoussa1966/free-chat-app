@@ -3081,6 +3081,15 @@ def _run_provider_diagnostics(credentials: dict, model_candidates: dict) -> list
     return [results[seat.key] for seat in seats]
 
 
+def _conversation_history_caption(item: dict) -> str:
+    """Distinguish an unsent local draft from an actual conversation history row."""
+    messages = item.get("messages") if isinstance(item, dict) else None
+    count = len(messages) if isinstance(messages, list) else 0
+    if count == 0:
+        return "مسودة جديدة • لم تُرسل أي رسالة بعد"
+    created_at = str(item.get("created_at") or "").strip()
+    return f"{count} رسالة • {created_at}" if created_at else f"{count} رسالة"
+
 def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> int:
     seats = get_seats()
     with st.sidebar:
@@ -3207,7 +3216,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.active_chat_id = item["id"]
                 st.session_state.last_results = []
                 st.rerun()
-            st.caption(f"{len(item.get('messages', []))} رسالة • {item.get('created_at', '')}")
+            st.caption(_conversation_history_caption(item))
         c3, c4 = st.columns(2)
         with c3:
             if st.button("🗑️ حذف الحالية", use_container_width=True):
