@@ -23,6 +23,7 @@ _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
 _SAFE_ERROR_CODE = re.compile(r"^[a-z0-9_]{1,80}$")
+_TOTP_DIGIT_TRANSLATION = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 
 
 class SupabaseMFAError(RuntimeError):
@@ -165,6 +166,8 @@ class SupabaseMFAClient:
             raise SupabaseMFAError("invalid_auth_response", status)
         if not 200 <= status < 300:
             code = data.get("code") or data.get("error_code") or data.get("error")
+            if status == 422 and not (isinstance(code, str) and code.strip()):
+                code = "mfa_verification_failed"
             raise SupabaseMFAError(code if isinstance(code, str) else "mfa_request_rejected", status)
         return data
 
@@ -236,9 +239,9 @@ class SupabaseMFAClient:
         """Verify a TOTP code and return the new AAL2 session response."""
         factor = self._factor_id(factor_id)
         challenge = self._factor_id(challenge_id)
-        otp = str(code or "").strip()
-        if not re.fullmatch(r"\d{6,10}", otp):
-            raise ValueError("TOTP code must contain 6..10 digits")
+        otp = str(code or "").strip().translate(_TOTP_DIGIT_TRANSLATION)
+        if not re.fullmatch(r"[0-9]{6}", otp):
+            raise ValueError("TOTP code must contain exactly 6 digits")
         data = self._request(
             "POST",
             f"/factors/{factor}/verify",
