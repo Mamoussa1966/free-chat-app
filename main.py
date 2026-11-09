@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 import hashlib
 import copy
 import html
@@ -5896,10 +5895,10 @@ def run_app() -> None:
         try:
             process_started = datetime.fromisoformat(process_start_raw.replace("Z", "+00:00"))
             process_started_utc = process_started.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-            process_started_riyadh = process_started.astimezone(ZoneInfo("Asia/Riyadh")).strftime("%Y-%m-%d %H:%M:%S %Z")
+            process_started_riyadh = process_started.astimezone(timezone(timedelta(hours=3), name="AST")).strftime("%Y-%m-%d %H:%M:%S %Z")
             process_id = int(runtime_attestation.get("process_id") or 0)
             st.caption(
-                f"وقت بدء عملية Streamlit الحالية: `{process_started_riyadh}` (الرياض) · "
+                f"وقت بدء عملية Streamlit الحالية: `{process_started_riyadh}` (الرياض UTC+03) · "
                 f"`{process_started_utc}` · PID `{process_id}` · المصدر `linux_procfs`."
             )
         except (TypeError, ValueError, OverflowError):
