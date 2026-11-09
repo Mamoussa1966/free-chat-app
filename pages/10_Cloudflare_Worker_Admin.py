@@ -6,7 +6,6 @@ operator/worker allow-lists. Destructive Worker deletion is not exposed.
 from __future__ import annotations
 
 import base64
-import json
 import re
 import time
 import streamlit as st
@@ -16,7 +15,7 @@ from cloudflare_worker_admin_client import (
     CloudflareWorkerAdminClientError,
 )
 from supabase_auth import SupabaseAuthClient
-from supabase_mfa import SupabaseMFAClient, SupabaseMFAError
+from supabase_mfa import SupabaseMFAClient, SupabaseMFAError, session_assurance_level
 from supabase_streamlit_auth import (
     AUTH_SESSION_KEY,
     _schedule_browser_write,
@@ -34,24 +33,6 @@ _ALLOWED_POLICY_ACTIONS = [
 ]
 _WORKER_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _RESULT_KEY = "cloudflare_worker_admin_last_result"
-
-
-def _session_aal_for_display(access_token: str) -> str:
-    """Read the already Auth-verified JWT assurance claim for UI display only.
-
-    This value never authorizes operations; the Supabase gateway still enforces AAL2.
-    """
-    parts = str(access_token or "").split(".")
-    if len(parts) != 3 or len(parts[1]) > 8192:
-        return "unknown"
-    try:
-        payload = json.loads(
-            base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode("utf-8")
-        )
-    except Exception:
-        return "unknown"
-    level = str(payload.get("aal") or "").lower() if isinstance(payload, dict) else ""
-    return level if level in {"aal1", "aal2"} else "unknown"
 
 
 def _masked_email(value: str) -> str:
@@ -346,7 +327,7 @@ def _render_mfa_panel(
         st.caption("اترك هذه الصفحة مفتوحة حتى تكمل إدخال الرمز والتحقق؛ لا تغلق شاشة الإعداد قبل إتمام التفعيل.")
 
     elif verified_ids:
-        current_aal = _session_aal_for_display(str(session_state.get("access_token") or ""))
+        current_aal = session_assurance_level(str(session_state.get("access_token") or ""))
         if current_aal == "aal2":
             st.success("تم التحقق بنجاح. الجلسة الحالية مؤكدة بالمستوى AAL2.")
             st.caption(
