@@ -77,7 +77,23 @@ values
 This template is documentation only. It has not been run in Production or
 Test by this change. Replace both UUID placeholders only after independently
 verifying their identities. Do not add `deploy`, `delete`, or `set_policy`
-merely to make setup convenient.
+merely to make setup convenient. The insert is recorded automatically in the
+append-only Worker audit table with the creator UUID and allowed actions.
+
+To change an operator's actions, use an audited UPDATE and identify the
+approving owner in `updated_by`:
+
+```sql
+update private_cloudflare.worker_admin_operators
+   set allowed_actions = array['inspect']::text[],
+       enabled = true,
+       updated_by = '<VERIFIED_DATABASE_OWNER_AUTH_USER_UUID>'::uuid,
+       updated_at = now()
+ where user_id = '<VERIFIED_AUTH_USER_UUID>'::uuid;
+```
+
+Operator rows cannot be hard-deleted. Disable an operator instead, so
+enrollment and policy history remains auditable.
 
 Worker enrollment is separate. A Worker must first exist in the Cloudflare
 account, be registered in the per-Worker allow-list, and receive only the
