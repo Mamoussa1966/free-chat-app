@@ -1,5 +1,5 @@
 const SERVICE_NAME = "ai-council-cloudflare-canary";
-const RELEASE_ID = "canary-2026-11-09.1";
+const RELEASE_ID = "canary-2026-11-09.2";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -15,8 +15,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 export default {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // Treat /, /health, and their trailing-slash variants as health checks.
+    // This keeps the canary easy to verify from a mobile browser while
+    // preserving a deliberately minimal, data-free response surface.
+    const path = url.pathname.replace(/\/+$/, "") || "/";
 
-    if (url.pathname !== "/health") {
+    if (path !== "/" && path !== "/health") {
       return new Response("Not Found", {
         status: 404,
         headers: {

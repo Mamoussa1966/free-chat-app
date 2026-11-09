@@ -7,7 +7,8 @@ a remote browser session.
 ## Security boundary
 
 - Worker name: `ai-council-cloudflare-canary`
-- Runtime surface: `GET /health` and `HEAD /health` only
+- Runtime surface: `GET /health`, `HEAD /health`, and the same health response
+  at `/` (including trailing-slash variants).
 - No secrets, environment variables, KV, D1, R2, Durable Objects, service
   bindings, external fetches, user data, or database connections.
 - No Worker deletion endpoint or administrative operation.
@@ -33,17 +34,17 @@ Connect this project to Cloudflare's native Git integration:
 9. Review the API token selected under **Settings > Builds** before keeping
    the integration active.
 
-Cloudflare Workers Builds runs the build and deploy commands when a commit is
-pushed to the connected production branch. It can report build status in
-GitHub, avoiding TinyFish, a cloud-browser wallet, and a Cloudflare credential
-in GitHub Actions.
+Cloudflare Workers Builds runs the build command followed by the deploy command
+for pushes to the configured production branch. A successful dry-run step alone
+does not prove the Worker was deployed; verify the active deployment and its
+health response.
 
 ## Token handling
 
-Cloudflare documents that its automatically generated Workers Builds token
-starts with broad permissions for Workers Scripts, KV, R2, routes, and certain
-account/user read scopes. Do not treat that automatically generated token as
-the desired long-term least-privilege credential.
+Cloudflare's automatically generated Workers Builds token starts with broad
+permissions for Workers Scripts, KV, R2, routes, and certain account/user read
+scopes. Do not treat this automatically generated token as the desired
+long-term least-privilege credential.
 
 After the canary Worker has been created and its exact identity is known:
 
@@ -51,8 +52,7 @@ After the canary Worker has been created and its exact identity is known:
    scoped to this Worker only, where supported by the Workers Builds token
    selector.
 2. Replace the broad bootstrap/build token with the scoped token.
-3. Revoke the temporary broad token after confirming a successful build with
-   the scoped token.
+3. Re-run a build using the scoped token before revoking the temporary token.
 4. Do not copy either token into source code, GitHub repository files, or
    Streamlit secrets.
 
@@ -68,10 +68,9 @@ secret and does not enroll a Supabase operator.
   `1171975142d29fc55425b752629bb8bd`.
 - Confirm the build ran from the `gitops-v0.4-final` branch and this root
   directory.
-- Request `https://ai-council-cloudflare-canary.electroplating-engineer.workers.dev/health`
-  and verify HTTP 200 with `ok: true` and the expected release ID.
-- Confirm a non-`/health` path returns 404 and a non-GET/HEAD method on
-  `/health` returns 405.
+- Request the Worker's `workers.dev` URL and verify HTTP 200 with `ok: true`
+  and release ID `canary-2026-11-09.2`; `/health` is also accepted.
+- Confirm an unrelated path returns 404 and a non-GET/HEAD method returns 405.
 - Confirm the build token is restricted to the one Worker after bootstrap.
 
 ## Free-plan note
