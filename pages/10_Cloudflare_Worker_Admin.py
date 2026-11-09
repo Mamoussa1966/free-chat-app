@@ -186,6 +186,17 @@ def _render_mfa_panel(
         "استخدم تطبيق مصادقة يدعم TOTP. هذه الطريقة لا ترسل SMS ولا تحتاج إلى إعداد مزود رسائل."
     )
 
+    # The step-up result is persisted in the signed Supabase access token.
+    # Keep this success state visible after Streamlit reruns instead of
+    # immediately rendering the same verification form again.
+    if mfa_client.current_assurance_level == "aal2":
+        st.success("الجلسة الحالية مؤمّنة بمستوى AAL2. تم التحقق من عامل المصادقة بنجاح.")
+        st.caption(
+            "لن تحتاج إلى إعادة إدخال الرمز ما دامت هذه الجلسة صالحة. "
+            "قد يلزم رفع المستوى مرة أخرى بعد تسجيل الخروج أو انتهاء الجلسة."
+        )
+        return
+
     if st.button("فحص عوامل MFA الحالية", key="cf_mfa_refresh_factors", use_container_width=True):
         try:
             factors_data = mfa_client.list_factors()
@@ -245,7 +256,8 @@ def _render_mfa_panel(
         with st.form("cf_mfa_verify_enrollment_form"):
             enrollment_code = st.text_input(
                 "أدخل الرمز الحالي المكوّن من 6 أرقام من تطبيق المصادقة",
-                max_chars=10,
+                max_chars=6,
+                type="password",
                 key="cf_mfa_enrollment_code",
             ).strip()
             verify_enrollment = st.form_submit_button("التحقق وتفعيل MFA", use_container_width=True)
@@ -266,6 +278,8 @@ def _render_mfa_panel(
                     publishable_key=publishable_key,
                 )
                 verified_user = auth_client.get_verified_user(new_access_token)
+                if mfa_client.assurance_level_for(new_access_token) != "aal2":
+                    raise SupabaseMFAError("aal2_session_not_issued", 200)
                 expected_user_id = str(session_state.get("user_id") or "")
                 if verified_user.get("id") != expected_user_id:
                     raise SupabaseMFAError("verified_user_mismatch", 401)
@@ -319,7 +333,8 @@ def _render_mfa_panel(
         with st.form("cf_mfa_stepup_form"):
             stepup_code = st.text_input(
                 "أدخل الرمز الحالي من تطبيق المصادقة",
-                max_chars=10,
+                max_chars=6,
+                type="password",
                 key="cf_mfa_stepup_code",
             ).strip()
             stepup_submit = st.form_submit_button("التحقق ورفع مستوى الجلسة", use_container_width=True)
@@ -339,6 +354,8 @@ def _render_mfa_panel(
                     publishable_key=publishable_key,
                 )
                 verified_user = auth_client.get_verified_user(new_access_token)
+                if mfa_client.assurance_level_for(new_access_token) != "aal2":
+                    raise SupabaseMFAError("aal2_session_not_issued", 200)
                 expected_user_id = str(session_state.get("user_id") or "")
                 if verified_user.get("id") != expected_user_id:
                     raise SupabaseMFAError("verified_user_mismatch", 401)
