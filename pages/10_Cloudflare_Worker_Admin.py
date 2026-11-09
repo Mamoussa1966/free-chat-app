@@ -240,12 +240,18 @@ def _render_mfa_panel(
         )
         st.write("على الهاتف نفسه، استخدم خيار **إدخال مفتاح الإعداد يدويًا** في تطبيق المصادقة.")
         st.code(pending_secret, language=None)
+        st.caption(
+            "مفتاح الإعداد اليدوي بصيغة Base32: الأحرف A–Z والأرقام 2–7 فقط. "
+            "لا تضف رقمًا أو تحذف حرفًا من المفتاح. الرمز المتغير من التطبيق ستة أرقام فقط."
+        )
         st.caption("اسم الحساب: AI Council Cloudflare Admin · نوع الرمز: Time-based (TOTP)")
 
         with st.form("cf_mfa_verify_enrollment_form"):
             enrollment_code = st.text_input(
-                "أدخل الرمز الحالي المكوّن من 6 أرقام من تطبيق المصادقة",
-                max_chars=10,
+                "رمز المصادقة الحالي — 6 أرقام بالضبط",
+                max_chars=6,
+                placeholder="123456",
+                help="أدخل ستة أرقام فقط من تطبيق TOTP. يتم تطبيع الأرقام العربية والفارسية تلقائيًا.",
                 key="cf_mfa_enrollment_code",
             ).strip()
             verify_enrollment = st.form_submit_button("التحقق وتفعيل MFA", use_container_width=True)
@@ -318,8 +324,10 @@ def _render_mfa_panel(
         )
         with st.form("cf_mfa_stepup_form"):
             stepup_code = st.text_input(
-                "أدخل الرمز الحالي من تطبيق المصادقة",
-                max_chars=10,
+                "رمز المصادقة الحالي — 6 أرقام بالضبط",
+                max_chars=6,
+                placeholder="123456",
+                help="أدخل ستة أرقام فقط من تطبيق TOTP. يتم تطبيع الأرقام العربية والفارسية تلقائيًا.",
                 key="cf_mfa_stepup_code",
             ).strip()
             stepup_submit = st.form_submit_button("التحقق ورفع مستوى الجلسة", use_container_width=True)
