@@ -153,6 +153,20 @@ def test_http_error_is_sanitized_and_does_not_retain_raw_body():
     assert "do not surface raw" not in str(error.value)
 
 
+def test_supabase_auth_aal2_claim_is_visible_to_admin_status():
+    payload = {
+        "sub": USER_ID,
+        "role": "authenticated",
+        "iss": ISSUER,
+        "exp": int(time.time()) + 3600,
+        "is_anonymous": False,
+        "aal": "aal2",
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    parsed = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+    assert parsed["aal"] == "aal2"
+
+
 def test_invalid_factor_id_is_rejected_before_http():
     session = _Session([])
     client = _client(session)
