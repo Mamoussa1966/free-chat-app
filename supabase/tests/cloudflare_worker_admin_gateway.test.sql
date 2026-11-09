@@ -179,10 +179,7 @@ select is(
 );
 
 select throws_ok(
-    $
-    delete from private_cloudflare.worker_admin_operators
-    where user_id = '00000000-0000-4000-8000-0000000000a1'
-    $,
+    'delete from private_cloudflare.worker_admin_operators where user_id = ''00000000-0000-4000-8000-0000000000a1''',
     'P0001',
     'Operator records cannot be deleted; disable the operator to preserve the audit history',
     'operator hard deletion is blocked so audit history is retained'
