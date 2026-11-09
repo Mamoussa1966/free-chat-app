@@ -104,6 +104,31 @@ def test_saved_identity_merge_does_not_roll_completed_round_back_to_started():
     assert merged[0]["created_at"] == "2026-11-09T10:00:02Z"
 
 
+def test_saved_terminal_round_checkpoint_wins_over_stale_started_projection():
+    current = [
+        {
+            "round_id": "round-1",
+            "status": "STARTED",
+            "created_at": "2026-11-09T10:00:02Z",
+        }
+    ]
+    saved = [
+        {
+            "round_id": "round-1",
+            "status": "COMPLETED",
+            "result_count": 2,
+            "finished_at": "2026-11-09T10:00:05Z",
+            "created_at": "2026-11-09T10:00:02Z",
+        }
+    ]
+
+    merged = _restore_saved_identity_order(current, saved, "round_id")
+
+    assert merged[0]["status"] == "COMPLETED"
+    assert merged[0]["result_count"] == 2
+    assert merged[0]["finished_at"] == "2026-11-09T10:00:05Z"
+
+
 def test_saved_identity_merge_preserves_current_immutable_binding_and_marks_conflict():
     current = [{"round_id": "round-1", "request_id": "request-current"}]
     saved = [{"round_id": "round-1", "request_id": "request-saved", "status": "STARTED"}]
