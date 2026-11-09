@@ -263,7 +263,10 @@ def _render_mfa_panel(
         with st.form("cf_mfa_verify_enrollment_form"):
             enrollment_code = st.text_input(
                 "أدخل الرمز الحالي المكوّن من 6 أرقام من تطبيق المصادقة",
-                max_chars=10,
+                max_chars=6,
+                type="password",
+                placeholder="123456",
+                help="أدخل رمز TOTP المؤقت فقط؛ لا تستخدم UUID الخاص بعامل المصادقة.",
                 key="cf_mfa_enrollment_code",
             ).strip()
             verify_enrollment = st.form_submit_button("التحقق وتفعيل MFA", use_container_width=True)
@@ -284,6 +287,8 @@ def _render_mfa_panel(
                     publishable_key=publishable_key,
                 )
                 verified_user = auth_client.get_verified_user(new_access_token)
+                if session_assurance_level(new_access_token) != "aal2":
+                    raise SupabaseMFAError("aal2_session_not_issued", 200)
                 expected_user_id = str(session_state.get("user_id") or "")
                 if verified_user.get("id") != expected_user_id:
                     raise SupabaseMFAError("verified_user_mismatch", 401)
@@ -321,6 +326,8 @@ def _render_mfa_panel(
                 st.rerun()
             except SupabaseMFAError as exc:
                 st.error(f"لم يكتمل التحقق: {exc.code} (HTTP {exc.status_code or 'unknown'}).")
+            except ValueError as exc:
+                st.warning(str(exc))
             except Exception:
                 st.error("تعذّر تثبيت جلسة المصادقة الجديدة. أعد تحميل الصفحة ثم افحص عوامل MFA.")
 
@@ -348,6 +355,7 @@ def _render_mfa_panel(
                     "أدخل رمز TOTP المؤقت — ستة أرقام فقط",
                     max_chars=6,
                     placeholder="123456",
+                    type="password",
                     help="هذا ليس UUID الخاص بعامل المصادقة؛ أدخل الرمز المتغير من تطبيق TOTP فقط.",
                     key="cf_mfa_stepup_code",
                 ).strip()
@@ -368,6 +376,8 @@ def _render_mfa_panel(
                         publishable_key=publishable_key,
                     )
                     verified_user = auth_client.get_verified_user(new_access_token)
+                    if session_assurance_level(new_access_token) != "aal2":
+                        raise SupabaseMFAError("aal2_session_not_issued", 200)
                     expected_user_id = str(session_state.get("user_id") or "")
                     if verified_user.get("id") != expected_user_id:
                         raise SupabaseMFAError("verified_user_mismatch", 401)
@@ -390,6 +400,8 @@ def _render_mfa_panel(
                     st.rerun()
                 except SupabaseMFAError as exc:
                     st.error(f"فشل تحقق AAL2: {exc.code} (HTTP {exc.status_code or 'unknown'}).")
+                except ValueError as exc:
+                    st.warning(str(exc))
                 except Exception:
                     st.error("تعذّر تحديث جلسة المصادقة. أعد تحميل الصفحة ثم حاول مرة أخرى.")
 

@@ -119,13 +119,23 @@ def test_totp_enrollment_challenge_and_verify_use_fixed_user_auth_routes():
     assert session.calls[3][2]["json"] == {"challenge_id": CHALLENGE_ID, "code": "123456"}
 
 
-@pytest.mark.parametrize("code", ["", "12345", "12x456", "12345678901"])
+@pytest.mark.parametrize("code", ["", "12345", "12x456", "1234567", "12345678", "12345678901", "１２３４５６"])
 def test_verify_rejects_invalid_totp_without_http_request(code: str):
     session = _Session([])
     client = _client(session)
     with pytest.raises(ValueError):
         client.verify(FACTOR_ID, CHALLENGE_ID, code)
     assert session.calls == []
+
+
+@pytest.mark.parametrize("localized_code", ["١٢٣٤٥٦", "۱۲۳۴۵۶"])
+def test_verify_normalizes_arabic_and_persian_digits_to_ascii(localized_code: str):
+    session = _Session([_Response(200, {"access_token": "new-access-token"})])
+    client = _client(session)
+
+    client.verify(FACTOR_ID, CHALLENGE_ID, localized_code)
+
+    assert session.calls[0][2]["json"]["code"] == "123456"
 
 
 def test_auth_redirect_is_not_followed_or_allowed_to_change_http_method():
@@ -151,6 +161,25 @@ def test_http_error_is_sanitized_and_does_not_retain_raw_body():
     assert error.value.code == "mfa_verification_disabled"
     assert error.value.status_code == 403
     assert "do not surface raw" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"message": "Invalid TOTP code entered"},
+        {"error": "Invalid TOTP code entered"},
+    ],
+)
+def test_verify_maps_http_422_to_sanitized_totp_failure_code(payload):
+    session = _Session([_Response(422, payload)])
+    client = _client(session)
+
+    with pytest.raises(SupabaseMFAError) as error:
+        client.verify(FACTOR_ID, CHALLENGE_ID, "123456")
+
+    assert error.value.code == "mfa_verification_failed"
+    assert error.value.status_code == 422
+    assert "Invalid TOTP code entered" not in str(error.value)
 
 
 @pytest.mark.parametrize(
