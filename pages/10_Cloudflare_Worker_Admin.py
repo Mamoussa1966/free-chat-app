@@ -6,6 +6,7 @@ operator/worker allow-lists. Destructive Worker deletion is not exposed.
 from __future__ import annotations
 
 import base64
+import json
 import re
 import time
 import streamlit as st
@@ -33,6 +34,24 @@ _ALLOWED_POLICY_ACTIONS = [
 ]
 _WORKER_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _RESULT_KEY = "cloudflare_worker_admin_last_result"
+
+
+def _session_aal_for_display(access_token: str) -> str:
+    """Read the already Auth-verified JWT assurance claim for UI display only.
+
+    This value never authorizes operations; the Supabase gateway still enforces AAL2.
+    """
+    parts = str(access_token or "").split(".")
+    if len(parts) != 3 or len(parts[1]) > 8192:
+        return "unknown"
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode("utf-8")
+        )
+    except Exception:
+        return "unknown"
+    level = str(payload.get("aal") or "").lower() if isinstance(payload, dict) else ""
+    return level if level in {"aal1", "aal2"} else "unknown"
 
 
 def _masked_email(value: str) -> str:
@@ -210,7 +229,19 @@ def _render_mfa_panel(
     factors = st.session_state.get("cf_mfa_safe_factors")
     if isinstance(factors, list) and factors:
         st.write("عوامل TOTP المسجلة:")
-        st.dataframe(factors, use_container_width=True, hide_index=True)
+        st.dataframe(
+            [
+                {
+                    "اسم العامل": str(item.get("friendly_name") or "Authenticator"),
+                    "الحالة": str(item.get("status") or "unknown"),
+                    "تاريخ التسجيل": str(item.get("created_at") or ""),
+                }
+                for item in factors
+                if isinstance(item, dict)
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
         verified_ids = [
             str(item.get("id") or "")
             for item in factors
@@ -309,60 +340,69 @@ def _render_mfa_panel(
         st.caption("اترك هذه الصفحة مفتوحة حتى تكمل إدخال الرمز والتحقق؛ لا تغلق شاشة الإعداد قبل إتمام التفعيل.")
 
     elif verified_ids:
-        st.divider()
-        st.subheader("رفع الجلسة الحالية إلى AAL2")
-        selected_factor = st.selectbox(
-            "عامل المصادقة",
-            verified_ids,
-            key="cf_mfa_stepup_factor",
-        )
-        with st.form("cf_mfa_stepup_form"):
-            stepup_code = st.text_input(
-                "أدخل الرمز الحالي من تطبيق المصادقة",
-                max_chars=10,
-                key="cf_mfa_stepup_code",
-            ).strip()
-            stepup_submit = st.form_submit_button("التحقق ورفع مستوى الجلسة", use_container_width=True)
-        if stepup_submit:
-            try:
-                challenge_id = mfa_client.challenge(selected_factor)
-                verification = mfa_client.verify(selected_factor, challenge_id, stepup_code)
-                new_access_token = str(verification.get("access_token") or "").strip()
-                if not new_access_token:
-                    raise SupabaseMFAError("verified_session_missing", 200)
+        current_aal = _session_aal_for_display(str(session_state.get("access_token") or ""))
+        if current_aal == "aal2":
+            st.success("تم التحقق بنجاح. الجلسة الحالية مؤكدة بالمستوى AAL2.")
+            st.caption(
+                "لن نطلب رمز المصادقة مرة أخرى في هذه الجلسة. "
+                "ستظل عمليات النشر والرجوع محمية بفحص AAL2 داخل بوابة Supabase."
+            )
+        else:
+            st.divider()
+            st.subheader("رفع الجلسة الحالية إلى AAL2")
+            selected_factor = st.selectbox(
+                "عامل المصادقة",
+                verified_ids,
+                key="cf_mfa_stepup_factor",
+            )
+            with st.form("cf_mfa_stepup_form"):
+                stepup_code = st.text_input(
+                    "أدخل الرمز الحالي من تطبيق المصادقة",
+                    max_chars=10,
+                    key="cf_mfa_stepup_code",
+                ).strip()
+                stepup_submit = st.form_submit_button("التحقق ورفع مستوى الجلسة", use_container_width=True)
+            if stepup_submit:
+                try:
+                    challenge_id = mfa_client.challenge(selected_factor)
+                    verification = mfa_client.verify(selected_factor, challenge_id, stepup_code)
+                    new_access_token = str(verification.get("access_token") or "").strip()
+                    if not new_access_token:
+                        raise SupabaseMFAError("verified_session_missing", 200)
 
-                url, publishable_key, enabled = get_supabase_config(st)
-                if not (enabled and url and publishable_key):
-                    raise SupabaseMFAError("auth_configuration_missing", 0)
-                auth_client = SupabaseAuthClient(
-                    supabase_url=url,
-                    publishable_key=publishable_key,
-                )
-                verified_user = auth_client.get_verified_user(new_access_token)
-                expected_user_id = str(session_state.get("user_id") or "")
-                if verified_user.get("id") != expected_user_id:
-                    raise SupabaseMFAError("verified_user_mismatch", 401)
+                    url, publishable_key, enabled = get_supabase_config(st)
+                    if not (enabled and url and publishable_key):
+                        raise SupabaseMFAError("auth_configuration_missing", 0)
+                    auth_client = SupabaseAuthClient(
+                        supabase_url=url,
+                        publishable_key=publishable_key,
+                    )
+                    verified_user = auth_client.get_verified_user(new_access_token)
+                    expected_user_id = str(session_state.get("user_id") or "")
+                    if verified_user.get("id") != expected_user_id:
+                        raise SupabaseMFAError("verified_user_mismatch", 401)
 
-                refreshed_state = dict(session_state)
-                refreshed_state["access_token"] = new_access_token
-                refreshed_state["refresh_token"] = str(
-                    verification.get("refresh_token") or session_state.get("refresh_token") or ""
-                )
-                refreshed_state["expires_at"] = int(
-                    verification.get("expires_at")
-                    or (int(time.time()) + int(verification.get("expires_in") or 3600))
-                )
-                refreshed_state["verified_at"] = int(time.time())
-                refreshed_state["email"] = str(verified_user.get("email") or session_state.get("email") or "")
-                st.session_state[AUTH_SESSION_KEY] = refreshed_state
-                _schedule_browser_write(st, refreshed_state)
-                st.session_state["_cf_mfa_clear_stepup_code_next_run"] = True
-                st.success("تم التحقق من العامل ورفع الجلسة إلى AAL2.")
-                st.rerun()
-            except SupabaseMFAError as exc:
-                st.error(f"فشل تحقق AAL2: {exc.code} (HTTP {exc.status_code or 'unknown'}).")
-            except Exception:
-                st.error("تعذّر تحديث جلسة المصادقة. أعد تحميل الصفحة ثم حاول مرة أخرى.")
+                    refreshed_state = dict(session_state)
+                    refreshed_state["access_token"] = new_access_token
+                    refreshed_state["refresh_token"] = str(
+                        verification.get("refresh_token") or session_state.get("refresh_token") or ""
+                    )
+                    refreshed_state["expires_at"] = int(
+                        verification.get("expires_at")
+                        or (int(time.time()) + int(verification.get("expires_in") or 3600))
+                    )
+                    refreshed_state["verified_at"] = int(time.time())
+                    refreshed_state["email"] = str(verified_user.get("email") or session_state.get("email") or "")
+                    st.session_state[AUTH_SESSION_KEY] = refreshed_state
+                    _schedule_browser_write(st, refreshed_state)
+                    st.session_state["_cf_mfa_clear_stepup_code_next_run"] = True
+                    st.success("تم التحقق من العامل ورفع الجلسة إلى AAL2.")
+                    st.rerun()
+                except SupabaseMFAError as exc:
+                    st.error(f"فشل تحقق AAL2: {exc.code} (HTTP {exc.status_code or 'unknown'}).")
+                except Exception:
+                    st.error("تعذّر تحديث جلسة المصادقة. أعد تحميل الصفحة ثم حاول مرة أخرى.")
+
     else:
         st.divider()
         st.subheader("إعداد تطبيق المصادقة")
