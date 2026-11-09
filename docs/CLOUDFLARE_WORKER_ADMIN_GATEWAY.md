@@ -86,7 +86,7 @@ values
 
 This template is documentation only. It has not been run in Production or
 Test by this change. Replace both UUID placeholders only after independently
-verifying their identities. Do not add `deploy`, `delete`, or `set_policy`
+verifying their identities. Do not add `deploy` or `set_policy`
 merely to make setup convenient. The insert is recorded automatically in the
 append-only Worker audit table with the creator UUID and allowed actions.
 
@@ -179,7 +179,7 @@ branch and test-project work have not created or saved that Production token.
 ## Verification completed in the isolated test project
 
 - Migration applied to `ai-council-storage-test`.
-- pgTAP gateway authorization tests passed (20 assertions).
+- pgTAP gateway authorization tests passed (21 assertions).
 - No `anon` execute grant on the dispatcher.
 - No `service_role` execute grant on the dispatcher.
 - `authenticated` has access only to the public dispatcher; private schema
