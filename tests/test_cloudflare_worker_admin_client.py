@@ -120,7 +120,9 @@ def test_rejects_unsupported_operation_and_invalid_worker_name_before_network():
     with pytest.raises(ValueError):
         client.dispatch("raw_http", worker_name="target")
     with pytest.raises(ValueError):
-        client.dispatch("delete", worker_name="../other-worker")
+        client.dispatch("delete", worker_name="test-worker")
+    with pytest.raises(ValueError):
+        client.dispatch("deploy", worker_name="../other-worker")
     assert transport.calls == []
 
 
@@ -133,7 +135,12 @@ def test_sanitizes_gateway_error_without_echoing_response_body():
     client = make_client(transport=transport)
 
     with pytest.raises(CloudflareWorkerAdminClientError) as exc:
-        client.dispatch("delete", worker_name="test-worker", confirmation="DELETE test-worker")
+        client.dispatch(
+            "deploy",
+            worker_name="test-worker",
+            payload={"version_id": "22222222-2222-4222-8222-222222222222"},
+            confirmation="DEPLOY test-worker 22222222-2222-4222-8222-222222222222",
+        )
 
     assert exc.value.code == "admin_access_denied"
     assert exc.value.status_code == 403
