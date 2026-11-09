@@ -160,17 +160,39 @@ def _restore_saved_identity_order(target: list, saved: list, identity_key: str) 
         if row is None:
             row = copy.deepcopy(item)
         else:
+            lifecycle_key = {"request_id": "state", "round_id": "status"}.get(identity_key)
+            terminal_states = {
+                "COMPLETED", "SUCCEEDED", "FAILED", "REJECTED",
+                "CANCELLED", "CANCELED", "ABORTED", "EXPIRED",
+            }
+            current_lifecycle = str(row.get(lifecycle_key) or "").upper() if lifecycle_key else ""
+            saved_lifecycle = str(item.get(lifecycle_key) or "").upper() if lifecycle_key else ""
+            # Lifecycle is monotonic: a terminal committed checkpoint must not
+            # be downgraded by a stale in-memory STARTED/RUNNING projection.
+            # Conversely, a new terminal in-memory result must beat an old
+            # nonterminal checkpoint. When both are terminal, current wins.
+            use_saved_lifecycle = bool(
+                lifecycle_key
+                and saved_lifecycle in terminal_states
+                and current_lifecycle not in terminal_states
+            )
             for key, value in item.items():
                 if value in (None, "", [], {}):
                     continue
                 current_value = row.get(key)
-                if current_value in (None, "", [], {}):
+                if key in immutable_fields:
+                    if current_value in (None, "", [], {}):
+                        row[key] = copy.deepcopy(value)
+                    elif current_value != value:
+                        # Keep the current binding and make the conflict visible
+                        # rather than silently choosing either identity.
+                        row["identity_conflict"] = True
+                elif use_saved_lifecycle:
                     row[key] = copy.deepcopy(value)
-                elif key in immutable_fields and current_value != value:
-                    # Keep the current binding and make the conflict visible to
-                    # canonical audits rather than silently choosing either ID.
-                    row["identity_conflict"] = True
-                # For mutable lifecycle fields, current non-empty data wins.
+                elif current_value in (None, "", [], {}):
+                    row[key] = copy.deepcopy(value)
+                # Otherwise current non-empty mutable data wins, except when a
+                # terminal saved lifecycle checkpoint supersedes a stale row.
         ordered.append(row)
         seen.add(ident)
     # Preserve any current-only records after the committed historical prefix.
