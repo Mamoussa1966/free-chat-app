@@ -1,7 +1,7 @@
 -- Authentication and authorization tests for the Cloudflare Worker admin gateway.
 -- All user/operator fixtures and audit rows are rolled back at the end.
 begin;
-select plan(15);
+select plan(19);
 
 insert into auth.users (
     id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at
@@ -16,7 +16,7 @@ insert into private_cloudflare.worker_admin_operators(user_id, enabled, allowed_
 values (
     '00000000-0000-4000-8000-0000000000a1',
     true,
-    array['inspect','deploy']::text[],
+    array['inspect','deploy','register']::text[],
     '00000000-0000-4000-8000-0000000000b2'
 )
 on conflict (user_id) do update set
@@ -95,9 +95,9 @@ select is(
 
 select is(
     public.cloudflare_worker_admin_dispatch(
-        'register', 'nonexistent-worker',
+        'set_policy', 'nonexistent-worker',
         '{"environment":"test","allowed_operations":["inspect"],"allow_delete":false}'::jsonb,
-        'REGISTER WORKER nonexistent-worker AS test',
+        'SET POLICY nonexistent-worker test',
         '11111111-1111-4111-8111-111111111113'
     )->>'reason',
     'operator_action_not_allowed',
@@ -113,6 +113,32 @@ select is(
     )->>'reason',
     'aal2_required',
     'write/deploy operations require an AAL2 session'
+);
+
+select set_config(
+    'request.jwt.claims',
+    '{"sub":"00000000-0000-4000-8000-0000000000a1","role":"authenticated","aal":"aal2","is_anonymous":false}',
+    true
+);
+
+select is(
+    public.cloudflare_worker_admin_dispatch(
+        'register', 'nonexistent-worker',
+        '{"environment":"test","allowed_operations":["inspect","delete"],"allow_delete":true}'::jsonb,
+        'REGISTER WORKER nonexistent-worker AS test',
+        '11111111-1111-4111-8111-111111111117'
+    )->>'code',
+    'delete_not_supported_by_gateway',
+    'the editor gateway cannot create a Worker deletion policy'
+);
+
+select is(
+    public.cloudflare_worker_admin_dispatch(
+        'delete', 'nonexistent-worker', '{}'::jsonb, null,
+        '11111111-1111-4111-8111-111111111118'
+    )->>'reason',
+    'unsupported_operation',
+    'the authenticated gateway does not expose Worker deletion'
 );
 
 select set_config('request.jwt.claim.sub', '00000000-0000-4000-8000-0000000000b2', true);
@@ -161,7 +187,7 @@ select is(
          )
          and interface = 'supabase_authenticated_gateway'
     ),
-    3,
+    4,
     'denied authenticated requests are recorded with actor and request metadata'
 );
 
@@ -176,6 +202,30 @@ select is(
     ),
     1,
     'operator enrollment is recorded with actor and allowed actions'
+);
+
+select throws_ok(
+    'update private_cloudflare.worker_admin_operators set enabled = false where user_id = ''00000000-0000-4000-8000-0000000000a1''',
+    'P0001',
+    'Operator updates require an approving updated_by UUID',
+    'operator changes without an approving actor UUID are rejected'
+);
+
+select lives_ok(
+    'update private_cloudflare.worker_admin_operators set enabled = false, updated_by = ''00000000-0000-4000-8000-0000000000b2'' where user_id = ''00000000-0000-4000-8000-0000000000a1''',
+    'operator policy changes require and accept an explicit approving actor'
+);
+
+select is(
+    (
+      select count(*)::integer
+        from private_cloudflare.worker_admin_audit
+       where operation = 'operator_policy_updated'
+         and actor_user_id = '00000000-0000-4000-8000-0000000000b2'::uuid
+         and interface = 'operator_management'
+    ),
+    1,
+    'operator policy changes are recorded with the approving actor'
 );
 
 select throws_ok(
