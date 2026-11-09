@@ -1,0 +1,40 @@
+name: Cloudflare Canary Worker Check
+
+on:
+  pull_request:
+    branches:
+      - gitops-v0.4-final
+    paths:
+      - "cloudflare/ai-council-cloudflare-canary/**"
+      - ".github/workflows/cloudflare-canary-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-canary-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wrangler-dry-run:
+    name: Wrangler dry-run (no Cloudflare credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cloudflare/ai-council-cloudflare-canary
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Verify runtime toolchain
+        run: |
+          node --version
+          npm --version
+
+      - name: Install pinned Wrangler
+        run: npm install --no-audit --no-fund
+
+      - name: Build Worker without deploying
+        run: npm run check
