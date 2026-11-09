@@ -1,7 +1,7 @@
 -- Authentication and authorization tests for the Cloudflare Worker admin gateway.
 -- All user/operator fixtures and audit rows are rolled back at the end.
 begin;
-select plan(20);
+select plan(21);
 
 insert into auth.users (
     id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at
@@ -175,6 +175,33 @@ select is(
 );
 
 reset role;
+
+update auth.users
+   set banned_until = now() + interval '1 hour'
+ where id = '00000000-0000-4000-8000-0000000000a1';
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-4000-8000-0000000000a1', true);
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config(
+    'request.jwt.claims',
+    '{"sub":"00000000-0000-4000-8000-0000000000a1","role":"authenticated","aal":"aal2","is_anonymous":false}',
+    true
+);
+
+select is(
+    public.cloudflare_worker_admin_dispatch(
+        'list', null, '{}'::jsonb, null,
+        '11111111-1111-4111-8111-111111111119'
+    )->>'code',
+    'authenticated_user_required',
+    'banned Supabase Auth users cannot execute the gateway'
+);
+
+reset role;
+update auth.users
+   set banned_until = null
+ where id = '00000000-0000-4000-8000-0000000000a1';
 
 select is(
     (
