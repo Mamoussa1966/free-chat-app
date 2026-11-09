@@ -109,7 +109,7 @@ class SupabaseMFAClient:
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict[str, Any]:
         allowed_path = (
-            path == "/user"
+            path == "/user/"
             or path == "/factors/"
             or path.startswith("/factors/")
         )
@@ -163,7 +163,7 @@ class SupabaseMFAClient:
         Supabase's supported user-scoped API returns MFA factors inside
         GET /user; /factors is the enrollment route, not the list route.
         """
-        user = self._request("GET", "/user")
+        user = self._request("GET", "/user/")
         factors = user.get("factors") or []
         if not isinstance(factors, list):
             raise SupabaseMFAError("invalid_factor_list", 200)
