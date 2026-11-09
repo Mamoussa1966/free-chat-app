@@ -299,11 +299,7 @@ def _render_mfa_panel(
             except Exception:
                 st.error("تعذّر تثبيت جلسة المصادقة الجديدة. أعد تحميل الصفحة ثم افحص عوامل MFA.")
 
-        if st.button("إلغاء الإعداد المعلّق", key="cf_mfa_cancel_pending"):
-            st.session_state.pop("cf_mfa_pending_factor_id", None)
-            st.session_state.pop("cf_mfa_pending_qr", None)
-            st.session_state.pop("cf_mfa_pending_secret", None)
-            st.rerun()
+        st.caption("اترك هذه الصفحة مفتوحة حتى تكمل إدخال الرمز والتحقق؛ لا تغلق شاشة الإعداد قبل إتمام التفعيل.")
 
     elif verified_ids:
         st.divider()
