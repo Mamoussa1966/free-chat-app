@@ -163,8 +163,15 @@ def test_http_error_is_sanitized_and_does_not_retain_raw_body():
     assert "do not surface raw" not in str(error.value)
 
 
-def test_verify_maps_http_422_to_sanitized_totp_failure_code():
-    session = _Session([_Response(422, {"message": "Invalid TOTP code entered"})])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"message": "Invalid TOTP code entered"},
+        {"error": "Invalid TOTP code entered"},
+    ],
+)
+def test_verify_maps_http_422_to_sanitized_totp_failure_code(payload):
+    session = _Session([_Response(422, payload)])
     client = _client(session)
 
     with pytest.raises(SupabaseMFAError) as error:
