@@ -19,13 +19,39 @@ create table if not exists private_cloudflare.worker_admin_operators (
   constraint worker_admin_operator_actions_check check (
     allowed_actions <@ array[
       'inspect','register','refresh_versions','update_metadata',
-      'upload_version','deploy','rollback','delete','set_policy'
+      'upload_version','deploy','rollback','set_policy'
     ]::text[]
   )
 );
 
 alter table private_cloudflare.worker_admin_operators
   add column if not exists updated_by uuid;
+
+do $constraints$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'private_cloudflare.worker_admin_operators'::regclass
+       and conname = 'worker_admin_operators_created_by_fkey'
+  ) then
+    alter table private_cloudflare.worker_admin_operators
+      add constraint worker_admin_operators_created_by_fkey
+      foreign key (created_by) references auth.users(id) on delete restrict;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'private_cloudflare.worker_admin_operators'::regclass
+       and conname = 'worker_admin_operators_updated_by_fkey'
+  ) then
+    alter table private_cloudflare.worker_admin_operators
+      add constraint worker_admin_operators_updated_by_fkey
+      foreign key (updated_by) references auth.users(id) on delete restrict;
+  end if;
+end;
+$constraints$;
+
+alter table private_cloudflare.worker_admin_operators
+  alter column created_by set not null;
 
 create or replace function private_cloudflare.worker_admin_operator_audit()
 returns trigger
@@ -44,6 +70,9 @@ begin
 
   if tg_op = 'INSERT' then
     v_actor := new.created_by;
+    if v_actor is null then
+      raise exception 'Operator enrollment requires a verified creator UUID';
+    end if;
     v_user_id := new.user_id;
     v_operation := 'operator_enrolled';
     v_summary := jsonb_build_object(
@@ -53,6 +82,9 @@ begin
     );
   else
     v_actor := new.updated_by;
+    if v_actor is null then
+      raise exception 'Operator updates require an approving updated_by UUID';
+    end if;
     v_user_id := new.user_id;
     v_operation := 'operator_policy_updated';
     v_summary := jsonb_build_object(
@@ -175,7 +207,7 @@ begin
 
   if coalesce(p_operation, '') not in (
     'list','register','refresh_versions','update_metadata',
-    'upload_version','deploy','rollback','delete','set_policy'
+    'upload_version','deploy','rollback','set_policy'
   ) then
     v_denial_reason := 'unsupported_operation';
   else
@@ -237,6 +269,9 @@ begin
         select array_agg(value) into v_ops
           from jsonb_array_elements_text(v_payload->'allowed_operations') as x(value);
         v_allow_delete := coalesce((v_payload->>'allow_delete')::boolean, false);
+        if v_allow_delete or 'delete' = any(coalesce(v_ops, array[]::text[])) then
+          return jsonb_build_object('ok', false, 'code', 'delete_not_supported_by_gateway', 'request_id', v_request_id);
+        end if;
         v_result := private_cloudflare.worker_admin_register(
           p_worker_name, v_environment, coalesce(v_ops, array['inspect']::text[]), v_allow_delete
         );
@@ -292,12 +327,6 @@ begin
           p_worker_name, v_version_id, p_confirmation
         );
 
-      when 'delete' then
-        if v_payload <> '{}'::jsonb then
-          return jsonb_build_object('ok', false, 'code', 'invalid_payload', 'request_id', v_request_id);
-        end if;
-        v_result := private_cloudflare.worker_admin_delete(p_worker_name, p_confirmation);
-
       when 'set_policy' then
         if (v_payload - array['environment','allowed_operations','allow_delete']::text[]) <> '{}'::jsonb
            or nullif(v_payload->>'environment','') is null
@@ -308,6 +337,9 @@ begin
         select array_agg(value) into v_ops
           from jsonb_array_elements_text(v_payload->'allowed_operations') as x(value);
         v_allow_delete := coalesce((v_payload->>'allow_delete')::boolean, false);
+        if v_allow_delete or 'delete' = any(coalesce(v_ops, array[]::text[])) then
+          return jsonb_build_object('ok', false, 'code', 'delete_not_supported_by_gateway', 'request_id', v_request_id);
+        end if;
         v_result := private_cloudflare.worker_admin_set_policy(
           p_worker_name, v_environment, coalesce(v_ops, array[]::text[]),
           v_allow_delete, p_confirmation
