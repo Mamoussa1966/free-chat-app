@@ -205,7 +205,15 @@ begin
 
   if v_user_id is null
      or coalesce(v_claims->>'role', '') <> 'authenticated'
-     or coalesce(v_claims->>'is_anonymous', 'false') = 'true' then
+     or coalesce(v_claims->>'is_anonymous', 'false') = 'true'
+     or not exists (
+       select 1
+         from auth.users u
+        where u.id = v_user_id
+          and not coalesce(u.is_anonymous, false)
+          and u.deleted_at is null
+          and (u.banned_until is null or u.banned_until <= now())
+     ) then
     return jsonb_build_object('ok', false, 'code', 'authenticated_user_required');
   end if;
 
