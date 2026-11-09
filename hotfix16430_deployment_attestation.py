@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 SCHEMA = "hotfix164.30-deployment-source-attestation/v1"
 REPOSITORY = "Mamoussa1966/free-chat-app"
@@ -78,6 +79,47 @@ def _commit_from_git(root: Path) -> tuple[str, str]:
     return "NOT_AVAILABLE", "commit_metadata_unavailable"
 
 
+def _linux_process_started_at_utc(
+    proc_root: Path | str = Path("/proc"),
+    *,
+    wall_clock_seconds: float | None = None,
+    clock_ticks: int | None = None,
+) -> datetime | None:
+    """Read this Linux process's actual start time from procfs.
+
+    /proc/self/stat field 22 is the process start tick count since boot.
+    Combining it with /proc/uptime and wall-clock time gives the process
+    creation timestamp (rather than the first Streamlit script rerun or
+    the time this attestation happened). Return None when procfs evidence
+    is unavailable or malformed; never substitute an app/session timestamp.
+    """
+    root = Path(proc_root)
+    try:
+        stat_text = (root / "self" / "stat").read_text(encoding="ascii").strip()
+        closing_paren = stat_text.rfind(")")
+        if closing_paren < 0:
+            return None
+        # The comm field is parenthesized and may itself contain spaces.
+        # After its final ')', the first token is field 3 (state); field 22
+        # is therefore token index 19.
+        fields = stat_text[closing_paren + 1 :].split()
+        if len(fields) <= 19:
+            return None
+        start_ticks = int(fields[19])
+        uptime_fields = (root / "uptime").read_text(encoding="ascii").split()
+        uptime_seconds = float(uptime_fields[0])
+        ticks_per_second = int(clock_ticks or os.sysconf("SC_CLK_TCK"))
+        wall_now = float(time.time() if wall_clock_seconds is None else wall_clock_seconds)
+        if start_ticks < 0 or uptime_seconds < 0 or ticks_per_second <= 0:
+            return None
+        started_epoch = wall_now - uptime_seconds + (start_ticks / ticks_per_second)
+        if not 0 < started_epoch <= wall_now + 1:
+            return None
+        return datetime.fromtimestamp(started_epoch, timezone.utc)
+    except (OSError, UnicodeError, ValueError, TypeError, OverflowError, KeyError):
+        return None
+
+
 def build_runtime_deployment_attestation(root: Path | str | None = None) -> dict:
     """Create a fresh, redacted attestation of this running source tree."""
     base = Path(root).resolve() if root is not None else Path(__file__).resolve().parent
@@ -91,13 +133,27 @@ def build_runtime_deployment_attestation(root: Path | str | None = None) -> dict
         release_label = "NOT_PROVEN"
         provider_core = "NOT_PROVEN"
     complete = result["source_bundle_complete"] is True
+    generated_at = datetime.now(timezone.utc)
+    process_started_at = _linux_process_started_at_utc()
+    process_start_available = process_started_at is not None
     return {
         "schema": SCHEMA,
         "repository": REPOSITORY,
         "expected_deployment_branch": EXPECTED_BRANCH,
         "application_release_identity": release_label,
         "provider_core_identity": provider_core,
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at_utc": generated_at.isoformat(timespec="seconds"),
+        "process_id": os.getpid(),
+        "process_started_at_utc": (
+            process_started_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            if process_start_available else "NOT_AVAILABLE"
+        ),
+        "process_started_at_source": "linux_procfs" if process_start_available else "NOT_AVAILABLE",
+        "process_start_time_status": "PASS" if process_start_available else "NOT_PROVEN",
+        "process_uptime_seconds_at_attestation": (
+            max(0, int((generated_at - process_started_at).total_seconds()))
+            if process_start_available else None
+        ),
         "observed_git_commit_sha": commit,
         "observed_git_commit_source": commit_source,
         "source_bundle_sha256": result["source_bundle_sha256"],
