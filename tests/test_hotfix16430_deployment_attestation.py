@@ -3,8 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 
-from hotfix16430_deployment_attestation import SOURCE_FILES, compute_source_bundle, build_runtime_deployment_attestation
+from hotfix16430_deployment_attestation import (
+    SOURCE_FILES,
+    _linux_process_started_at_utc,
+    compute_source_bundle,
+    build_runtime_deployment_attestation,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +27,15 @@ def test_runtime_attestation_contains_all_required_source_hashes_and_no_secrets(
     assert len(report["source_bundle_sha256"]) == 64
     assert report["raw_payload_exported"] is False
     assert report["secrets_exported"] is False
+    assert report["process_start_time_status"] in {"PASS", "NOT_PROVEN"}
+    if report["process_start_time_status"] == "PASS":
+        assert report["process_id"] > 0
+        started = datetime.fromisoformat(report["process_started_at_utc"].replace("Z", "+00:00"))
+        generated = datetime.fromisoformat(report["generated_at_utc"])
+        assert started.tzinfo is not None
+        assert started <= generated.replace(tzinfo=timezone.utc)
+        assert report["process_started_at_source"] == "linux_procfs"
+        assert report["process_uptime_seconds_at_attestation"] >= 0
     serialized = json.dumps(report, sort_keys=True)
     assert "API_KEY" not in serialized
     assert "payload_json" not in serialized
@@ -73,3 +88,33 @@ def test_independent_deployment_gate_fails_closed_when_commit_attestation_is_mis
     assert result["status"] == "NOT_PROVEN"
     assert "DEPLOYMENT_ATTESTATION_MISSING" in result["errors"]
     assert result["live_final_closure_proven"] is False
+
+
+
+def test_linux_process_start_time_uses_procfs_start_ticks_not_attestation_clock(tmp_path):
+    proc = tmp_path
+    (proc / "self").mkdir(parents=True)
+    # After the final ')' in comm: field 3 state, fields 4..21, then
+    # field 22 starttime at token index 19.
+    tokens = ["S"] + ["0"] * 18 + ["500"]
+    (proc / "self" / "stat").write_text("4321 (streamlit python worker) " + " ".join(tokens), encoding="ascii")
+    (proc / "uptime").write_text("1000.00 2500.00\n", encoding="ascii")
+
+    started = _linux_process_started_at_utc(
+        proc,
+        wall_clock_seconds=1_700_000_000.0,
+        clock_ticks=100,
+    )
+
+    assert started == datetime.fromtimestamp(1_699_999_005.0, timezone.utc)
+
+
+def test_linux_process_start_time_fails_closed_when_procfs_is_incomplete(tmp_path):
+    (tmp_path / "self").mkdir(parents=True)
+    (tmp_path / "self" / "stat").write_text("123 (streamlit) S 0 0", encoding="ascii")
+
+    assert _linux_process_started_at_utc(
+        tmp_path,
+        wall_clock_seconds=1_700_000_000.0,
+        clock_ticks=100,
+    ) is None
