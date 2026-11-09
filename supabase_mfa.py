@@ -123,6 +123,9 @@ class SupabaseMFAClient:
                 headers=headers,
                 json=payload,
                 timeout=self.timeout,
+                # Never allow requests to follow an Auth redirect: a 301/302 can
+                # turn a POST into GET and silently change the MFA operation.
+                allow_redirects=False,
             )
         except requests.RequestException:
             raise SupabaseMFAError("auth_unavailable") from None
@@ -130,11 +133,17 @@ class SupabaseMFAClient:
             raise SupabaseMFAError("auth_request_failed") from None
 
         status = int(getattr(response, "status_code", 0) or 0)
+        if 300 <= status < 400:
+            raise SupabaseMFAError("auth_unexpected_redirect", status)
+        if status == 405:
+            raise SupabaseMFAError("auth_method_not_allowed", status)
         if status == 204:
             return {}
         try:
             data = response.json()
         except Exception:
+            if not 200 <= status < 300:
+                raise SupabaseMFAError("mfa_http_error", status) from None
             raise SupabaseMFAError("invalid_auth_response", status) from None
         if not isinstance(data, dict):
             raise SupabaseMFAError("invalid_auth_response", status)
@@ -144,8 +153,35 @@ class SupabaseMFAClient:
         return data
 
     def list_factors(self) -> dict[str, Any]:
-        """Return the current user's Auth MFA factor list."""
-        return self._request("GET", "/factors")
+        """Return the current user's Auth MFA factor list.
+
+        Supabase's supported user-scoped API returns MFA factors inside
+        GET /user; /factors is the enrollment route, not the list route.
+        """
+        user = self._request("GET", "/user")
+        factors = user.get("factors") or []
+        if not isinstance(factors, list):
+            raise SupabaseMFAError("invalid_factor_list", 200)
+
+        result: dict[str, Any] = {
+            "all": [],
+            "phone": [],
+            "totp": [],
+            "webauthn": [],
+            "recovery_code": [],
+        }
+        for factor in factors:
+            if not isinstance(factor, dict):
+                continue
+            result["all"].append(factor)
+            factor_type = factor.get("factor_type")
+            if (
+                factor.get("status") == "verified"
+                and factor_type in result
+                and isinstance(result[factor_type], list)
+            ):
+                result[factor_type].append(factor)
+        return result
 
     def enroll_totp(self, friendly_name: str = "AI Council Cloudflare Admin") -> dict[str, str]:
         """Create one unverified TOTP factor and return its QR SVG + setup secret."""
@@ -154,7 +190,7 @@ class SupabaseMFAClient:
             raise ValueError("friendly_name must be 1..64 printable characters")
         data = self._request(
             "POST",
-            "/factors",
+            "/factors/",
             {"factor_type": "totp", "friendly_name": label},
         )
         factor_id = self._factor_id(str(data.get("id") or ""))
