@@ -26,7 +26,7 @@ create table if not exists private_cloudflare.worker_admin_allowlist (
   check (environment <> 'production' or (production_protected and not allow_delete and not ('delete'=any(allowed_operations)))),
   check (allow_delete = ('delete'=any(allowed_operations))),
   check (environment <> 'production' or production_protected),
-  check (not allow_delete or environment='test')
+  constraint worker_admin_delete_test_only check (not allow_delete or environment='test')
 );
 
 create table if not exists private_cloudflare.worker_admin_versions (
@@ -345,7 +345,8 @@ begin
       v_settings_body:=(v_settings->>'body')::jsonb;
       v_support_upload:=coalesce((v_settings_body->>'success')::boolean,false)
         and coalesce(jsonb_array_length(v_settings_body->'result'->'bindings'),0)=0
-        and (v_settings_body->'result'->'assets' is null or v_settings_body->'result'->'assets'='null'::jsonb);
+        and (v_settings_body->'result'->'assets' is null or v_settings_body->'result'->'assets'='null'::jsonb)
+        and not exists (select 1 from jsonb_each(v_refs) e where e.value is not null and e.value not in ('null'::jsonb,'[]'::jsonb,'{}'::jsonb,'false'::jsonb));
     end if;
   end if;
 
