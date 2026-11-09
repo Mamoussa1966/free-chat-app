@@ -7,6 +7,10 @@ This implementation is a candidate for review on
 
 - The authenticated Edge Function and gateway migration were deployed/applied to
   `ai-council-storage-test` only.
+- The gateway intentionally does not expose Worker deletion. It is designed to
+  run with Cloudflare's per-Worker `Individual Workers Editor` permission,
+  which supports reading, version upload, deployment and metadata updates for
+  selected existing Workers but does not grant Worker creation/deletion.
 - No Edge Function was deployed to Supabase Production by this change.
 - No Production secret, Cloudflare token, Worker allow-list row, or Worker was
   created or modified by this change.
@@ -26,6 +30,11 @@ The Streamlit client sends only:
 - the signed-in user's short-lived JWT in `Authorization: Bearer`;
 - the operation name, a target Worker name, a bounded operation payload, and
   an optional exact confirmation phrase.
+
+The Edge Function uses a publishable/legacy anon key only, validates that
+the bearer key is a signed-in user's JWT by calling Supabase Auth, and forwards
+the same user JWT to the SQL gateway. It never reads a Supabase secret/service
+key or the Cloudflare API token.
 
 It does not accept a Cloudflare token, Supabase secret key, service-role key,
 arbitrary HTTP method, arbitrary Cloudflare API path, or raw SQL from the caller.
@@ -110,7 +119,6 @@ requires the exact confirmation phrase enforced by the private function.
 - `upload_version`
 - `deploy`
 - `rollback`
-- `delete`
 - `set_policy`
 
 The lower-level private functions remain the final enforcement layer for
@@ -129,10 +137,48 @@ their operation-specific audit metadata.
 Operator enrollment remains a database-owner action. It must be performed as
 a separately approved change and verified after execution.
 
+## Production Cloudflare API token — proposed least privilege
+
+Do not reuse the broad token currently held in the Test Vault. Create an
+independent token specifically for the Production Cloudflare account.
+
+Preferred scope based on the current Worker API endpoints:
+
+- Scope: the exact Cloudflare account only; never "all accounts".
+- Resource scope: selected existing Workers only.
+- Role: `Individual Workers Editor` on each approved Worker.
+- No `Individual Workers Admin`, `Workers Admin`, account-wide
+  `Workers Scripts Edit/Write`, or platform-wide Developer Platform role.
+- No Billing, Account Settings, API Tokens, Secrets Store, KV, R2, Workers AI,
+  Workers Tail, logs, DNS, Zone or User permissions.
+- Set a short expiry (initially 30 days) and a narrow source-IP filter only if
+  the runtime has a confirmed stable outbound IP range. Do not guess IP ranges.
+
+Cloudflare's API documents `Individual Workers Editor` for the list/detail,
+version upload, deployment and partial Worker-edit endpoints used by this
+bridge. Delete Worker endpoints require an Admin-level permission; this
+gateway deliberately excludes delete. See:
+- https://developers.cloudflare.com/workers/authorization/workers/
+- https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/list/
+- https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/create/
+- https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/create/
+- https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/edit/
+- https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/delete/
+
+If there are no existing Workers yet, do not widen the token to account-wide
+Admin just to make discovery work. First create/identify a Worker through the
+normal Cloudflare Dashboard workflow, then scope the automation token to that
+Worker. This keeps the machine token from having create/delete powers.
+
+The token must not be saved in Streamlit Secrets or GitHub Secrets. The
+intended server-side destination is the Production project's Vault secret
+`cloudflare_account_api_token`, after a separate explicit approval. This
+branch and test-project work have not created or saved that Production token.
+
 ## Verification completed in the isolated test project
 
 - Migration applied to `ai-council-storage-test`.
-- pgTAP gateway authorization tests passed (13 assertions).
+- pgTAP gateway authorization tests passed (19 assertions).
 - No `anon` execute grant on the dispatcher.
 - No `service_role` execute grant on the dispatcher.
 - `authenticated` has access only to the public dispatcher; private schema
@@ -141,6 +187,8 @@ a separately approved change and verified after execution.
 - Edge Function deployed with `verify_jwt = true`.
 - Calling the Edge Function without a JWT returns HTTP 401.
 - Calling the Edge Function with a malformed JWT returns HTTP 401.
+- The gateway's delete operation is rejected as unsupported; delete-policy
+  registration is rejected before reaching the private Worker functions.
 - No Cloudflare administrative write, deploy or delete was attempted as part
   of the gateway-authentication tests.
 
