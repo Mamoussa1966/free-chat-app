@@ -12,7 +12,7 @@ insert into auth.users (
      'worker-admin-b@example.test', '', now(), now(), now())
 on conflict (id) do nothing;
 
-insert into private_cloudflare.worker_admin_operators(user_id, enabled, allowed_actions)
+insert into private_cloudflare.worker_admin_operators(user_id, enabled, allowed_actions, created_by)
 values (
     '00000000-0000-4000-8000-0000000000a1',
     true,
