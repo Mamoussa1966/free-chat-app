@@ -108,8 +108,13 @@ class SupabaseMFAClient:
         return str(uuid.UUID(candidate))
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict[str, Any]:
-        if not path.startswith("/factors") or ".." in path or "://" in path or "#" in path:
-            raise ValueError("MFA path is outside the fixed Auth factor API")
+        allowed_path = (
+            path == "/user"
+            or path == "/factors/"
+            or path.startswith("/factors/")
+        )
+        if not allowed_path or ".." in path or "://" in path or "#" in path:
+            raise ValueError("MFA path is outside the fixed Auth user/factor API")
         headers = {
             "apikey": self.publishable_key,
             "Authorization": f"Bearer {self.access_token}",
