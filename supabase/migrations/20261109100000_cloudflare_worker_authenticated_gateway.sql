@@ -24,6 +24,78 @@ create table if not exists private_cloudflare.worker_admin_operators (
   )
 );
 
+alter table private_cloudflare.worker_admin_operators
+  add column if not exists updated_by uuid;
+
+create or replace function private_cloudflare.worker_admin_operator_audit()
+returns trigger
+language plpgsql
+set search_path to 'pg_catalog', 'private_cloudflare'
+as $function$
+declare
+  v_actor uuid;
+  v_user_id uuid;
+  v_operation text;
+  v_summary jsonb;
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'Operator records cannot be deleted; disable the operator to preserve the audit history';
+  end if;
+
+  if tg_op = 'INSERT' then
+    v_actor := new.created_by;
+    v_user_id := new.user_id;
+    v_operation := 'operator_enrolled';
+    v_summary := jsonb_build_object(
+      'user_id', new.user_id,
+      'enabled', new.enabled,
+      'allowed_actions', new.allowed_actions
+    );
+  else
+    v_actor := new.updated_by;
+    v_user_id := new.user_id;
+    v_operation := 'operator_policy_updated';
+    v_summary := jsonb_build_object(
+      'user_id', new.user_id,
+      'previous_enabled', old.enabled,
+      'enabled', new.enabled,
+      'previous_allowed_actions', old.allowed_actions,
+      'allowed_actions', new.allowed_actions
+    );
+  end if;
+
+  perform set_config('app.worker_admin.actor_user_id', coalesce(v_actor::text, ''), true);
+  perform set_config('app.worker_admin.request_id', gen_random_uuid()::text, true);
+  perform set_config('app.worker_admin.interface', 'operator_management', true);
+
+  insert into private_cloudflare.worker_admin_audit(
+    worker_name, operation, http_status, api_success, result_summary
+  ) values (
+    '__operators__', v_operation, 200, true, v_summary
+  );
+
+  if tg_op = 'INSERT' then
+    return new;
+  end if;
+  return new;
+end;
+$function$;
+
+drop trigger if exists worker_admin_operator_audit
+  on private_cloudflare.worker_admin_operators;
+create trigger worker_admin_operator_audit
+after insert or update on private_cloudflare.worker_admin_operators
+for each row execute function private_cloudflare.worker_admin_operator_audit();
+
+drop trigger if exists worker_admin_operator_no_delete
+  on private_cloudflare.worker_admin_operators;
+create trigger worker_admin_operator_no_delete
+before delete on private_cloudflare.worker_admin_operators
+for each row execute function private_cloudflare.worker_admin_operator_audit();
+
+revoke all on function private_cloudflare.worker_admin_operator_audit()
+  from public, anon, authenticated, service_role;
+
 alter table private_cloudflare.worker_admin_operators enable row level security;
 alter table private_cloudflare.worker_admin_operators force row level security;
 
