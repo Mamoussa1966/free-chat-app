@@ -100,6 +100,31 @@ class SupabaseMFAClient:
             raise ValueError("timeout_seconds must be between 0 and 30")
         self._session = session if session is not None else requests.Session()
 
+    def assurance_level_for(self, access_token: str | None = None) -> str:
+        """Read AAL from this user's signed token for UI state only.
+
+        The application must first validate a newly-issued token with Auth
+        /user before using this claim. Server-side admin operations continue
+        to enforce AAL2 independently in the database gateway.
+        """
+        token = self.access_token if access_token is None else str(access_token or "").strip()
+        try:
+            claims = _jwt_payload(token)
+            if (
+                claims.get("sub") != self.verified_user_id
+                or claims.get("iss") != self.expected_issuer
+                or int(claims.get("exp") or 0) <= int(time.time())
+            ):
+                return "aal1"
+        except (TypeError, ValueError):
+            return "aal1"
+        return "aal2" if claims.get("aal") == "aal2" else "aal1"
+
+    @property
+    def current_assurance_level(self) -> str:
+        """AAL represented by the currently verified user session token."""
+        return self.assurance_level_for()
+
     @staticmethod
     def _factor_id(value: str) -> str:
         candidate = str(value or "").strip()
@@ -154,6 +179,10 @@ class SupabaseMFAClient:
             raise SupabaseMFAError("invalid_auth_response", status)
         if not 200 <= status < 300:
             code = data.get("code") or data.get("error_code") or data.get("error")
+            if not isinstance(code, str) and status == 422:
+                # Auth logs classify a rejected TOTP value as this stable code;
+                # never expose the raw Auth response body to the UI.
+                code = "mfa_verification_failed"
             raise SupabaseMFAError(code if isinstance(code, str) else "mfa_request_rejected", status)
         return data
 
@@ -226,8 +255,10 @@ class SupabaseMFAClient:
         factor = self._factor_id(factor_id)
         challenge = self._factor_id(challenge_id)
         otp = str(code or "").strip()
-        if not re.fullmatch(r"\d{6,10}", otp):
-            raise ValueError("TOTP code must contain 6..10 digits")
+        # Supabase's TOTP enrollment URI uses the standard six-digit code.
+        # Do not accept 7-10 digits: that permits an accidental extra digit.
+        if not re.fullmatch(r"\d{6}", otp):
+            raise ValueError("TOTP code must contain exactly 6 digits")
         data = self._request(
             "POST",
             f"/factors/{factor}/verify",
