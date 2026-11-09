@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from supabase_mfa import SupabaseMFAClient, SupabaseMFAError
+from supabase_mfa import SupabaseMFAClient, SupabaseMFAError, session_assurance_level
 
 
 USER_ID = "d28808d5-699f-479d-92f0-e3518a019028"
@@ -151,6 +151,24 @@ def test_http_error_is_sanitized_and_does_not_retain_raw_body():
     assert error.value.code == "mfa_verification_disabled"
     assert error.value.status_code == 403
     assert "do not surface raw" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("aal", "expected"),
+    [("aal1", "aal1"), ("aal2", "aal2"), ("unknown-value", "unknown"), (None, "unknown")],
+)
+def test_session_assurance_level_reports_only_known_aal_claims(aal, expected):
+    payload = {
+        "sub": USER_ID,
+        "role": "authenticated",
+        "iss": ISSUER,
+        "exp": int(time.time()) + 3600,
+        "is_anonymous": False,
+    }
+    if aal is not None:
+        payload["aal"] = aal
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    assert session_assurance_level(f"header.{encoded}.signature") == expected
 
 
 def test_invalid_factor_id_is_rejected_before_http():

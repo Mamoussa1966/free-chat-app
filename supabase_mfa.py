@@ -49,6 +49,17 @@ def _jwt_payload(token: str) -> dict[str, Any]:
     return payload
 
 
+def session_assurance_level(access_token: str) -> str:
+    """Read the AAL claim from an Auth-issued JWT for UI status only.
+
+    This function is informational. Server-side gateway authorization must
+    independently enforce AAL2 against the signed JWT.
+    """
+    claims = _jwt_payload(access_token)
+    level = str(claims.get("aal") or "").lower()
+    return level if level in {"aal1", "aal2"} else "unknown"
+
+
 class SupabaseMFAClient:
     """Calls only the fixed Supabase Auth MFA factor endpoints."""
 
