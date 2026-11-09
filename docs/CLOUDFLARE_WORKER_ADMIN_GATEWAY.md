@@ -140,41 +140,53 @@ a separately approved change and verified after execution.
 
 ## Production Cloudflare API token — proposed least privilege
 
-Do not reuse the broad token currently held in the Test Vault. Create an
-independent token specifically for the Production Cloudflare account.
+Do not reuse the broad token currently held in the Test Vault. Create a
+separate account-owned API token for Production after a Worker has been
+selected.
 
-Preferred scope based on the current Worker API endpoints:
+Use two narrowly separated Workers permission policies on that token:
 
-- Scope: the exact Cloudflare account only; never "all accounts".
-- Resource scope: selected existing Workers only.
-- Role: `Individual Workers Editor` on each approved Worker.
-- No `Individual Workers Admin`, `Workers Admin`, account-wide
-  `Workers Scripts Edit/Write`, or platform-wide Developer Platform role.
-- No Billing, Account Settings, API Tokens, Secrets Store, KV, R2, Workers AI,
-  Workers Tail, logs, DNS, Zone or User permissions.
-- Set a short expiry (initially 30 days) and a narrow source-IP filter only if
-  the runtime has a confirmed stable outbound IP range. Do not guess IP ranges.
+1. **Workers product — Metadata Read-Only**: allows the bridge to list the
+   account's Worker names and metadata. It does not permit viewing Worker
+   source content or making changes.
+2. **Individual Workers — Editor**: apply only to the explicitly selected
+   existing Worker or Workers. Editor permits reading/updating/deploying
+   existing Workers but does not permit creating or deleting Workers.
 
-Cloudflare's API documents `Individual Workers Editor` for the list/detail,
-version upload, deployment and partial Worker-edit endpoints used by this
-bridge. Delete Worker endpoints require an Admin-level permission; this
-gateway deliberately excludes delete. See:
+Do not grant product-level Workers Editor/Admin, Individual Workers Admin,
+Workers Scripts Write as a broad account permission, or any Developer Platform
+Admin role. Do not grant Billing, Account Settings, API Tokens, Secrets Store,
+KV, R2, Workers AI, Tail, logs, DNS, Zone or User permissions.
+
+Cloudflare's current permission model explicitly supports combining
+product-level Metadata Read-Only with Editor on only selected Worker resources.
+The List Workers API accepts Metadata Read-Only; version upload and deployment
+accept Individual Workers Editor; partial metadata editing accepts Individual
+Workers Editor. The Worker role documentation says Editor cannot create or
+delete Worker resources. See:
 - https://developers.cloudflare.com/workers/authorization/workers/
+- https://developers.cloudflare.com/workers/authorization/
+- https://developers.cloudflare.com/changelog/post/2026-09-15-granular-worker-permissions/
 - https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/list/
 - https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/create/
 - https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/create/
-- https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/edit/
-- https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/methods/delete/
+- https://developers.cloudflare.com/api/go/resources/workers/subresources/beta/subresources/workers/methods/edit/
 
-If there are no existing Workers yet, do not widen the token to account-wide
-Admin just to make discovery work. First create/identify a Worker through the
-normal Cloudflare Dashboard workflow, then scope the automation token to that
-Worker. This keeps the machine token from having create/delete powers.
+The current Cloudflare inventory is empty, so there is no existing Worker to
+place in an Individual Workers Editor scope yet. A product-level
+Metadata Read-Only policy can discover metadata without source access; after
+the application owner selects or creates the specific Worker through the
+normal Cloudflare Dashboard workflow, add Editor for that Worker only. Do not
+widen the token to Admin just to enable creation.
+
+Set a short initial expiry (for example, 30 days). Use an IP restriction only
+if the production runtime has a verified stable outbound IP range; do not
+guess or invent ranges.
 
 The token must not be saved in Streamlit Secrets or GitHub Secrets. The
 intended server-side destination is the Production project's Vault secret
 `cloudflare_account_api_token`, after a separate explicit approval. This
-branch and test-project work have not created or saved that Production token.
+branch has not created or saved a Production token.
 
 ## Verification completed in the isolated test project
 
