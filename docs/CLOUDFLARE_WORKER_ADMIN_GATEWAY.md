@@ -39,6 +39,11 @@ key or the Cloudflare API token.
 It does not accept a Cloudflare token, Supabase secret key, service-role key,
 arbitrary HTTP method, arbitrary Cloudflare API path, or raw SQL from the caller.
 
+The Python adapter is implemented and unit-tested on this branch, but it has
+not yet been wired into a visible Streamlit administration page or controls.
+That UI integration remains a separate reviewable step; no new admin page is
+currently active in the Production Streamlit application.
+
 ## Authentication and authorization
 
 1. Supabase Edge Function configuration requires `verify_jwt = true`.
