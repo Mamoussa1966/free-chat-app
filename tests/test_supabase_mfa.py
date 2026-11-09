@@ -16,13 +16,14 @@ CHALLENGE_ID = "93bbf3bd-41fd-470a-8e38-2856978bbe34"
 ISSUER = "https://example.supabase.co/auth/v1"
 
 
-def _jwt() -> str:
+def _jwt(aal: str = "aal1") -> str:
     payload = {
         "sub": USER_ID,
         "role": "authenticated",
         "iss": ISSUER,
         "exp": int(time.time()) + 3600,
         "is_anonymous": False,
+        "aal": aal,
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return f"header.{encoded}.signature"
@@ -47,11 +48,11 @@ class _Session:
         return self.responses.pop(0)
 
 
-def _client(session: _Session) -> SupabaseMFAClient:
+def _client(session: _Session, *, aal: str = "aal1") -> SupabaseMFAClient:
     return SupabaseMFAClient(
         supabase_url="https://example.supabase.co",
         publishable_key="sb_publishable_abcdefghijklmnopqrstuvwxyz123456",
-        access_token=_jwt(),
+        access_token=_jwt(aal),
         verified_user_id=USER_ID,
         expected_issuer=ISSUER,
         session=session,
@@ -119,13 +120,43 @@ def test_totp_enrollment_challenge_and_verify_use_fixed_user_auth_routes():
     assert session.calls[3][2]["json"] == {"challenge_id": CHALLENGE_ID, "code": "123456"}
 
 
-@pytest.mark.parametrize("code", ["", "12345", "12x456", "12345678901"])
+@pytest.mark.parametrize("code", ["", "12345", "12x456", "1234567", "12345678", "12345678901"])
 def test_verify_rejects_invalid_totp_without_http_request(code: str):
     session = _Session([])
     client = _client(session)
     with pytest.raises(ValueError):
         client.verify(FACTOR_ID, CHALLENGE_ID, code)
     assert session.calls == []
+
+
+def test_current_assurance_level_is_read_from_matching_session_token():
+    client = _client(_Session([]), aal="aal2")
+    assert client.current_assurance_level == "aal2"
+    assert client.assurance_level_for(_jwt("aal1")) == "aal1"
+
+
+def test_assurance_level_fails_closed_for_wrong_user_or_expired_token():
+    client = _client(_Session([]), aal="aal2")
+    payload = {
+        "sub": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeee0001",
+        "role": "authenticated",
+        "iss": ISSUER,
+        "exp": int(time.time()) + 3600,
+        "is_anonymous": False,
+        "aal": "aal2",
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    wrong_user = f"header.{encoded}.signature"
+    assert client.assurance_level_for(wrong_user) == "aal1"
+
+
+def test_verify_maps_http_422_to_sanitized_totp_failure_code():
+    session = _Session([_Response(422, {"message": "Invalid TOTP code entered"})])
+    client = _client(session)
+    with pytest.raises(SupabaseMFAError) as error:
+        client.verify(FACTOR_ID, CHALLENGE_ID, "123456")
+    assert error.value.code == "mfa_verification_failed"
+    assert error.value.status_code == 422
 
 
 def test_auth_redirect_is_not_followed_or_allowed_to_change_http_method():
