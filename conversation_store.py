@@ -190,8 +190,17 @@ def reconcile_canonical_round_completion_statuses(record: dict) -> int:
     if not isinstance(record, dict):
         return 0
     conversation_id = str(record.get("conversation_id") or "").strip()
+    messages = record.get("messages") if isinstance(record.get("messages"), list) else []
     requests = record.get("requests") if isinstance(record.get("requests"), list) else []
     rounds = record.get("rounds") if isinstance(record.get("rounds"), list) else []
+    messages_by_id: dict[str, list[dict]] = {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        message_id = str(message.get("message_id") or "").strip()
+        if message_id:
+            messages_by_id.setdefault(message_id, []).append(message)
+
     requests_by_id: dict[str, list[dict]] = {}
     for request in requests:
         if not isinstance(request, dict):
@@ -213,10 +222,18 @@ def reconcile_canonical_round_completion_statuses(record: dict) -> int:
         if len(matching_requests) != 1:
             continue
         request = matching_requests[0]
+        matching_messages = messages_by_id.get(message_id, [])
+        if len(matching_messages) != 1:
+            continue
+        message = matching_messages[0]
         if str(request.get("state") or "").upper() != "COMPLETED":
             continue
         if (
-            str(request.get("message_id") or "") != message_id
+            str(message.get("role") or "").lower() != "user"
+            or str(message.get("request_id") or "") != request_id
+            or str(message.get("conversation_id") or "") != conversation_id
+            or str(message.get("session_id") or "") != str(round_row.get("session_id") or "")
+            or str(request.get("message_id") or "") != message_id
             or str(request.get("conversation_id") or "") != conversation_id
             or str(request.get("session_id") or "") != str(round_row.get("session_id") or "")
         ):
