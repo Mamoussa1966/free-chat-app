@@ -173,5 +173,5 @@ select ok(
     'audit context trigger is installed'
 );
 
-select * from finish();
+select * from finish(true);
 rollback;
