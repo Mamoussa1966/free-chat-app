@@ -174,6 +174,13 @@ def _render_mfa_panel(
     mfa_client: SupabaseMFAClient,
     session_state: dict,
 ) -> None:
+    # Streamlit widget values are cleared at the start of the next rerun,
+    # before the corresponding text_input widgets are instantiated.
+    if st.session_state.pop("_cf_mfa_clear_enrollment_code_next_run", False):
+        st.session_state.pop("cf_mfa_enrollment_code", None)
+    if st.session_state.pop("_cf_mfa_clear_stepup_code_next_run", False):
+        st.session_state.pop("cf_mfa_stepup_code", None)
+
     st.subheader("المصادقة الثنائية للحساب")
     st.caption(
         "استخدم تطبيق مصادقة يدعم TOTP. هذه الطريقة لا ترسل SMS ولا تحتاج إلى إعداد مزود رسائل."
@@ -281,9 +288,9 @@ def _render_mfa_panel(
                     "cf_mfa_pending_factor_id",
                     "cf_mfa_pending_qr",
                     "cf_mfa_pending_secret",
-                    "cf_mfa_enrollment_code",
                 ):
                     st.session_state.pop(key, None)
+                st.session_state["_cf_mfa_clear_enrollment_code_next_run"] = True
                 st.session_state["cf_mfa_safe_factors"] = [
                     {
                         "id": pending_factor_id,
@@ -349,7 +356,7 @@ def _render_mfa_panel(
                 refreshed_state["email"] = str(verified_user.get("email") or session_state.get("email") or "")
                 st.session_state[AUTH_SESSION_KEY] = refreshed_state
                 _schedule_browser_write(st, refreshed_state)
-                st.session_state.pop("cf_mfa_stepup_code", None)
+                st.session_state["_cf_mfa_clear_stepup_code_next_run"] = True
                 st.success("تم التحقق من العامل ورفع الجلسة إلى AAL2.")
                 st.rerun()
             except SupabaseMFAError as exc:
@@ -369,6 +376,12 @@ def _render_mfa_panel(
                     and item.get("status") == "verified"
                     for item in all_factors
                 )
+                has_unverified_totp = any(
+                    isinstance(item, dict)
+                    and item.get("factor_type") == "totp"
+                    and item.get("status") == "unverified"
+                    for item in all_factors
+                )
                 if has_verified_totp:
                     st.session_state["cf_mfa_safe_factors"] = [
                         {
@@ -381,6 +394,11 @@ def _render_mfa_panel(
                         if isinstance(item, dict) and item.get("factor_type") == "totp"
                     ]
                     st.info("يوجد عامل TOTP موثّق بالفعل. حدّث الصفحة أو افحص عوامل MFA.")
+                elif has_unverified_totp:
+                    st.warning(
+                        "يوجد عامل TOTP غير مكتمل من محاولة سابقة. لا تنشئ عاملًا جديدًا؛ "
+                        "أكمل الإعداد المعلّق أو اطلب معالجة العامل غير المكتمل."
+                    )
                 else:
                     setup = mfa_client.enroll_totp()
                     st.session_state["cf_mfa_pending_factor_id"] = setup["factor_id"]
