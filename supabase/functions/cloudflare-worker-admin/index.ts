@@ -34,9 +34,9 @@ function isPublishableOrLegacyAnon(value: string): boolean {
   const parts = value.split(".");
   if (parts.length !== 3 || parts[1].length > 8192) return false;
   try {
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as {
-      role?: unknown;
-    };
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded)) as { role?: unknown };
     return payload?.role === "anon";
   } catch {
     return false;
