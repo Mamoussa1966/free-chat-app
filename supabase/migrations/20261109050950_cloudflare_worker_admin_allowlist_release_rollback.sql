@@ -1,7 +1,7 @@
 -- Cloudflare Worker Admin Bridge
 -- Self-contained incremental Supabase migration for the test project.
 -- Per-Worker allow-list; exact confirmations; production protections; audited deployment and rollback.
--- Private schema and tables are not exposed to client roles. RLS is enabled as defense in depth.
+-- Private schema and tables are not exposed to client roles. FORCE RLS permits only postgres.
 
 create schema if not exists extensions;
 create extension if not exists http with schema extensions;
@@ -47,6 +47,19 @@ create table if not exists private_cloudflare.worker_admin_audit (
 alter table private_cloudflare.worker_admin_allowlist enable row level security;
 alter table private_cloudflare.worker_admin_versions enable row level security;
 alter table private_cloudflare.worker_admin_audit enable row level security;
+alter table private_cloudflare.worker_admin_allowlist force row level security;
+alter table private_cloudflare.worker_admin_versions force row level security;
+alter table private_cloudflare.worker_admin_audit force row level security;
+
+drop policy if exists worker_admin_allowlist_postgres_only on private_cloudflare.worker_admin_allowlist;
+create policy worker_admin_allowlist_postgres_only on private_cloudflare.worker_admin_allowlist
+for all to postgres using (true) with check (true);
+drop policy if exists worker_admin_versions_postgres_only on private_cloudflare.worker_admin_versions;
+create policy worker_admin_versions_postgres_only on private_cloudflare.worker_admin_versions
+for all to postgres using (true) with check (true);
+drop policy if exists worker_admin_audit_postgres_only on private_cloudflare.worker_admin_audit;
+create policy worker_admin_audit_postgres_only on private_cloudflare.worker_admin_audit
+for all to postgres using (true) with check (true);
 
 create index if not exists worker_admin_versions_worker_name_idx on private_cloudflare.worker_admin_versions(worker_name);
 create index if not exists worker_admin_audit_worker_created_idx on private_cloudflare.worker_admin_audit(worker_name,created_at desc);
