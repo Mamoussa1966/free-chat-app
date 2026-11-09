@@ -5806,7 +5806,20 @@ def run_app() -> None:
     # read-only and lets the operator compare the actual Cloud runtime SHA with
     # the production branch, instead of inferring deployment from a release label.
     runtime_attestation = st.session_state.get("_hotfix16430_runtime_attestation")
-    if not isinstance(runtime_attestation, dict):
+    # A previous Streamlit session may still hold the pre-process-time report.
+    # Refresh it when the new field is absent or its PID no longer matches this
+    # worker, so an already-open browser cannot keep stale runtime metadata.
+    runtime_attestation_stale = not isinstance(runtime_attestation, dict)
+    if isinstance(runtime_attestation, dict):
+        try:
+            runtime_attestation_stale = (
+                not str(runtime_attestation.get("process_start_time_status") or "").strip()
+                or not str(runtime_attestation.get("process_started_at_utc") or "").strip()
+                or int(runtime_attestation.get("process_id") or 0) != os.getpid()
+            )
+        except (TypeError, ValueError, OverflowError):
+            runtime_attestation_stale = True
+    if runtime_attestation_stale:
         try:
             runtime_attestation = build_runtime_deployment_attestation()
         except Exception:
