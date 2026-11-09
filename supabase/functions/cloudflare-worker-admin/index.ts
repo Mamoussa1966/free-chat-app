@@ -8,7 +8,6 @@ const OPERATIONS = new Set([
   "upload_version",
   "deploy",
   "rollback",
-  "delete",
   "set_policy",
 ]);
 
@@ -26,24 +25,41 @@ function json(data: Record<string, unknown>, status = 200): Response {
   });
 }
 
+function isPublishableOrLegacyAnon(value: string): boolean {
+  if (value.startsWith("sb_publishable_")) return true;
+  if (value.startsWith("sb_secret_")) return false;
+
+  // Legacy anon keys are JWTs. Accept only a verified-format anon-role key;
+  // never fall back to a service_role JWT.
+  const parts = value.split(".");
+  if (parts.length !== 3 || parts[1].length > 8192) return false;
+  try {
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as {
+      role?: unknown;
+    };
+    return payload?.role === "anon";
+  } catch {
+    return false;
+  }
+}
+
 function getPublishableKey(): string {
   const named = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
   if (named) {
     try {
       const parsed = JSON.parse(named) as Record<string, unknown>;
-      const values = Object.values(parsed).filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      );
-      const selected =
-        typeof parsed.default === "string" ? parsed.default : values[0] ?? "";
-      if (selected && !selected.startsWith("sb_secret_")) return selected;
+      const selected = typeof parsed.default === "string" ? parsed.default : "";
+      if (selected && isPublishableOrLegacyAnon(selected)) return selected;
     } catch {
-      // Fall through to the legacy anon key, never to a secret/service key.
+      // Fail closed unless a separate publishable/anon key is configured.
     }
   }
 
+  const standalone = Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "";
+  if (standalone && isPublishableOrLegacyAnon(standalone)) return standalone;
+
   const legacy = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-  if (legacy && !legacy.startsWith("sb_secret_")) return legacy;
+  if (legacy && isPublishableOrLegacyAnon(legacy)) return legacy;
   return "";
 }
 
@@ -128,7 +144,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     global: { headers: { Authorization: authorization } },
   });
 
-  const userAccessToken = authorization.replace(/^Bearer\\s+/i, "").trim();
+  const userAccessToken = authorization.slice(7).trim();
   const { data: userData, error: userError } = await supabase.auth.getUser(userAccessToken);
   if (userError || !userData?.user?.id) {
     return json({ ok: false, code: "invalid_user_session", request_id: requestId }, 401);
