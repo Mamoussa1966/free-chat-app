@@ -97,7 +97,7 @@ class CloudflareWorkerAdminClient:
             claims.get("role") != "authenticated"
             or claims.get("sub") != self.verified_user_id
             or claims.get("iss") != self.expected_issuer
-            or claims.get("is_anonymous") is True
+            or str(claims.get("is_anonymous", False)).lower() == "true"
             or int(claims.get("exp") or 0) <= int(time.time())
         ):
             raise ValueError("access_token does not match the verified signed-in user session")
