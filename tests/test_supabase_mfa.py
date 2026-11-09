@@ -114,8 +114,9 @@ def test_totp_enrollment_challenge_and_verify_use_fixed_user_auth_routes():
     assert all(call[2]["allow_redirects"] is False for call in session.calls)
     assert all(call[2]["headers"]["Authorization"] == f"Bearer {_jwt()}" for call in session.calls)
     assert all(call[2]["headers"]["apikey"].startswith("sb_publishable_") for call in session.calls)
-    assert session.calls[0][2]["json"]["factor_type"] == "totp"
-    assert session.calls[2][2]["json"] == {"challenge_id": CHALLENGE_ID, "code": "123456"}
+    assert session.calls[0][2]["json"] is None  # GET /user
+    assert session.calls[1][2]["json"]["factor_type"] == "totp"
+    assert session.calls[3][2]["json"] == {"challenge_id": CHALLENGE_ID, "code": "123456"}
 
 
 @pytest.mark.parametrize("code", ["", "12345", "12x456", "12345678901"])
