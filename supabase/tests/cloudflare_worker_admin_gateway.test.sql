@@ -1,7 +1,7 @@
 -- Authentication and authorization tests for the Cloudflare Worker admin gateway.
 -- All user/operator fixtures and audit rows are rolled back at the end.
 begin;
-select plan(13);
+select plan(15);
 
 insert into auth.users (
     id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at
@@ -16,7 +16,8 @@ insert into private_cloudflare.worker_admin_operators(user_id, enabled, allowed_
 values (
     '00000000-0000-4000-8000-0000000000a1',
     true,
-    array['inspect','deploy']::text[]
+    array['inspect','deploy']::text[],
+    '00000000-0000-4000-8000-0000000000b2'
 )
 on conflict (user_id) do update set
     enabled = excluded.enabled,
@@ -162,6 +163,29 @@ select is(
     ),
     3,
     'denied authenticated requests are recorded with actor and request metadata'
+);
+
+select is(
+    (
+      select count(*)::integer
+        from private_cloudflare.worker_admin_audit
+       where operation = 'operator_enrolled'
+         and result_summary->>'user_id' = '00000000-0000-4000-8000-0000000000a1'
+         and actor_user_id = '00000000-0000-4000-8000-0000000000b2'::uuid
+         and interface = 'operator_management'
+    ),
+    1,
+    'operator enrollment is recorded with actor and allowed actions'
+);
+
+select throws_ok(
+    $
+    delete from private_cloudflare.worker_admin_operators
+    where user_id = '00000000-0000-4000-8000-0000000000a1'
+    $,
+    'P0001',
+    'Operator records cannot be deleted; disable the operator to preserve the audit history',
+    'operator hard deletion is blocked so audit history is retained'
 );
 
 select ok(
