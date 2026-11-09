@@ -27,7 +27,6 @@ _ALLOWED_OPERATIONS = frozenset(
         "upload_version",
         "deploy",
         "rollback",
-        "delete",
         "set_policy",
     }
 )
