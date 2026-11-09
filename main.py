@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import hashlib
 import copy
 import html
@@ -23,7 +24,7 @@ from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_audit_preflight
-from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit, rebuild_bridge_ledger_projection
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit, rebuild_bridge_ledger_projection, reconcile_canonical_round_completion_statuses
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -3431,7 +3432,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
         sources = model_config_sources()
         source_text = " • ".join(f"{seat.name}: {sources.get(seat.key, 'missing')}" for seat in seats)
         st.caption(f"مصدر إعداد النماذج: {source_text}")
-        st.caption("كل Request = جولة/مقعد واحد؛ محاولات Free #1→#10 تُسجّل كـ attempts داخل نفس Request.")
+        st.caption("كل رسالة مستخدم تنشئ Request قانونيًا واحدًا، وترتبط بها Round لكل جولة. تُعزل نتيجة كل مقعد بمفتاح result_key مستقل: request_id:round:seat؛ وتبقى محاولات Free #1→#10 داخل تنفيذ المقعد نفسه.")
         st.caption("Streamlit Secrets لها الأولوية؛ Environment Variables تُستخدم فقط عند غياب Secret غير الفارغ.")
         st.caption("وجود المفتاح لا يثبت Free Tier أو quota.")
         st.caption("المفاتيح لا تظهر في الواجهة ولا تدخل History.")
@@ -5849,6 +5850,26 @@ def run_app() -> None:
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
     chat = _active_chat()
+    # Reconcile only stale STARTED labels when the existing Request, exact
+    # seat result keys, result count and finished timestamp prove completion.
+    # This preserves all IDs and counters and never invokes a provider.
+    repaired_round_count = reconcile_canonical_round_completion_statuses(
+        chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    )
+    if repaired_round_count:
+        commit_canonical_record(chat, st.session_state)
+        _, _, storage_enabled = get_supabase_config(st)
+        remote_persisted = bool(
+            storage_enabled
+            and is_supabase_auth_active(st)
+            and _supabase_persist_completed_chat(chat)
+        )
+        st.session_state["_canonical_round_status_repair"] = {
+            "conversation_id": str(chat.get("conversation_id") or ""),
+            "repaired_round_count": int(repaired_round_count),
+            "remote_persisted": remote_persisted,
+            "storage_enabled": bool(storage_enabled),
+        }
     _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini / Cloudflare Workers AI بعد تأكيد الخطة المجانية • Provider: {PROVIDER_VERSION}")
@@ -5865,6 +5886,43 @@ def run_app() -> None:
             "Runtime checkout commit: NOT_PROVEN — لم تتوفر هوية Git موثوقة من نسخة Streamlit الحالية؛ "
             "لا يُعد رقم HOTFIX وحده إثباتًا للنشر."
         )
+
+    # Report the OS process creation time from procfs, not the timestamp at
+    # which this diagnostic was generated or the user's Streamlit session.
+    runtime_attestation = st.session_state.get("_hotfix16430_runtime_attestation", {})
+    process_start_raw = str(runtime_attestation.get("process_started_at_utc") or "").strip()
+    process_start_status = str(runtime_attestation.get("process_start_time_status") or "")
+    if process_start_status == "PASS" and process_start_raw not in {"", "NOT_AVAILABLE"}:
+        try:
+            process_started = datetime.fromisoformat(process_start_raw.replace("Z", "+00:00"))
+            process_started_utc = process_started.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            process_started_riyadh = process_started.astimezone(ZoneInfo("Asia/Riyadh")).strftime("%Y-%m-%d %H:%M:%S %Z")
+            process_id = int(runtime_attestation.get("process_id") or 0)
+            st.caption(
+                f"وقت بدء عملية Streamlit الحالية: `{process_started_riyadh}` (الرياض) · "
+                f"`{process_started_utc}` · PID `{process_id}` · المصدر `linux_procfs`."
+            )
+        except (TypeError, ValueError, OverflowError):
+            st.warning("وقت بدء عملية Streamlit: NOT_PROVEN — تعذر تفسير وقت النظام.")
+    else:
+        st.warning("وقت بدء عملية Streamlit: NOT_PROVEN — لم تتوفر بيانات procfs للعملية الحالية.")
+
+    round_repair = st.session_state.get("_canonical_round_status_repair")
+    if isinstance(round_repair, dict) and str(round_repair.get("conversation_id") or "") == str(chat.get("conversation_id") or ""):
+        repaired_count = int(round_repair.get("repaired_round_count") or 0)
+        if repaired_count and round_repair.get("remote_persisted") is True:
+            st.success(
+                f"تمت مصالحة {repaired_count} حالة Round إلى COMPLETED بعد التحقق من أدلة Request ونتائج المقاعد؛ "
+                "وحُفظ التحديث في Supabase دون إنشاء هويات جديدة أو استدعاء أي مزود."
+            )
+        elif repaired_count and round_repair.get("storage_enabled") is True:
+            st.warning(
+                f"تمت مصالحة {repaired_count} حالة Round في الجلسة الحالية، لكن لم يتأكد حفظها في Supabase. "
+                "لا تعتبر المصالحة دائمة حتى ينجح الحفظ."
+            )
+        elif repaired_count:
+            st.caption(f"تمت مصالحة {repaired_count} حالة Round داخل الجلسة الحالية فقط؛ التخزين السحابي غير مفعّل.")
+
     st.caption(f"HOTFIX123 Release Identity Gate: {release_identity.get('gate', 'FAIL')} • Frozen Provider={release_identity.get('observed', {}).get('provider_core', 'NOT_PROVEN')} • Runtime Match={release_identity.get('runtime_matches_frozen_identity', False)}")
     st.caption("V26.3: Authoritative Conversation Persistence · Message→Request→Round Chain · HOTFIX145 Core Preserved")
     st.markdown("**العقد:** لا Local Engine ولا Paid fallback ولا نموذج تلقائي. وجود اسم داخل `*_FREE_MODELS` لا يثبت المجانية؛ يُسمح فقط بنماذج Gemini Free Tier وCloudflare Workers AI Free المعتمدة بعد تأكيد خطة الحساب. بقية واجهات API مقفولة احترازيًا.")
