@@ -101,7 +101,7 @@ begin
 
   v_required_action := case when p_operation = 'list' then 'inspect' else p_operation end;
 
-  if p_operation not in (
+  if coalesce(p_operation, '') not in (
     'list','register','refresh_versions','update_metadata',
     'upload_version','deploy','rollback','delete','set_policy'
   ) then
@@ -154,7 +154,7 @@ begin
     case p_operation
       when 'register' then
         if (v_payload - array['environment','allowed_operations','allow_delete']::text[]) <> '{}'::jsonb
-           or jsonb_typeof(v_payload->'allowed_operations') <> 'array'
+           or coalesce(jsonb_typeof(v_payload->'allowed_operations'), '') <> 'array'
            or nullif(v_payload->>'environment','') is null then
           return jsonb_build_object('ok', false, 'code', 'invalid_payload', 'request_id', v_request_id);
         end if;
@@ -177,7 +177,7 @@ begin
 
       when 'update_metadata' then
         if (v_payload - array['tags']::text[]) <> '{}'::jsonb
-           or jsonb_typeof(v_payload->'tags') <> 'array' then
+           or coalesce(jsonb_typeof(v_payload->'tags'), '') <> 'array' then
           return jsonb_build_object('ok', false, 'code', 'invalid_payload', 'request_id', v_request_id);
         end if;
         select array_agg(value) into v_tags
@@ -229,7 +229,7 @@ begin
       when 'set_policy' then
         if (v_payload - array['environment','allowed_operations','allow_delete']::text[]) <> '{}'::jsonb
            or nullif(v_payload->>'environment','') is null
-           or jsonb_typeof(v_payload->'allowed_operations') <> 'array' then
+           or coalesce(jsonb_typeof(v_payload->'allowed_operations'), '') <> 'array' then
           return jsonb_build_object('ok', false, 'code', 'invalid_payload', 'request_id', v_request_id);
         end if;
         v_environment := v_payload->>'environment';
