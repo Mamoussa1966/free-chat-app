@@ -1,0 +1,13 @@
+{
+  "name": "ai-council-cloudflare-canary",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "check": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.136.3"
+  }
+}
