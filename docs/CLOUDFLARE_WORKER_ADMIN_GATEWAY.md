@@ -64,7 +64,8 @@ arbitrary HTTP method, arbitrary Cloudflare API path, or raw SQL from the caller
 ## Operator enrollment — manual, separate approval
 
 No operator is enrolled by default. Do not add a user until the application
-owner explicitly approves the exact Auth user UUID and action list.
+owner explicitly approves the exact Auth user UUID and action list. Every
+operator action update must also identify an existing approving Auth user UUID.
 
 Obtain the UUID from a trusted, verified Supabase Auth `/user` response for
 the intended signed-in account. Do not infer it from an email address or
@@ -178,7 +179,7 @@ branch and test-project work have not created or saved that Production token.
 ## Verification completed in the isolated test project
 
 - Migration applied to `ai-council-storage-test`.
-- pgTAP gateway authorization tests passed (19 assertions).
+- pgTAP gateway authorization tests passed (20 assertions).
 - No `anon` execute grant on the dispatcher.
 - No `service_role` execute grant on the dispatcher.
 - `authenticated` has access only to the public dispatcher; private schema
@@ -195,6 +196,13 @@ branch and test-project work have not created or saved that Production token.
 ## Remaining release gates
 
 - Review the branch and pass CI before merging.
+- Supabase Security Advisor reports one intentional
+  `authenticated_security_definer_function_executable` warning for the
+  public dispatcher. The only granted caller role is `authenticated`; the
+  function is owner-executed with a fixed search path, verifies `auth.uid()`,
+  requires an explicit operator row/action, and exposes no private schema
+  grants. This is a deliberate narrow RPC boundary rather than a broad
+  service-role bypass.
 - Verify the Edge Function's runtime behavior after deploy with an
   independently issued test-user JWT, while the operator allow-list remains
   empty; the expected result is a sanitized 403, not an administrative action.
