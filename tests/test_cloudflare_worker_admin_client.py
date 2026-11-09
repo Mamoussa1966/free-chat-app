@@ -74,7 +74,8 @@ def make_client(token=None, transport=None, **overrides):
 
 def test_dispatch_uses_user_jwt_and_publishable_key_only():
     transport = FakeTransport()
-    client = make_client(transport=transport)
+    token = jwt_for()
+    client = make_client(token=token, transport=transport)
 
     result = client.dispatch("list", request_id="11111111-1111-4111-8111-111111111111")
 
@@ -83,7 +84,7 @@ def test_dispatch_uses_user_jwt_and_publishable_key_only():
     assert call["method"] == "POST"
     assert call["url"] == PROJECT_URL + "/functions/v1/cloudflare-worker-admin"
     assert call["headers"]["apikey"] == PUBLISHABLE_KEY
-    assert call["headers"]["Authorization"] == "Bearer " + jwt_for()
+    assert call["headers"]["Authorization"] == "Bearer " + token
     assert call["json"]["operation"] == "list"
     assert call["json"]["worker_name"] is None
     assert call["json"]["request_id"] == "11111111-1111-4111-8111-111111111111"
