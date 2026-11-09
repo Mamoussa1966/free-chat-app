@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 
@@ -23,6 +23,23 @@ _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
 _SAFE_ERROR_CODE = re.compile(r"^[a-z0-9_]{1,80}$")
+
+_TOTP_DIGIT_TRANSLATION = str.maketrans(
+    "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
+    "01234567890123456789",
+)
+
+
+def _normalize_totp_code(value: str) -> str:
+    """Normalize Arabic/Persian numerals and validate a six-digit TOTP."""
+    code = str(value or "").translate(_TOTP_DIGIT_TRANSLATION)
+    # Remove harmless visual separators and bidirectional marks that mobile
+    # keyboards can introduce when entering digits in an RTL interface.
+    code = re.sub(r"[\\s\\-\\u200e\\u200f\\u061c]", "", code)
+    if not re.fullmatch(r"[0-9]{6}", code):
+        raise ValueError("TOTP code must contain exactly six digits")
+    return code
+
 
 
 class SupabaseMFAError(RuntimeError):
@@ -153,8 +170,18 @@ class SupabaseMFAClient:
         if not isinstance(data, dict):
             raise SupabaseMFAError("invalid_auth_response", status)
         if not 200 <= status < 300:
-            code = data.get("code") or data.get("error_code") or data.get("error")
-            raise SupabaseMFAError(code if isinstance(code, str) else "mfa_request_rejected", status)
+            code = data.get("error_code") or data.get("code") or data.get("error")
+            if not isinstance(code, str):
+                # Supabase Auth returns 422 for an incorrect TOTP verification.
+                # Preserve a useful, sanitized stage-specific code if the body
+                # omits error_code/code.
+                if status == 422 and method.upper() == "POST" and path.endswith("/verify"):
+                    code = "mfa_verification_failed"
+                elif status == 422 and method.upper() == "POST" and path.endswith("/challenge"):
+                    code = "mfa_challenge_rejected"
+                else:
+                    code = "mfa_request_rejected"
+            raise SupabaseMFAError(code, status)
         return data
 
     def list_factors(self) -> dict[str, Any]:
@@ -203,10 +230,30 @@ class SupabaseMFAClient:
         if not isinstance(totp, dict):
             raise SupabaseMFAError("totp_setup_data_missing", 200)
         qr_code = str(totp.get("qr_code") or "")
-        secret = str(totp.get("secret") or "")
+        secret = str(totp.get("secret") or "").strip().upper()
         uri = str(totp.get("uri") or "")
         if not qr_code or not secret or not uri.startswith("otpauth://totp/"):
             raise SupabaseMFAError("totp_setup_data_invalid", 200)
+
+        # The manual key must be valid Base32 and must match the secret in the
+        # official otpauth URI returned alongside the QR SVG. Never attempt to
+        # "correct" a digit in a server-generated secret.
+        secret_unpadded = secret.rstrip("=")
+        parsed_uri = urlsplit(uri)
+        uri_secrets = parse_qs(parsed_uri.query, keep_blank_values=True).get("secret", [])
+        if (
+            parsed_uri.scheme != "otpauth"
+            or parsed_uri.netloc != "totp"
+            or not re.fullmatch(r"[A-Z2-7]+={0,6}", secret)
+            or not uri_secrets
+            or uri_secrets[0].strip().upper().rstrip("=") != secret_unpadded
+        ):
+            raise SupabaseMFAError("totp_setup_secret_invalid", 200)
+        try:
+            padding = "=" * ((8 - (len(secret_unpadded) % 8)) % 8)
+            base64.b32decode(secret_unpadded + padding, casefold=True)
+        except Exception:
+            raise SupabaseMFAError("totp_setup_secret_invalid", 200) from None
         return {
             "factor_id": factor_id,
             "qr_code": qr_code,
@@ -225,9 +272,7 @@ class SupabaseMFAClient:
         """Verify a TOTP code and return the new AAL2 session response."""
         factor = self._factor_id(factor_id)
         challenge = self._factor_id(challenge_id)
-        otp = str(code or "").strip()
-        if not re.fullmatch(r"\d{6,10}", otp):
-            raise ValueError("TOTP code must contain 6..10 digits")
+        otp = _normalize_totp_code(code)
         data = self._request(
             "POST",
             f"/factors/{factor}/verify",
