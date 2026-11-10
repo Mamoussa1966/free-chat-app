@@ -344,6 +344,8 @@ def reconcile_canonical_round_completion_statuses(record: dict) -> int:
     for round_row in eligible_rows:
         round_row["status"] = "COMPLETED"
     return len(eligible_rows)
+
+
 def commit_canonical_record(chat: dict, session_state=None) -> dict:
     """Commit the complete canonical ConversationRecord at a lifecycle boundary.
 
