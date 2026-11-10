@@ -3,7 +3,7 @@
 -- These tests are not run by the Python-only GitHub workflow yet; do not enable
 -- application integration until this suite has been run against the target migration.
 begin;
-select plan(9);
+select plan(16);
 
 insert into auth.users (
     id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at
@@ -153,6 +153,134 @@ select is(
     (select canonical_record #>> '{messages,0,content}' from public.council_conversations where conversation_id = 'rls-conversation-a'),
     'original',
     'Account A content remains unchanged after Account B attempted writes'
+);
+
+select lives_ok(
+    $insert$
+    insert into public.council_conversations
+        (conversation_id, owner_id, schema, canonical_record, checksum)
+    values (
+        'lifecycle-guard-conversation-a',
+        '00000000-0000-0000-0000-00000000000a',
+        'ai-council-supabase-conversation/v1',
+        $record$
+        {
+          "conversation_id":"lifecycle-guard-conversation-a",
+          "session_id":"lifecycle-guard-session-a",
+          "canonical_store_contract":"V26_3_CANONICAL_CONVERSATION_STORE",
+          "messages":[{
+            "message_id":"lifecycle-guard-message-a",
+            "conversation_id":"lifecycle-guard-conversation-a",
+            "session_id":"lifecycle-guard-session-a",
+            "role":"user",
+            "request_id":"lifecycle-guard-request-a",
+            "created_at":"2026-11-10T00:00:00Z",
+            "content":"lifecycle test"
+          }],
+          "requests":[{
+            "request_id":"lifecycle-guard-request-a",
+            "conversation_id":"lifecycle-guard-conversation-a",
+            "session_id":"lifecycle-guard-session-a",
+            "message_id":"lifecycle-guard-message-a",
+            "created_at":"2026-11-10T00:00:01Z",
+            "state":"RUNNING"
+          }],
+          "rounds":[{
+            "round_id":"lifecycle-guard-conversation-a:lifecycle-guard-request-a:r1",
+            "conversation_id":"lifecycle-guard-conversation-a",
+            "session_id":"lifecycle-guard-session-a",
+            "message_id":"lifecycle-guard-message-a",
+            "request_id":"lifecycle-guard-request-a",
+            "round":1,
+            "round_number":1,
+            "canonical_round_base":1,
+            "canonical_round_record_id":"lifecycle-guard-conversation-a:lifecycle-guard-request-a:r1",
+            "canonical_identity_key":"lifecycle-guard-conversation-a:lifecycle-guard-request-a:r1",
+            "created_at":"2026-11-10T00:00:02Z",
+            "status":"STARTED"
+          }]
+        }
+        $record$::jsonb,
+        repeat('0', 64)
+    )
+    $insert$,
+    'Owner A can create a RUNNING Request and STARTED Round'
+);
+
+select lives_ok(
+    $advance$
+    update public.council_conversations
+    set canonical_record = jsonb_set(
+        jsonb_set(canonical_record, '{requests,0,state}', '"COMPLETED"'::jsonb),
+        '{rounds,0,status}', '"COMPLETED"'::jsonb
+    )
+    where conversation_id = 'lifecycle-guard-conversation-a'
+    $advance$,
+    'A RUNNING Request and STARTED Round can advance to COMPLETED'
+);
+
+select lives_ok(
+    $idempotent$
+    update public.council_conversations
+    set canonical_record = jsonb_set(
+        jsonb_set(canonical_record, '{requests,0,state}', '"COMPLETED"'::jsonb),
+        '{rounds,0,status}', '"COMPLETED"'::jsonb
+    )
+    where conversation_id = 'lifecycle-guard-conversation-a'
+    $idempotent$,
+    'Saving the same terminal Request and Round states is idempotent'
+);
+
+select throws_ok(
+    $request_downgrade$
+    update public.council_conversations
+    set canonical_record = jsonb_set(
+        canonical_record, '{requests,0,state}', '"RUNNING"'::jsonb
+    )
+    where conversation_id = 'lifecycle-guard-conversation-a'
+    $request_downgrade$,
+    '23514',
+    'canonical requests terminal lifecycle state cannot be rewritten',
+    'A terminal Request cannot return to RUNNING'
+);
+
+select throws_ok(
+    $request_terminal_rewrite$
+    update public.council_conversations
+    set canonical_record = jsonb_set(
+        canonical_record, '{requests,0,state}', '"FAILED"'::jsonb
+    )
+    where conversation_id = 'lifecycle-guard-conversation-a'
+    $request_terminal_rewrite$,
+    '23514',
+    'canonical requests terminal lifecycle state cannot be rewritten',
+    'A COMPLETED Request cannot change to another terminal state'
+);
+
+select throws_ok(
+    $round_downgrade$
+    update public.council_conversations
+    set canonical_record = jsonb_set(
+        canonical_record, '{rounds,0,status}', '"STARTED"'::jsonb
+    )
+    where conversation_id = 'lifecycle-guard-conversation-a'
+    $round_downgrade$,
+    '23514',
+    'canonical rounds terminal lifecycle state cannot be rewritten',
+    'A terminal Round cannot return to STARTED'
+);
+
+select throws_ok(
+    $round_terminal_rewrite$
+    update public.council_conversations
+    set canonical_record = jsonb_set(
+        canonical_record, '{rounds,0,status}', '"FAILED"'::jsonb
+    )
+    where conversation_id = 'lifecycle-guard-conversation-a'
+    $round_terminal_rewrite$,
+    '23514',
+    'canonical rounds terminal lifecycle state cannot be rewritten',
+    'A COMPLETED Round cannot change to another terminal state'
 );
 
 select * from finish();
