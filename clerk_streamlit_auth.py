@@ -526,23 +526,44 @@ export default function(component) {
   // page path and existing query parameters so OAuth returns to this pilot
   // page rather than the app home page or Clerk's hosted Account Portal.
   const FLOW_PARAM = "clerk_pilot_flow";
-  const appReturnUrl = (() => {
-    const url = new URL(window.location.href);
-    url.searchParams.delete(FLOW_PARAM);
-    return url.toString();
-  })();
-  const flowUrl = (mode) => {
-    const url = new URL(appReturnUrl);
-    url.searchParams.set(FLOW_PARAM, mode);
-    return url.pathname + url.search + url.hash;
-  };
+  const callbackParams = new Set([
+    "intent",
+    "redirect_url",
+    "sign_in_force_redirect_url",
+    "sign_up_force_redirect_url",
+    "sign_in_fallback_redirect_url",
+    "sign_up_fallback_redirect_url",
+    "__clerk_db_jwt"
+  ]);
+  const currentUrl = new URL(window.location.href);
   const initialFlow = () => {
-    const params = new URL(window.location.href).searchParams;
-    // Clerk returns OAuth sign-up continuations with intent=signUp. Preserve
-    // that provider-generated signal as well as our local in-app route flag.
-    return params.get(FLOW_PARAM) === "sign-up" || params.get("intent") === "signUp"
-      ? "sign-up" : "sign-in";
+    const localFlow = currentUrl.searchParams.get(FLOW_PARAM);
+    // OAuth callbacks may carry intent=signUp even when the sign-in attempt
+    // was transferred. Honor the provider's intent for this initial render.
+    if (currentUrl.searchParams.get("intent") === "signUp") return "sign-up";
+    return localFlow === "sign-up" ? "sign-up" : "sign-in";
   };
+  const selectedInitialFlow = initialFlow();
+  const appBaseUrl = (() => {
+    const url = new URL(currentUrl);
+    for (const name of callbackParams) url.searchParams.delete(name);
+    url.searchParams.delete(FLOW_PARAM);
+    url.hash = "";
+    return url;
+  })();
+  const appReturnUrl = appBaseUrl.toString();
+  const flowUrl = (mode) => {
+    const url = new URL(appBaseUrl);
+    url.searchParams.set(FLOW_PARAM, mode);
+    return url.toString();
+  };
+  // Remove OAuth callback state once consumed so signing out or switching
+  // accounts cannot inherit a stale intent=signUp from a previous session.
+  if (typeof window.history?.replaceState === "function") {
+    const cleanUrl = new URL(appBaseUrl);
+    cleanUrl.searchParams.set(FLOW_PARAM, selectedInitialFlow);
+    window.history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search);
+  }
 
   const setStatus = (message) => {
     if (statusNode) statusNode.textContent = message;
@@ -749,6 +770,7 @@ export default function(component) {
         signUpUrl: flowUrl("sign-up"),
         signInFallbackRedirectUrl: appReturnUrl,
         signUpFallbackRedirectUrl: appReturnUrl,
+        afterSignOutUrl: flowUrl("sign-in"),
         ui: { ClerkUI: window.__internal_ClerkUICtor }
       });
       if (disposed) return;
@@ -766,7 +788,7 @@ export default function(component) {
       if (clerk.session) {
         await mountAuthenticated();
       } else {
-        mountSignedOut(initialFlow());
+        mountSignedOut(selectedInitialFlow);
       }
     } catch (_) {
       setStatus("تعذر تحميل Clerk أو الاتصال بخدمة المصادقة. تحقق من اتصال المتصفح وإعدادات Clerk.");
@@ -778,7 +800,7 @@ export default function(component) {
     if (!clerk) return;
     signOutButton.disabled = true;
     try {
-      await clerk.signOut();
+      await clerk.signOut({ redirectUrl: flowUrl("sign-in") });
     } catch (_) {
       setStatus("تعذر إنهاء جلسة Clerk من الخادم. أعد المحاولة.");
     } finally {
