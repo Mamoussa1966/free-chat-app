@@ -256,7 +256,6 @@ def test_repository_uses_verified_identity_and_clerk_bearer_token(monkeypatch, s
     assert method == "POST"
     assert url.endswith("/rest/v1/clerk_auth_pilot_records")
     assert kwargs["headers"]["Authorization"] == f"Bearer {token}"
-    assert kwargs["payload"]["owner_subject"] == USER_A if "payload" in kwargs else True
     assert kwargs["json"]["owner_subject"] == USER_A
 
 
