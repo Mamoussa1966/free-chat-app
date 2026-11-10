@@ -536,9 +536,13 @@ export default function(component) {
     url.searchParams.set(FLOW_PARAM, mode);
     return url.pathname + url.search + url.hash;
   };
-  const initialFlow = () =>
-    new URL(window.location.href).searchParams.get(FLOW_PARAM) === "sign-up"
+  const initialFlow = () => {
+    const params = new URL(window.location.href).searchParams;
+    // Clerk returns OAuth sign-up continuations with intent=signUp. Preserve
+    // that provider-generated signal as well as our local in-app route flag.
+    return params.get(FLOW_PARAM) === "sign-up" || params.get("intent") === "signUp"
       ? "sign-up" : "sign-in";
+  };
 
   const setStatus = (message) => {
     if (statusNode) statusNode.textContent = message;
