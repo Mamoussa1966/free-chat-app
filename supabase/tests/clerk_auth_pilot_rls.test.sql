@@ -78,7 +78,7 @@ select throws_ok(
     values ('user_pilot_a', 'spoofed-a', '{}'::jsonb)
   $$,
   '42501',
-  'new row violates row-level security policy for table "clerk_auth_pilot_records"',
+  'new row violates row-level security policy "clerk_auth_pilot_clerk_issuer_only" for table "clerk_auth_pilot_records"',
   'Clerk user B cannot insert a row claiming A as its owner'
 );
 
@@ -118,7 +118,7 @@ select throws_ok(
     values ('00000000-0000-0000-0000-00000000000a', 'native-auth-row', '{}'::jsonb)
   $$,
   '42501',
-  'new row violates row-level security policy for table "clerk_auth_pilot_records"',
+  'new row violates row-level security policy "clerk_auth_pilot_clerk_issuer_only" for table "clerk_auth_pilot_records"',
   'Native Supabase Auth issuer cannot insert into the Clerk pilot table'
 );
 
@@ -143,7 +143,7 @@ select throws_ok(
     values ('user_pilot_b', 'wrong-issuer-row', '{}'::jsonb)
   $$,
   '42501',
-  'new row violates row-level security policy for table "clerk_auth_pilot_records"',
+  'new row violates row-level security policy "clerk_auth_pilot_clerk_issuer_only" for table "clerk_auth_pilot_records"',
   'An untrusted issuer cannot insert into the Clerk pilot table'
 );
 
