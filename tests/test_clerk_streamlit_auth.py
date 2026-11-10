@@ -13,7 +13,7 @@ import clerk_streamlit_auth as auth
 
 
 ISSUER = "https://dear-hermit-1240.clerk.accounts.dev"
-AUTHORIZED_PARTY = auth.DEFAULT_AUTHORIZED_PARTY
+AUTHORIZED_PARTY = "https://ai-council-clerk-pilot-test.streamlit.app"
 USER_A = "user_test_A"
 SESSION_A = "sess_test_A"
 TEST_KID = "clerk-pilot-test-key"
@@ -33,6 +33,7 @@ def signing_keys():
 @pytest.fixture(autouse=True)
 def clear_jwks_cache():
     auth._JWKS_CACHE.clear()
+    auth._JWKS_LAST_REFRESH.clear()
 
 
 def b64url(raw: bytes) -> str:
@@ -116,13 +117,32 @@ def test_publishable_key_rejects_live_or_unexpected_domain():
 
 def test_pilot_config_is_pinned_to_the_test_project_and_authorized_origin():
     class FakeStreamlit:
-        secrets = {}
+        secrets = {
+            "CLERK_TEST_AUTHORIZED_PARTIES": AUTHORIZED_PARTY,
+        }
 
     config = auth.get_clerk_pilot_config(FakeStreamlit())
     assert config.domain == auth.TEST_CLERK_DOMAIN
     assert config.issuer == ISSUER
     assert config.supabase_url == auth.TEST_SUPABASE_URL
     assert config.authorized_parties == (AUTHORIZED_PARTY,)
+
+
+
+def test_pilot_config_requires_separate_test_origin_and_rejects_production():
+    class MissingOrigin:
+        secrets = {}
+
+    with pytest.raises(auth.ClerkPilotAuthError, match="تطبيق الاختبار"):
+        auth.get_clerk_pilot_config(MissingOrigin())
+
+    class ProductionOrigin:
+        secrets = {
+            "CLERK_TEST_AUTHORIZED_PARTIES": auth.PRODUCTION_STREAMLIT_ORIGIN,
+        }
+
+    with pytest.raises(auth.ClerkPilotAuthError, match="عنوان تطبيق الإنتاج"):
+        auth.get_clerk_pilot_config(ProductionOrigin())
 
 
 def test_pilot_config_rejects_wrong_clerk_instance():
