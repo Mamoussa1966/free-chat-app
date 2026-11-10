@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
+import json
 import time
 from types import SimpleNamespace
 
-import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 import clerk_streamlit_auth as auth
 
@@ -14,6 +16,7 @@ ISSUER = "https://dear-hermit-1240.clerk.accounts.dev"
 AUTHORIZED_PARTY = auth.DEFAULT_AUTHORIZED_PARTY
 USER_A = "user_test_A"
 SESSION_A = "sess_test_A"
+TEST_KID = "clerk-pilot-test-key"
 
 
 @pytest.fixture(scope="module")
@@ -24,16 +27,36 @@ def signing_keys():
         "private": private,
         "public": private.public_key(),
         "other_private": other_private,
-        "other_public": other_private.public_key(),
     }
 
 
-class FakeJwksClient:
-    def __init__(self, key):
-        self.key = key
+@pytest.fixture(autouse=True)
+def clear_jwks_cache():
+    auth._JWKS_CACHE.clear()
 
-    def get_signing_key_from_jwt(self, _token):
-        return SimpleNamespace(key=self.key)
+
+def b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def b64url_int(value: int) -> str:
+    return b64url(value.to_bytes((value.bit_length() + 7) // 8, "big"))
+
+
+def jwks_document(public_key):
+    numbers = public_key.public_numbers()
+    return {
+        "keys": [
+            {
+                "kty": "RSA",
+                "use": "sig",
+                "alg": "RS256",
+                "kid": TEST_KID,
+                "n": b64url_int(numbers.n),
+                "e": b64url_int(numbers.e),
+            }
+        ]
+    }
 
 
 def make_claims(**updates):
@@ -52,13 +75,23 @@ def make_claims(**updates):
     return claims
 
 
-def make_token(private_key, **claim_updates):
-    return jwt.encode(
-        make_claims(**claim_updates),
-        private_key,
-        algorithm="RS256",
-        headers={"kid": "test-key"},
-    )
+def make_token(private_key, *, claims=None, alg="RS256", kid=TEST_KID):
+    header = {"alg": alg, "kid": kid, "typ": "JWT"}
+    payload = claims if claims is not None else make_claims()
+    encoded_header = b64url(json.dumps(header, separators=(",", ":")).encode())
+    encoded_payload = b64url(json.dumps(payload, separators=(",", ":")).encode())
+    signing_input = f"{encoded_header}.{encoded_payload}".encode("ascii")
+    signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    return f"{encoded_header}.{encoded_payload}.{b64url(signature)}"
+
+
+def verifier_options(public_key):
+    doc = jwks_document(public_key)
+    return {
+        "issuer": ISSUER,
+        "authorized_parties": (AUTHORIZED_PARTY,),
+        "jwks_fetcher": lambda _issuer: doc,
+    }
 
 
 def test_publishable_key_decodes_only_the_pinned_development_domain():
@@ -86,9 +119,7 @@ def test_pilot_config_is_pinned_to_the_test_project_and_authorized_origin():
 
 def test_pilot_config_rejects_wrong_clerk_instance():
     class FakeStreamlit:
-        secrets = {
-            "CLERK_TEST_DOMAIN": "some-other.clerk.accounts.dev",
-        }
+        secrets = {"CLERK_TEST_DOMAIN": "some-other.clerk.accounts.dev"}
 
     with pytest.raises(auth.ClerkPilotAuthError):
         auth.get_clerk_pilot_config(FakeStreamlit())
@@ -96,12 +127,7 @@ def test_pilot_config_rejects_wrong_clerk_instance():
 
 def test_valid_clerk_session_token_is_verified_and_subject_bound(signing_keys):
     token = make_token(signing_keys["private"])
-    verified = auth.verify_clerk_session_token(
-        token,
-        issuer=ISSUER,
-        authorized_parties=(AUTHORIZED_PARTY,),
-        jwks_client=FakeJwksClient(signing_keys["public"]),
-    )
+    verified = auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
     assert verified.subject == USER_A
     assert verified.session_id == SESSION_A
     assert verified.issuer == ISSUER
@@ -112,83 +138,48 @@ def test_valid_clerk_session_token_is_verified_and_subject_bound(signing_keys):
 
 def test_wrong_signature_is_rejected(signing_keys):
     token = make_token(signing_keys["other_private"])
-    with pytest.raises(auth.ClerkPilotAuthError):
-        auth.verify_clerk_session_token(
-            token,
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+    with pytest.raises(auth.ClerkPilotAuthError, match="توقيع"):
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
 def test_wrong_issuer_is_rejected_even_when_token_is_signed(signing_keys):
-    token = make_token(signing_keys["private"], iss="https://attacker.example")
-    with pytest.raises(auth.ClerkPilotAuthError):
-        auth.verify_clerk_session_token(
-            token,
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+    token = make_token(signing_keys["private"], claims=make_claims(iss="https://attacker.example"))
+    with pytest.raises(auth.ClerkPilotAuthError, match="مُصدر"):
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
 def test_wrong_authorized_party_is_rejected(signing_keys):
-    token = make_token(signing_keys["private"], azp="https://attacker.example")
+    token = make_token(signing_keys["private"], claims=make_claims(azp="https://attacker.example"))
     with pytest.raises(auth.ClerkPilotAuthError, match="Authorized Parties"):
-        auth.verify_clerk_session_token(
-            token,
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
 def test_missing_role_is_rejected(signing_keys):
     claims = make_claims()
     claims.pop("role")
-    token = jwt.encode(claims, signing_keys["private"], algorithm="RS256", headers={"kid": "test-key"})
-    with pytest.raises(auth.ClerkPilotAuthError):
-        auth.verify_clerk_session_token(
-            token,
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+    token = make_token(signing_keys["private"], claims=claims)
+    with pytest.raises(auth.ClerkPilotAuthError, match="الإلزامية"):
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
 def test_wrong_role_is_rejected(signing_keys):
-    token = make_token(signing_keys["private"], role="anon")
+    token = make_token(signing_keys["private"], claims=make_claims(role="anon"))
     with pytest.raises(auth.ClerkPilotAuthError, match="authenticated"):
-        auth.verify_clerk_session_token(
-            token,
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
 def test_expired_token_is_rejected(signing_keys):
-    token = make_token(signing_keys["private"], exp=int(time.time()) - 60)
-    with pytest.raises(auth.ClerkPilotAuthError):
-        auth.verify_clerk_session_token(
-            token,
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+    token = make_token(signing_keys["private"], claims=make_claims(exp=int(time.time()) - 60))
+    with pytest.raises(auth.ClerkPilotAuthError, match="توقيتها"):
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
 def test_token_without_required_session_claims_is_rejected(signing_keys):
     claims = make_claims()
     claims.pop("sid")
-    token = jwt.encode(claims, signing_keys["private"], algorithm="RS256", headers={"kid": "test-key"})
-    with pytest.raises(auth.ClerkPilotAuthError):
-        auth.verify_clerk_session_token(
-            token,
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+    token = make_token(signing_keys["private"], claims=claims)
+    with pytest.raises(auth.ClerkPilotAuthError, match="الإلزامية"):
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
 def test_token_size_and_algorithm_are_fail_closed(signing_keys):
@@ -197,35 +188,21 @@ def test_token_size_and_algorithm_are_fail_closed(signing_keys):
             "x" * (auth.MAX_SESSION_TOKEN_LENGTH + 1),
             issuer=ISSUER,
             authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
         )
-    token = jwt.encode(
-        make_claims(),
-        signing_keys["private"],
-        algorithm="RS256",
-        headers={"kid": "test-key", "typ": "JWT"},
-    )
-    parts = token.split(".")
-    # Corrupting the protected header invalidates its signature too; rejection
-    # must happen at the algorithm/header check before trusting the payload.
-    parts[0] = jwt.utils.base64url_encode(b'{"alg":"HS256","kid":"test-key"}').decode()
-    with pytest.raises(auth.ClerkPilotAuthError):
-        auth.verify_clerk_session_token(
-            ".".join(parts),
-            issuer=ISSUER,
-            authorized_parties=(AUTHORIZED_PARTY,),
-            jwks_client=FakeJwksClient(signing_keys["public"]),
-        )
+    token = make_token(signing_keys["private"], alg="HS256")
+    with pytest.raises(auth.ClerkPilotAuthError, match="خوارزمية"):
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
-def test_repository_uses_verified_identity_and_clerk_bearer_token(monkeypatch, signing_keys):
+def test_unknown_kid_forces_jwks_refresh_then_fails_closed(signing_keys):
+    token = make_token(signing_keys["private"], kid="not-in-jwks")
+    with pytest.raises(auth.ClerkPilotAuthError, match="غير منشور"):
+        auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
+
+
+def test_repository_uses_verified_identity_and_clerk_bearer_token(signing_keys):
     token = make_token(signing_keys["private"])
-    verified = auth.verify_clerk_session_token(
-        token,
-        issuer=ISSUER,
-        authorized_parties=(AUTHORIZED_PARTY,),
-        jwks_client=FakeJwksClient(signing_keys["public"]),
-    )
+    verified = auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
     config = auth.ClerkPilotConfig(
         publishable_key=auth.TEST_CLERK_PUBLISHABLE_KEY,
         domain=auth.TEST_CLERK_DOMAIN,
@@ -261,12 +238,7 @@ def test_repository_uses_verified_identity_and_clerk_bearer_token(monkeypatch, s
 
 def test_repository_rejects_invalid_record_keys(signing_keys):
     token = make_token(signing_keys["private"])
-    verified = auth.verify_clerk_session_token(
-        token,
-        issuer=ISSUER,
-        authorized_parties=(AUTHORIZED_PARTY,),
-        jwks_client=FakeJwksClient(signing_keys["public"]),
-    )
+    verified = auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
     config = auth.ClerkPilotConfig(
         publishable_key=auth.TEST_CLERK_PUBLISHABLE_KEY,
         domain=auth.TEST_CLERK_DOMAIN,
@@ -282,12 +254,7 @@ def test_repository_rejects_invalid_record_keys(signing_keys):
 
 def test_repository_denial_probe_passes_only_on_401_or_403(signing_keys):
     token = make_token(signing_keys["private"])
-    verified = auth.verify_clerk_session_token(
-        token,
-        issuer=ISSUER,
-        authorized_parties=(AUTHORIZED_PARTY,),
-        jwks_client=FakeJwksClient(signing_keys["public"]),
-    )
+    verified = auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
     config = auth.ClerkPilotConfig(
         publishable_key=auth.TEST_CLERK_PUBLISHABLE_KEY,
         domain=auth.TEST_CLERK_DOMAIN,
