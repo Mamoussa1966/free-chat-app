@@ -23,7 +23,7 @@ from v23_audit_export import build_v23_audit_export, serialize_v23_audit_export
 from conversation_runtime import (ensure_conversation_state, register_message, begin_round, finish_round, attach_request_identity, append_provenance, update_context_meta, conversation_audit, provenance_for_result, CONVERSATION_RUNTIME_VERSION)
 from conversation_persistence_v26 import (ensure_persistence_store, persist_identity, snapshot_chat_identity, hydrate_chat_identity, persistence_audit)
 from conversation_store import commit_canonical_record, hydrate_canonical_record, rebuild_runtime_indexes_from_canonical, canonical_audit_preflight
-from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit, rebuild_bridge_ledger_projection, reconcile_canonical_round_completion_statuses
+from conversation_store import ensure_store, authoritative_snapshot, touch, canonical_upsert_message, canonical_upsert_request, canonical_upsert_round, canonical_create_lifecycle, assert_canonical_lifecycle_ready, prepare_historical_runtime, repository_canonical_state_boundary_audit, rebuild_bridge_ledger_projection, reconcile_canonical_round_completion_statuses, canonical_round_completion_reconciliation_audit
 from conversation_migrations import migrate_chat
 from message_ledger import record_message
 from provenance_engine import record_result as record_v24_provenance
@@ -5874,23 +5874,28 @@ def run_app() -> None:
     # Reconcile only stale STARTED labels when the existing Request, exact
     # seat result keys, result count and finished timestamp prove completion.
     # This preserves all IDs and counters and never invokes a provider.
-    repaired_round_count = reconcile_canonical_round_completion_statuses(
-        chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
-    )
+    canonical_record = chat.get("conversation_record") if isinstance(chat.get("conversation_record"), dict) else {}
+    reconciliation_audit = canonical_round_completion_reconciliation_audit(canonical_record)
+    repaired_round_count = reconcile_canonical_round_completion_statuses(canonical_record)
+    storage_enabled = bool(get_supabase_config(st)[2])
+    persistence_attempted = False
+    remote_persisted = None
     if repaired_round_count:
         commit_canonical_record(chat, st.session_state)
-        _, _, storage_enabled = get_supabase_config(st)
-        remote_persisted = bool(
-            storage_enabled
-            and is_supabase_auth_active(st)
-            and _supabase_persist_completed_chat(chat)
-        )
-        st.session_state["_canonical_round_status_repair"] = {
-            "conversation_id": str(chat.get("conversation_id") or ""),
-            "repaired_round_count": int(repaired_round_count),
-            "remote_persisted": remote_persisted,
-            "storage_enabled": bool(storage_enabled),
-        }
+        persistence_attempted = storage_enabled and is_supabase_auth_active(st)
+        if persistence_attempted:
+            remote_persisted = bool(_supabase_persist_completed_chat(chat))
+    st.session_state["_canonical_round_status_repair"] = {
+        "conversation_id": str(chat.get("conversation_id") or ""),
+        "audit_status": str(reconciliation_audit.get("status") or "NOT_PROVEN"),
+        "started_rounds": int(reconciliation_audit.get("started_rounds") or 0),
+        "eligible_rounds": int(reconciliation_audit.get("eligible_rounds") or 0),
+        "blocked_reasons": dict(reconciliation_audit.get("blocked_reasons") or {}),
+        "repaired_round_count": int(repaired_round_count),
+        "persistence_attempted": bool(persistence_attempted),
+        "remote_persisted": remote_persisted,
+        "storage_enabled": storage_enabled,
+    }
     _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini / Cloudflare Workers AI بعد تأكيد الخطة المجانية • Provider: {PROVIDER_VERSION}")
@@ -5930,19 +5935,28 @@ def run_app() -> None:
 
     round_repair = st.session_state.get("_canonical_round_status_repair")
     if isinstance(round_repair, dict) and str(round_repair.get("conversation_id") or "") == str(chat.get("conversation_id") or ""):
+        started_count = int(round_repair.get("started_rounds") or 0)
+        eligible_count = int(round_repair.get("eligible_rounds") or 0)
         repaired_count = int(round_repair.get("repaired_round_count") or 0)
-        if repaired_count and round_repair.get("remote_persisted") is True:
+        if started_count and repaired_count and round_repair.get("remote_persisted") is True:
             st.success(
-                f"تمت مصالحة {repaired_count} حالة Round إلى COMPLETED بعد التحقق من أدلة Request ونتائج المقاعد؛ "
-                "وحُفظ التحديث في Supabase دون إنشاء هويات جديدة أو استدعاء أي مزود."
+                f"تمت مصالحة {repaired_count} من {started_count} جولة إلى COMPLETED، "
+                "وحُفظ التحديث في Supabase عبر جلسة الحساب وRLS. لم تُنشأ أي رسالة أو Request أو Round، ولم يُستدعَ أي مزوّد."
             )
-        elif repaired_count and round_repair.get("storage_enabled") is True:
+        elif started_count and repaired_count and round_repair.get("storage_enabled") is True:
             st.warning(
-                f"تمت مصالحة {repaired_count} حالة Round في الجلسة الحالية، لكن لم يتأكد حفظها في Supabase. "
-                "لا تعتبر المصالحة دائمة حتى ينجح الحفظ."
+                f"تمت مصالحة {repaired_count} جولة في الجلسة الحالية، لكن الحفظ الدائم لم يتأكد. "
+                "راجع حالة جلسة Auth والتخزين قبل اعتبار الإصلاح نهائيًا."
             )
-        elif repaired_count:
-            st.caption(f"تمت مصالحة {repaired_count} حالة Round داخل الجلسة الحالية فقط؛ التخزين السحابي غير مفعّل.")
+        elif started_count and repaired_count:
+            st.caption(f"تمت مصالحة {repaired_count} جولة داخل الجلسة الحالية فقط؛ التخزين السحابي غير مفعّل.")
+        elif started_count:
+            blocked = round_repair.get("blocked_reasons") if isinstance(round_repair.get("blocked_reasons"), dict) else {}
+            reasons = "، ".join(f"{key}: {value}" for key, value in sorted(blocked.items())) or "لم يُحدّد سبب"
+            st.warning(
+                f"لم تُعدّل حالات الجولات: {started_count} جولة STARTED، والمؤهل منها {eligible_count}. "
+                f"أسباب الاستبعاد: {reasons}. لم تُكتب أي بيانات بسبب هذا الفحص."
+            )
 
     st.caption(f"HOTFIX123 Release Identity Gate: {release_identity.get('gate', 'FAIL')} • Frozen Provider={release_identity.get('observed', {}).get('provider_core', 'NOT_PROVEN')} • Runtime Match={release_identity.get('runtime_matches_frozen_identity', False)}")
     st.caption("V26.3: Authoritative Conversation Persistence · Message→Request→Round Chain · HOTFIX145 Core Preserved")
