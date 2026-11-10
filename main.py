@@ -5607,6 +5607,63 @@ def _supabase_persist_completed_chat(chat: dict) -> bool:
     return True
 
 
+def _merge_owner_history_with_session_chats(
+    restored_chats: list[dict],
+    local_chats: list[dict],
+    active_chat_id: str = "",
+) -> tuple[list[dict], str]:
+    """Merge owner-visible history without replacing the current session's chat.
+
+    A new Streamlit browser session starts with a fresh local conversation. The
+    saved history is navigation data, not the active workspace. Preserve every
+    local chat that is not already represented by an owner-validated remote row,
+    then retain the existing active selection whenever it still exists.
+    """
+    restored = [
+        item for item in (restored_chats or [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    restored_identities = set()
+    for item in restored:
+        for value in (item.get("id"), item.get("conversation_id")):
+            identity = str(value or "").strip()
+            if identity:
+                restored_identities.add(identity)
+
+    local = [
+        item for item in (local_chats or [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    preserved_local = []
+    seen_local_ids = set()
+    for item in local:
+        local_id = str(item.get("id") or "").strip()
+        local_conversation_id = str(item.get("conversation_id") or "").strip()
+        if local_id in restored_identities or (
+            local_conversation_id and local_conversation_id in restored_identities
+        ):
+            continue
+        if local_id in seen_local_ids:
+            continue
+        seen_local_ids.add(local_id)
+        preserved_local.append(item)
+
+    merged = preserved_local + restored
+    available_ids = {
+        str(item.get("id") or "").strip()
+        for item in merged
+        if str(item.get("id") or "").strip()
+    }
+    selected = str(active_chat_id or "").strip()
+    if selected not in available_ids:
+        selected = (
+            str(preserved_local[0].get("id") or "").strip()
+            if preserved_local
+            else (str(restored[0].get("id") or "").strip() if restored else "")
+        )
+    return merged, selected
+
+
 def _supabase_load_saved_chats() -> None:
     """Hydrate only snapshots visible to the current authenticated owner."""
     if not is_supabase_auth_active(st):
@@ -5665,16 +5722,17 @@ def _supabase_load_saved_chats() -> None:
         return
 
     local_chats = st.session_state.get("chats", [])
-    remote_ids = {str(chat.get("conversation_id") or "") for chat in restored}
-    blank_local = [
-        chat for chat in local_chats
-        if isinstance(chat, dict)
-        and not chat.get("messages")
-        and str(chat.get("conversation_id") or "") not in remote_ids
-    ]
-    st.session_state.chats = restored + blank_local[:1] if restored else local_chats
-    if restored:
-        st.session_state.active_chat_id = restored[0]["id"]
+    merged_chats, selected_chat_id = _merge_owner_history_with_session_chats(
+        restored,
+        local_chats if isinstance(local_chats, list) else [],
+        str(st.session_state.get("active_chat_id") or ""),
+    )
+    # The current Streamlit session remains in its own new conversation. Saved
+    # conversations are kept available in History but are never auto-activated
+    # merely because they were returned by the owner-scoped Supabase read.
+    st.session_state.chats = merged_chats
+    if selected_chat_id:
+        st.session_state.active_chat_id = selected_chat_id
     st.session_state["_supabase_history_loaded_subject"] = owner.subject
     st.session_state.pop("_supabase_last_storage_error", None)
 
