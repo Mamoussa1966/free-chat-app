@@ -32,7 +32,7 @@ TEST_CLERK_DOMAIN = "dear-hermit-1240.clerk.accounts.dev"
 TEST_CLERK_PUBLISHABLE_KEY = (
     "pk_test_ZGVhci1oZXJtaXQtMTI0MC5jbGVyay5hY2NvdW50cy5kZXYk"
 )
-DEFAULT_AUTHORIZED_PARTY = (
+PRODUCTION_STREAMLIT_ORIGIN = (
     "https://free-chat-app-qmqyxzh2oe2n3qwcvqvpdh.streamlit.app"
 )
 TEST_SUPABASE_PUBLISHABLE_KEY = (
@@ -47,6 +47,7 @@ _RECORD_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DOMAIN_RE = re.compile(r"^[a-z0-9-]+\.clerk\.accounts\.dev$")
 
 _JWKS_CACHE: dict[str, tuple[int, dict[str, RSAPublicKey]]] = {}
+_JWKS_LAST_REFRESH: dict[str, int] = {}
 _JWKS_LOCK = threading.RLock()
 _B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -148,9 +149,8 @@ def get_clerk_pilot_config(st: Any) -> ClerkPilotConfig:
             "نطاق Clerk لا يطابق تطبيق AI Council Test المعتمد لهذه التجربة."
         )
 
-    parties_raw = _read_setting(
-        st, "CLERK_TEST_AUTHORIZED_PARTIES", DEFAULT_AUTHORIZED_PARTY
-    )
+    # Require a separate test Streamlit deployment; never default to production.
+    parties_raw = _read_setting(st, "CLERK_TEST_AUTHORIZED_PARTIES", "")
     parties = tuple(
         dict.fromkeys(
             _normalize_origin(item)
@@ -159,7 +159,14 @@ def get_clerk_pilot_config(st: Any) -> ClerkPilotConfig:
         )
     )
     if not parties:
-        raise ClerkPilotAuthError("لم يتم ضبط Authorized Party مسموح به لتطبيق الاختبار.")
+        raise ClerkPilotAuthError(
+            "لم يتم ضبط عنوان تطبيق الاختبار. أضف CLERK_TEST_AUTHORIZED_PARTIES "
+            "في Secrets لتطبيق Streamlit التجريبي المنفصل."
+        )
+    if PRODUCTION_STREAMLIT_ORIGIN in parties:
+        raise ClerkPilotAuthError(
+            "رُفض عنوان تطبيق الإنتاج. يجب استخدام Streamlit test app مستقل."
+        )
 
     return ClerkPilotConfig(
         publishable_key=publishable_key,
@@ -200,6 +207,7 @@ def _fetch_jwks_document(issuer: str) -> dict[str, Any]:
             f"{issuer}/.well-known/jwks.json",
             headers={"Accept": "application/json"},
             timeout=5.0,
+            allow_redirects=False,
         )
     except requests.RequestException:
         raise ClerkPilotAuthError("تعذر الاتصال بخدمة مفاتيح توقيع Clerk.") from None
@@ -246,28 +254,37 @@ def _rsa_signing_key(
     jwks_fetcher: Callable[[str], dict[str, Any]] | None = None,
     now: int | None = None,
 ) -> RSAPublicKey:
-    """Return a cached RS256 signing key, refreshing once for rotation/unknown kid."""
+    """Return a cached RS256 signing key, with throttled refresh for key rotation."""
     current = int(time.time()) if now is None else int(now)
     with _JWKS_LOCK:
         cached = _JWKS_CACHE.get(issuer)
-        if cached and cached[0] > current and kid in cached[1]:
-            return cached[1][kid]
+        if cached and cached[0] > current:
+            if kid in cached[1]:
+                return cached[1][kid]
+            # Unknown-kid tokens must not force one JWKS request per attacker request.
+            if current - _JWKS_LAST_REFRESH.get(issuer, 0) < 30:
+                raise ClerkPilotAuthError(
+                    "مفتاح توقيع جلسة Clerk غير موجود في مجموعة المفاتيح الحالية."
+                )
 
         fetch = jwks_fetcher or _fetch_jwks_document
         document = fetch(issuer)
+        _JWKS_LAST_REFRESH[issuer] = current
         raw_keys = document.get("keys")
         if not isinstance(raw_keys, list) or not raw_keys or len(raw_keys) > 50:
             raise ClerkPilotAuthError("قائمة مفاتيح Clerk فارغة أو غير صالحة.")
 
         resolved: dict[str, RSAPublicKey] = {}
+        seen_kids: set[str] = set()
         for item in raw_keys:
             if not isinstance(item, dict):
                 continue
             item_kid = item.get("kid")
             if not isinstance(item_kid, str) or not item_kid or len(item_kid) > 128:
                 continue
-            if item_kid in resolved:
+            if item_kid in seen_kids:
                 raise ClerkPilotAuthError("استجابة JWKS تحتوي على معرّف مفتاح مكرر.")
+            seen_kids.add(item_kid)
             if (
                 item.get("kty") == "RSA"
                 and item.get("use") in (None, "sig")
@@ -312,8 +329,8 @@ def verify_clerk_session_token(
     if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
         raise ClerkPilotAuthError("خوارزمية أو معرّف مفتاح توقيع Clerk غير مقبول.")
     kid = header["kid"]
-    if not kid or len(kid) > 128:
-        raise ClerkPilotAuthError("معرّف مفتاح توقيع Clerk غير صالح.")
+    if not kid or len(kid) > 128 or "crit" in header or header.get("b64") is False:
+        raise ClerkPilotAuthError("معرّف أو خيارات مفتاح توقيع Clerk غير مقبولة.")
 
     claims = _decode_jwt_json(parts[1], max_length=8192)
     signing_key = _rsa_signing_key(
