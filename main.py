@@ -3318,11 +3318,15 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
             ):
                 _start_new_chat_session_state(st.session_state)
                 st.rerun()
-        _render_sidebar_conversation_history()
-        st.divider()
-        c3, c4 = st.columns(2)
-        with c3:
-            if st.button("🗑️ حذف الحالية", use_container_width=True):
+        # Keep the history expander and both clear actions in one zero-gap
+        # container. This removes Streamlit's default vertical spacing on mobile.
+        with st.container(gap=None, key="sidebar_history_and_clear_actions"):
+            _render_sidebar_conversation_history()
+            if st.button(
+                "🗑️ مسح المحادثة الحالية",
+                key="sidebar_clear_current_conversation",
+                use_container_width=True,
+            ):
                 if not _supabase_delete_remote_chat(chat):
                     st.error("لم يتأكد حذف المحادثة من التخزين الدائم؛ احتفظنا بها في الواجهة.")
                 else:
@@ -3340,8 +3344,11 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                     st.session_state.last_results = []
                     st.session_state.last_diagnostics = []
                     st.rerun()
-        with c4:
-            if st.button("🧹 مسح الكل", use_container_width=True):
+            if st.button(
+                "🧹 مسح جميع المحادثات",
+                key="sidebar_clear_all_conversations",
+                use_container_width=True,
+            ):
                 deleted_chats = list(st.session_state.chats)
                 if not _supabase_delete_all_remote_chats(deleted_chats):
                     st.error("لم يتأكد حذف كل المحادثات من التخزين الدائم؛ لم نمسح سجل الواجهة.")
