@@ -62,9 +62,9 @@ Implemented on the isolated branch:
 - `clerk_streamlit_auth.py` registers a Streamlit Components v2 UI using ClerkJS 6 and Clerk UI 1 from the pinned Clerk Development Frontend API. The sign-in, sign-up, account button, and sign-out are rendered in the actual Streamlit page context; no Next.js runtime or `NEXT_PUBLIC_*` naming is used.
 - `pages/11_Clerk_Auth_Pilot.py` provides a separate test-only login and PostgREST validation page. It does not alter the main application's Supabase Auth gate or the Cloudflare Worker Admin page.
 - The public `pk_test_` Publishable Key and the Development domain are test-only defaults in the module; the public key can also be overridden through `CLERK_TEST_PUBLISHABLE_KEY`. No Clerk `sk_test_`/Secret Key is required.
-- The component obtains a short-lived Clerk session token and forwards it to the Streamlit server through the bidirectional Components v2 state channel. It does not copy tokens into a custom localStorage store, URLs, application logs, or conversation records. The server keeps the current token only in Streamlit server-side session state and re-verifies it on every page run; the browser SDK refreshes it while the page remains open.
+- The component follows Clerk's documented CDN bootstrap: it loads `@clerk/ui@1`, then loads `@clerk/clerk-js@6` with `data-clerk-publishable-key` and uses the resulting `window.Clerk` singleton. The UI provides sign-in/sign-up, UserButton and sign-out. It obtains a short-lived Clerk session token and forwards it to the Streamlit server through the bidirectional Components v2 state channel. It does not copy tokens into a custom localStorage store, URLs, application logs, or conversation records. The server keeps the current token only in Streamlit server-side session state and re-verifies it on every page run; the browser SDK refreshes it while the page remains open.
 - The Python verifier fetches the public JWKS from `https://dear-hermit-1240.clerk.accounts.dev/.well-known/jwks.json`, caches the key set for five minutes, and verifies the RS256 signature before trusting any claims. It requires `iss`, `sub`, `sid`, `exp`, `iat`, `nbf`, `azp`, and `role`; pins `iss` to the configured Clerk Development issuer; requires `role=authenticated`; and requires `azp` to match the exact allow-listed Streamlit origin. Unknown signing keys, unsupported algorithms, wrong issuers/origins, missing claims, and expired tokens fail closed.
-- The authorized party defaults to `https://free-chat-app-qmqyxzh2oe2n3qwcvqvpdh.streamlit.app`. It can be overridden only through server-side `CLERK_TEST_AUTHORIZED_PARTIES` configuration, as a comma-separated list of HTTPS origins.
+- The authorized party is not defaulted. A separate Streamlit test deployment must explicitly set `CLERK_TEST_AUTHORIZED_PARTIES` in that test app's server-side Secrets to its exact HTTPS origin. The live production app origin is explicitly denied by the module. The verifier fails closed if the `azp` claim is missing or is not one of those exact origins.
 - The page uses the verified Clerk token as the PostgREST Bearer token and the test project's publishable key. It can create/read/delete only the isolated pilot records owned by the verified Clerk subject, and provides an explicit negative test for owner spoofing.
 - The existing `SupabaseConversationRepository` remains UUID/Supabase-Auth-only. No attempt was made to coerce Clerk IDs into UUIDs or to redirect ordinary council conversation storage to the pilot table.
 
@@ -80,9 +80,19 @@ The pilot deliberately uses the repository's existing `cryptography==50.0.2` dep
 - The matching JWK must be an RSA signing key with a modulus of at least 2048 bits.
 - The RSA signature is verified using PKCS#1 v1.5 with SHA-256.
 - The verified claims are then checked for the exact issuer, user/session ID shape, expiry, not-before and issued-at times, the expected `azp` origin, and `role=authenticated`.
-- The pinned issuer's JWK set is cached in process memory for five minutes and refreshed when a requested key ID is not in the cache.
+- The pinned issuer's JWK set is cached in process memory for five minutes. An unknown `kid` can trigger a refresh only once per 30-second window, so arbitrary headers cannot force one JWKS network request on every failed token.
 
 This keeps the dependency contract unchanged and ensures the application does not rely on a generic JWT parser's pre-verification behavior for untrusted tokens.
+
+## Authorized-party deployment boundary
+
+The production Streamlit origin is intentionally excluded from this pilot. A second Streamlit Community Cloud app must be created from branch `security/clerk-hobby-test-pilot` using the page entry point `pages/11_Clerk_Auth_Pilot.py` or the repository's normal main entry with page discovery. In that new app only, set the server-side Secret:
+
+```toml
+CLERK_TEST_AUTHORIZED_PARTIES = "https://YOUR-NEW-TEST-APP.streamlit.app"
+```
+
+Replace the placeholder with the exact new test app origin. Do not reuse or modify the live production app's configuration. Until that separate app exists and its exact origin is pinned, the Clerk page deliberately fails closed with a missing-authorized-party message.
 
 ## Security acceptance gates — still pending
 
