@@ -514,7 +514,7 @@ export default function(component) {
     setStateValue("auth_error", error || "");
   };
 
-  function loadScript(src, id, isReady) {
+  function loadScript(src, id, isReady, attributes = {}) {
     if (typeof isReady === "function" && isReady()) return Promise.resolve();
     window.__aiCouncilClerkScriptPromises = window.__aiCouncilClerkScriptPromises || {};
     if (window.__aiCouncilClerkScriptPromises[id]) {
@@ -538,6 +538,9 @@ export default function(component) {
         script.async = true;
         script.crossOrigin = "anonymous";
         script.referrerPolicy = "strict-origin-when-cross-origin";
+        Object.entries(attributes).forEach(([name, value]) => {
+          script.setAttribute(name, String(value));
+        });
         document.head.appendChild(script);
       } else if (script.dataset.loaded === "true" || (typeof isReady === "function" && isReady())) {
         resolve();
@@ -549,6 +552,7 @@ export default function(component) {
   function mountSignedOut() {
     if (!clerk || disposed) return;
     try { clerk.unmountUserButton(userButtonNode); } catch (_) {}
+    if (userButtonNode) userButtonNode.dataset.mounted = "";
     if (userNode) userNode.hidden = true;
     if (signInNode) signInNode.hidden = false;
     if (signInNode && !signInNode.dataset.mounted) {
@@ -581,11 +585,9 @@ export default function(component) {
         setBackendState("signed_in_pending_verification", token, "");
       }
       if (refreshTimer === null) {
-        if (refreshTimer === null) {
-          refreshTimer = window.setInterval(() => {
-            if (clerk?.session) publishSession(clerk.session, clerk.user);
-          }, 40000);
-        }
+        refreshTimer = window.setInterval(() => {
+          if (clerk?.session) publishSession(clerk.session, clerk.user);
+        }, 40000);
       }
       if (userNode) userNode.hidden = false;
       if (signInNode) signInNode.hidden = true;
@@ -635,14 +637,25 @@ export default function(component) {
 
     try {
       const base = "https://" + domain + "/npm/";
-      await loadScript(base + "@clerk/ui@1/dist/ui.browser.js", "ai-council-clerk-ui-js", () => !!window.__internal_ClerkUICtor);
-      await loadScript(base + "@clerk/clerk-js@6/dist/clerk.browser.js", "ai-council-clerk-js", () => typeof window.Clerk === "function");
+      await loadScript(
+        base + "@clerk/ui@1/dist/ui.browser.js",
+        "ai-council-clerk-ui-js",
+        () => !!window.__internal_ClerkUICtor
+      );
+      await loadScript(
+        base + "@clerk/clerk-js@6/dist/clerk.browser.js",
+        "ai-council-clerk-js",
+        () => !!window.Clerk,
+        { "data-clerk-publishable-key": publishableKey }
+      );
       if (disposed) return;
-      if (typeof window.Clerk !== "function" || !window.__internal_ClerkUICtor) {
+      if (!window.Clerk || typeof window.Clerk.load !== "function" || !window.__internal_ClerkUICtor) {
         throw new Error("ClerkJS UI bundle did not initialize.");
       }
 
-      clerk = new window.Clerk(publishableKey);
+      // The CDN script creates the Clerk singleton from data-clerk-publishable-key.
+      // This follows Clerk's documented script-tag setup (not the npm constructor path).
+      clerk = window.Clerk;
       await clerk.load({
         ui: { ClerkUI: window.__internal_ClerkUICtor }
       });
@@ -660,9 +673,6 @@ export default function(component) {
 
       if (clerk.session) {
         await mountAuthenticated();
-        refreshTimer = window.setInterval(() => {
-          if (clerk?.session) publishSession(clerk.session, clerk.user);
-        }, 40000);
       } else {
         mountSignedOut();
       }
