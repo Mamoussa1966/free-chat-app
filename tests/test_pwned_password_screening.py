@@ -229,7 +229,7 @@ def test_matching_compromised_hash_does_not_skip_later_response_validation(monke
     monkeypatch.setattr(
         supabase_auth.requests,
         "get",
-        lambda *_args, **_kwargs: FakeAuthResponse(200, "\\r\\n".join(rows)),
+        lambda *_args, **_kwargs: FakeAuthResponse(200, "\r\n".join(rows)),
     )
 
     with pytest.raises(SupabaseAuthError):
