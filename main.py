@@ -3360,7 +3360,7 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                     st.session_state.last_results = []
                     st.session_state.last_diagnostics = []
                     st.rerun()
-            with st.expander("📦 النسخ الاحتياطية للمحادثات", expanded=False):
+            with st.expander("📦 النسخ الاحتياطية", expanded=False):
                 st.caption(
                     "إنشاء ملف JSON للقراءة فقط. عند تفعيل Supabase تُقرأ سجلات الحساب المصادق عليه مباشرةً "
                     "من قاعدة البيانات؛ وإلا تُصدّر المحادثات الموجودة في الجلسة الحالية."
