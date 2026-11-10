@@ -4,6 +4,7 @@ import copy
 
 from conversation_store import (
     _restore_saved_identity_order,
+    canonical_round_completion_reconciliation_audit,
     reconcile_canonical_round_completion_statuses,
 )
 
@@ -224,3 +225,55 @@ def test_round_reconciliation_fails_closed_for_request_message_session_mismatch(
 
     assert repaired == 0
     assert record["rounds"][0]["status"] == "STARTED"
+
+
+def test_round_reconciliation_audit_is_read_only_and_reports_eligible_count():
+    record = _record()
+    before = copy.deepcopy(record)
+
+    audit = canonical_round_completion_reconciliation_audit(record)
+
+    assert audit == {
+        "status": "ELIGIBLE",
+        "started_rounds": 1,
+        "eligible_rounds": 1,
+        "blocked_reasons": {},
+    }
+    assert record == before
+
+
+def test_round_reconciliation_audit_exposes_safe_reason_when_request_is_incomplete():
+    record = _record()
+    record["requests"][0]["state"] = "RUNNING"
+    before = copy.deepcopy(record)
+
+    audit = canonical_round_completion_reconciliation_audit(record)
+
+    assert audit["status"] == "BLOCKED"
+    assert audit["started_rounds"] == 1
+    assert audit["eligible_rounds"] == 0
+    assert audit["blocked_reasons"] == {"request_not_completed": 1}
+    assert record == before
+
+
+def test_round_reconciliation_audit_reports_no_stale_rounds_without_mutation():
+    record = _record()
+    record["rounds"][0]["status"] = "COMPLETED"
+
+    audit = canonical_round_completion_reconciliation_audit(record)
+
+    assert audit["status"] == "NO_STALE_ROUNDS"
+    assert audit["started_rounds"] == 0
+    assert audit["eligible_rounds"] == 0
+    assert audit["blocked_reasons"] == {}
+
+
+def test_round_reconciliation_audit_rejects_non_dictionary_record_without_leaking_data():
+    audit = canonical_round_completion_reconciliation_audit(None)
+
+    assert audit == {
+        "status": "INVALID_RECORD",
+        "started_rounds": 0,
+        "eligible_rounds": 0,
+        "blocked_reasons": {"invalid_record": 1},
+    }
