@@ -14,6 +14,19 @@ PUBLISHABLE_KEY = "sb_publishable_unit_test_key"
 USER_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeee0001"
 
 
+def _padded_range_body(matching_suffix=None, matching_count=0, *, lines=800):
+    rows = []
+    if matching_suffix is not None:
+        rows.append(f"{matching_suffix}:{matching_count}")
+    index = 1
+    while len(rows) < lines:
+        candidate = f"{index:035X}"
+        if candidate != matching_suffix:
+            rows.append(f"{candidate}:0")
+        index += 1
+    return "\\r\\n".join(rows) + "\\r\\n"
+
+
 class FakeAuthResponse:
     def __init__(self, status_code=200, text=""):
         self.status_code = status_code
@@ -161,3 +174,65 @@ def test_password_check_does_not_run_during_signin():
 
     session = client.sign_in("person@gmail.com", "A-Strong-Password-2026")
     assert session.user_id == USER_ID
+
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        _padded_range_body(lines=799),
+        _padded_range_body(lines=1001),
+        _padded_range_body().replace(
+            _padded_range_body().splitlines()[0],
+            "G" * 35 + ":0",
+            1,
+        ),
+        _padded_range_body().replace(
+            _padded_range_body().splitlines()[0],
+            _padded_range_body().splitlines()[0].split(":")[0] + ":not-a-count",
+            1,
+        ),
+        _padded_range_body().replace(
+            _padded_range_body().splitlines()[0],
+            "",
+            1,
+        ),
+    ],
+)
+def test_malformed_or_unexpected_padded_response_fails_closed(monkeypatch, body):
+    monkeypatch.setattr(
+        supabase_auth.requests,
+        "get",
+        lambda *_args, **_kwargs: FakeAuthResponse(200, body),
+    )
+
+    with pytest.raises(SupabaseAuthError):
+        supabase_auth._check_pwned_passwords_range("A-Strong-Password-2026")
+
+
+def test_duplicate_suffix_in_padded_response_fails_closed(monkeypatch):
+    rows = _padded_range_body().splitlines()
+    rows[-1] = rows[0]
+    monkeypatch.setattr(
+        supabase_auth.requests,
+        "get",
+        lambda *_args, **_kwargs: FakeAuthResponse(200, "\\r\\n".join(rows)),
+    )
+
+    with pytest.raises(SupabaseAuthError, match="مكررة"):
+        supabase_auth._check_pwned_passwords_range("A-Strong-Password-2026")
+
+
+def test_matching_compromised_hash_does_not_skip_later_response_validation(monkeypatch):
+    digest = hashlib.sha1(b"password").hexdigest().upper()
+    rows = _padded_range_body(digest[5:], 12345).splitlines()
+    rows[-1] = "malformed"
+    monkeypatch.setattr(
+        supabase_auth.requests,
+        "get",
+        lambda *_args, **_kwargs: FakeAuthResponse(200, "\\r\\n".join(rows)),
+    )
+
+    with pytest.raises(SupabaseAuthError):
+        supabase_auth._check_pwned_passwords_range("password")
