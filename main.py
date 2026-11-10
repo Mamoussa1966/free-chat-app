@@ -3210,13 +3210,37 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.last_diagnostics = []
                 st.rerun()
         st.divider()
-        st.subheader("📚 السجل")
-        for item in list(st.session_state.chats)[:30]:
-            if st.button(f"{'🟢' if item['id'] == st.session_state.active_chat_id else '⚪'} {item.get('title', 'محادثة')}", key=f"load_{item['id']}", use_container_width=True):
-                st.session_state.active_chat_id = item["id"]
-                st.session_state.last_results = []
-                st.rerun()
-            st.caption(_conversation_history_caption(item))
+        history_items = list(st.session_state.chats)[:30]
+        saved_history_count = sum(
+            1 for item in history_items
+            if isinstance(item, dict) and isinstance(item.get("messages"), list) and item.get("messages")
+        )
+        with st.expander(f"📚 السجل — {saved_history_count} محادثة محفوظة", expanded=False):
+            st.caption("افتح هذا القسم لعرض المحادثات، ثم اضغط عنوان المحادثة المطلوبة.")
+            if is_supabase_auth_active(st):
+                if st.button(
+                    "🔄 إعادة تحميل المحادثات المحفوظة",
+                    key="supabase_history_reload",
+                    use_container_width=True,
+                ):
+                    # Retry the owner-scoped read after clearing only the local
+                    # per-session loaded marker. This performs GET-only reads.
+                    st.session_state.pop("_supabase_history_loaded_subject", None)
+                    st.session_state.pop("_supabase_last_storage_error", None)
+                    _supabase_load_saved_chats()
+                    st.rerun()
+            if not history_items:
+                st.caption("لا توجد محادثات متاحة في هذه الجلسة.")
+            for item in history_items:
+                if st.button(
+                    f"{'🟢' if item['id'] == st.session_state.active_chat_id else '⚪'} {item.get('title', 'محادثة')}",
+                    key=f"load_{item['id']}",
+                    use_container_width=True,
+                ):
+                    st.session_state.active_chat_id = item["id"]
+                    st.session_state.last_results = []
+                    st.rerun()
+                st.caption(_conversation_history_caption(item))
         c3, c4 = st.columns(2)
         with c3:
             if st.button("🗑️ حذف الحالية", use_container_width=True):
