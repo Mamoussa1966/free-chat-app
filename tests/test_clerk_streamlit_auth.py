@@ -272,6 +272,10 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'signInUrl: flowUrl("sign-in")' in source
     assert 'clerk.mountSignUp(signInNode' in source
     assert 'clerk.mountSignIn(signInNode' in source
+    assert 'signInUrl: flowUrl("sign-in")' in source
+    assert 'signUpUrl: flowUrl("sign-up")' in source
+    assert 'withSignUp: true' in source
+    assert 'transferable: true' in source
     assert 'root.addEventListener("click", handleFlowNavigation, true)' in source
     assert 'event.preventDefault()' in source
     assert 'const FLOW_PARAM = "clerk_pilot_flow"' in source
