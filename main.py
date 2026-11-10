@@ -3090,6 +3090,55 @@ def _conversation_history_caption(item: dict) -> str:
     created_at = str(item.get("created_at") or "").strip()
     return f"{count} رسالة • {created_at}" if created_at else f"{count} رسالة"
 
+def _render_main_conversation_history() -> None:
+    """Render saved conversations in the main pane for easier mobile discovery."""
+    history_items = [
+        item for item in list(st.session_state.get("chats", []))[:30]
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    saved_items = [
+        item for item in history_items
+        if isinstance(item.get("messages"), list) and item.get("messages")
+    ]
+    open_once = bool(st.session_state.pop("_open_main_conversation_history_once", False))
+    with st.expander(
+        f"📚 سجل المحادثات المحفوظة — {len(saved_items)} محادثة",
+        expanded=open_once,
+    ):
+        st.caption("اختر عنوان المحادثة لفتح سجلها في الغرفة الرئيسية.")
+        if is_supabase_auth_active(st) and st.button(
+            "🔄 إعادة تحميل المحادثات المحفوظة",
+            key="main_supabase_history_reload",
+            use_container_width=True,
+        ):
+            # Retry only the authenticated, owner-scoped GET path.
+            st.session_state.pop("_supabase_history_loaded_subject", None)
+            st.session_state.pop("_supabase_last_storage_error", None)
+            _supabase_load_saved_chats()
+            st.session_state["_open_main_conversation_history_once"] = True
+            st.rerun()
+        if not saved_items:
+            storage_error = str(st.session_state.get("_supabase_last_storage_error") or "").strip()
+            if storage_error:
+                st.warning(storage_error)
+            else:
+                st.info("لا توجد محادثات محفوظة معروضة حاليًا في هذه الجلسة.")
+        for item in saved_items:
+            conversation_id = str(item.get("id") or "")
+            title = str(item.get("title") or "محادثة محفوظة")[:80]
+            selected = conversation_id == str(st.session_state.get("active_chat_id") or "")
+            if st.button(
+                f"{'🟢' if selected else '⚪'} {title}",
+                key=f"main_history_load_{conversation_id}",
+                use_container_width=True,
+            ):
+                st.session_state.active_chat_id = conversation_id
+                st.session_state.last_results = []
+                st.session_state.last_diagnostics = []
+                st.rerun()
+            st.caption(_conversation_history_caption(item))
+
+
 def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> int:
     seats = get_seats()
     with st.sidebar:
@@ -3210,37 +3259,15 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 st.session_state.last_diagnostics = []
                 st.rerun()
         st.divider()
-        history_items = list(st.session_state.chats)[:30]
-        saved_history_count = sum(
-            1 for item in history_items
-            if isinstance(item, dict) and isinstance(item.get("messages"), list) and item.get("messages")
-        )
-        with st.expander(f"📚 السجل — {saved_history_count} محادثة محفوظة", expanded=False):
-            st.caption("افتح هذا القسم لعرض المحادثات، ثم اضغط عنوان المحادثة المطلوبة.")
-            if is_supabase_auth_active(st):
-                if st.button(
-                    "🔄 إعادة تحميل المحادثات المحفوظة",
-                    key="supabase_history_reload",
-                    use_container_width=True,
-                ):
-                    # Retry the owner-scoped read after clearing only the local
-                    # per-session loaded marker. This performs GET-only reads.
-                    st.session_state.pop("_supabase_history_loaded_subject", None)
-                    st.session_state.pop("_supabase_last_storage_error", None)
-                    _supabase_load_saved_chats()
-                    st.rerun()
-            if not history_items:
-                st.caption("لا توجد محادثات متاحة في هذه الجلسة.")
-            for item in history_items:
-                if st.button(
-                    f"{'🟢' if item['id'] == st.session_state.active_chat_id else '⚪'} {item.get('title', 'محادثة')}",
-                    key=f"load_{item['id']}",
-                    use_container_width=True,
-                ):
-                    st.session_state.active_chat_id = item["id"]
-                    st.session_state.last_results = []
-                    st.rerun()
-                st.caption(_conversation_history_caption(item))
+        if st.button(
+            "📚 فتح سجل المحادثات",
+            key="open_main_conversation_history",
+            use_container_width=True,
+        ):
+            # Open the history panel in the main page so it is discoverable on
+            # narrow mobile sidebars, rather than making a static heading look clickable.
+            st.session_state["_open_main_conversation_history_once"] = True
+            st.rerun()
         c3, c4 = st.columns(2)
         with c3:
             if st.button("🗑️ حذف الحالية", use_container_width=True):
@@ -5894,6 +5921,7 @@ def run_app() -> None:
     credentials = capture_credentials()
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
+    _render_main_conversation_history()
     chat = _active_chat()
     # Reconcile only stale STARTED labels when the existing Request, exact
     # seat result keys, result count and finished timestamp prove completion.
