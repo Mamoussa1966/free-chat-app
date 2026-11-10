@@ -522,23 +522,12 @@ export default function(component) {
   let lastToken = "";
   let busy = false;
 
-  // Keep sign-up/sign-in navigation inside this isolated Streamlit test app.
-  // Clerk's default Account Portal link is external and may not open in embedded browsers.
+  // Use same-page relative paths for the two Clerk form links.
+  // The click handler below switches forms inside this component without
+  // navigating to Clerk's hosted Account Portal or leaving the Streamlit app.
   const FLOW_PARAM = "clerk_pilot_flow";
-  const initialUrl = new URL(window.location.href);
-  const initialMode = initialUrl.searchParams.get(FLOW_PARAM) === "sign-up"
-    ? "sign-up" : "sign-in";
-  initialUrl.searchParams.delete(FLOW_PARAM);
-  const appReturnUrl = initialUrl.toString();
-  if (new URL(window.location.href).searchParams.has(FLOW_PARAM)
-      && window.history && typeof window.history.replaceState === "function") {
-    window.history.replaceState(window.history.state, "", appReturnUrl);
-  }
-  const flowUrl = (mode) => {
-    const target = new URL(appReturnUrl);
-    target.searchParams.set(FLOW_PARAM, mode);
-    return target.toString();
-  };
+  const appReturnUrl = window.location.origin + "/";
+  const flowUrl = (mode) => "/?" + FLOW_PARAM + "=" + encodeURIComponent(mode);
 
   const setStatus = (message) => {
     if (statusNode) statusNode.textContent = message;
@@ -584,6 +573,24 @@ export default function(component) {
       }
     });
     return window.__aiCouncilClerkScriptPromises[id];
+  }
+
+  function handleFlowNavigation(event) {
+    if (disposed) return;
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    const anchor = path.find((node) => node && node.tagName === "A")
+      || (event.target && typeof event.target.closest === "function"
+        ? event.target.closest("a") : null);
+    if (!anchor || !root.contains(anchor)) return;
+    let target;
+    try { target = new URL(anchor.href || anchor.getAttribute("href") || "", window.location.origin); }
+    catch (_) { return; }
+    const mode = target.searchParams.get(FLOW_PARAM);
+    if (mode !== "sign-in" && mode !== "sign-up") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    mountSignedOut(mode);
   }
 
   function mountSignedOut(mode = "sign-in") {
@@ -734,7 +741,7 @@ export default function(component) {
       if (clerk.session) {
         await mountAuthenticated();
       } else {
-        mountSignedOut(initialMode);
+        mountSignedOut("sign-in");
       }
     } catch (_) {
       setStatus("تعذر تحميل Clerk أو الاتصال بخدمة المصادقة. تحقق من اتصال المتصفح وإعدادات Clerk.");
@@ -754,6 +761,7 @@ export default function(component) {
     }
   };
 
+  root.addEventListener("click", handleFlowNavigation, true);
   signOutButton?.addEventListener("click", handleSignOut);
   initialize();
 
@@ -761,6 +769,7 @@ export default function(component) {
     disposed = true;
     if (refreshTimer !== null) window.clearInterval(refreshTimer);
     if (typeof unsubscribe === "function") unsubscribe();
+    root.removeEventListener("click", handleFlowNavigation, true);
     signOutButton?.removeEventListener("click", handleSignOut);
     try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignIn(signInNode); } catch (_) {}
     try { if (clerk && userButtonNode?.dataset.mounted) clerk.unmountUserButton(userButtonNode); } catch (_) {}
