@@ -133,7 +133,10 @@ No AI provider requests are needed for this authentication pilot.
 - Both pilot migrations are applied and present in test migration history.
 - Post-migration read-only verification confirms `anon_select=false`, authenticated CRUD grants are true, RLS is true, and pilot row count is zero.
 - The existing Supabase Security Advisor warnings remain: the exposed `public.cloudflare_worker_admin_dispatch(...)` SECURITY DEFINER execute warning and the native Supabase Auth leaked-password-protection warning. Neither was modified by this pilot. Clerk's HIBP protection protects Clerk-managed passwords; it does not turn on HIBP for the native Supabase Auth endpoints.
-- No real Clerk session token, native Supabase bypass attempt, two-account external-token test, or Streamlit Clerk sign-in has yet been executed.
+- Current branch head: `5b7d6fc6aea593f6eb22b90c4a2675c47d1e1982`.
+- Current AI Council CI run on this exact head passed: **1042 passed, 2 skipped**; full release candidate ZIP and SHA-256 sidecar validation passed. Run: https://github.com/Mamoussa1966/free-chat-app/actions/runs/42828852145
+- The Supabase RLS workflow on this exact head was still running at the time of the latest check. No remote live two-user RLS result is claimed from that workflow yet.
+- No real Clerk session token has yet been accepted by the Streamlit page. A separate Streamlit test deployment is still required, because the production origin is explicitly excluded. No native Supabase Auth real-token bypass test or two-account external-token test has yet been executed.
 - No production schema, secrets, Auth configuration, Cloudflare Worker, deployment, or AI provider call was changed.
 
 ## Official references
