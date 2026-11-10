@@ -226,6 +226,7 @@ def test_round_reconciliation_fails_closed_for_request_message_session_mismatch(
     assert repaired == 0
     assert record["rounds"][0]["status"] == "STARTED"
 
+
 def test_round_reconciliation_audit_is_read_only_and_reports_eligible_count():
     record = _record()
     before = copy.deepcopy(record)
