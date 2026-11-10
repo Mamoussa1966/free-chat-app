@@ -1,4 +1,4 @@
-from main import _conversation_history_caption
+from main import _conversation_history_caption, _conversation_timeline_messages
 
 
 def test_empty_local_chat_is_labeled_as_an_unsent_draft():
@@ -21,8 +21,6 @@ def test_invalid_messages_projection_fails_closed_to_draft_label():
         "messages": None,
         "created_at": "2026-11-09T21:12:00Z",
     }) == "مسودة جديدة • لم تُرسل أي رسالة بعد"
-
-from main import _conversation_timeline_messages
 
 
 def test_timeline_preserves_all_messages_in_original_order():
