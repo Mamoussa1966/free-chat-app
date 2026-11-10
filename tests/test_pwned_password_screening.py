@@ -24,8 +24,7 @@ def _padded_range_body(matching_suffix=None, matching_count=0, *, lines=800):
         if candidate != matching_suffix:
             rows.append(f"{candidate}:0")
         index += 1
-    return "\\r\\n".join(rows) + "\\r\\n"
-
+    return "\r\n".join(rows) + "\r\n"
 
 class FakeAuthResponse:
     def __init__(self, status_code=200, text=""):
@@ -58,7 +57,7 @@ def test_pwned_password_query_sends_only_five_sha1_characters(monkeypatch):
 
     def fake_get(url, *, headers, timeout):
         calls.append((url, headers, timeout))
-        return FakeAuthResponse(200, f"{suffix}:12345\r\n")
+        return FakeAuthResponse(200, _padded_range_body(suffix, 12345))
 
     monkeypatch.setattr(supabase_auth.requests, "get", fake_get)
 
@@ -76,7 +75,7 @@ def test_pwned_password_query_sends_only_five_sha1_characters(monkeypatch):
 def test_pwned_password_query_ignores_zero_count_padding(monkeypatch):
     password = "unique-test-password-2026"
     digest = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
-    response = f"{digest[5:]}:0\r\n" + ("A" * 35) + ":0\r\n"
+    response = _padded_range_body(digest[5:], 0)
     monkeypatch.setattr(
         supabase_auth.requests,
         "get",
@@ -84,7 +83,6 @@ def test_pwned_password_query_ignores_zero_count_padding(monkeypatch):
     )
 
     assert supabase_auth._check_pwned_passwords_range(password) is False
-
 
 def test_pwned_password_service_outage_fails_closed(monkeypatch):
     def fail(*_args, **_kwargs):
@@ -217,7 +215,7 @@ def test_duplicate_suffix_in_padded_response_fails_closed(monkeypatch):
     monkeypatch.setattr(
         supabase_auth.requests,
         "get",
-        lambda *_args, **_kwargs: FakeAuthResponse(200, "\\r\\n".join(rows)),
+        lambda *_args, **_kwargs: FakeAuthResponse(200, "\r\n".join(rows)),
     )
 
     with pytest.raises(SupabaseAuthError, match="مكررة"):
