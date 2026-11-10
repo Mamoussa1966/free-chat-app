@@ -3152,13 +3152,15 @@ def _conversation_history_caption(item: dict) -> str:
 def _render_sidebar_conversation_history() -> None:
     """Render owner-scoped saved conversations inside the Streamlit sidebar."""
     history_items = [
-        item for item in list(st.session_state.get("chats", []))[:30]
+        item for item in list(st.session_state.get("chats", []))
         if isinstance(item, dict) and str(item.get("id") or "").strip()
     ]
+    # Blank drafts stay out of saved history and cannot push older saved
+    # conversations out of the visible 30-row window.
     saved_items = [
         item for item in history_items
         if isinstance(item.get("messages"), list) and item.get("messages")
-    ]
+    ][:30]
     with st.expander(
         f"📚 سجل المحادثات — {len(saved_items)} محفوظة",
         expanded=False,
