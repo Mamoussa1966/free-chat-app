@@ -141,6 +141,18 @@ def _assert_history_preserved(previous: dict[str, Any], candidate: dict[str, Any
                     raise ConversationIdentityConflict(
                         f"canonical {collection} identity binding cannot be rewritten"
                     )
+            lifecycle_field = {"requests": "state", "rounds": "status"}.get(collection)
+            if lifecycle_field:
+                terminal_states = {
+                    "COMPLETED", "SUCCEEDED", "FAILED", "REJECTED",
+                    "CANCELLED", "CANCELED", "ABORTED", "EXPIRED",
+                }
+                old_state = str(old_row.get(lifecycle_field) or "").strip().upper()
+                new_state = str(new_row.get(lifecycle_field) or "").strip().upper()
+                if old_state in terminal_states and new_state != old_state:
+                    raise ConversationIdentityConflict(
+                        f"canonical {collection} terminal lifecycle state cannot be rewritten"
+                    )
 
 
 class SupabaseConversationRepository:
@@ -386,7 +398,7 @@ class SupabaseConversationRepository:
             params={
                 "select": "conversation_id",
                 "owner_id": f"eq.{self._owner_id}",
-                "order": "conversation_id.asc",
+                "order": "updated_at.desc,conversation_id.asc",
                 "limit": str(limit),
             },
         )

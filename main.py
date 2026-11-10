@@ -2797,6 +2797,51 @@ def _authoritative_round_base(chat: dict) -> int:
     return max(numbers, default=0) + 1
 
 
+def _durable_round_checkpoint(
+    chat: dict,
+    request_id: str,
+    *,
+    phase: str,
+    results: list[dict] | None = None,
+    rounds_executed: int | None = None,
+) -> bool:
+    """Persist a canonical lifecycle checkpoint before dispatch and after each finished Round.
+
+    When durable Auth storage is disabled, the existing session-only mode is
+    unchanged. When it is enabled, provider execution is fail-closed until the
+    owner-scoped Supabase save confirms the complete Message/Request/Round graph.
+    """
+    _, _, storage_enabled = get_supabase_config(st)
+    if not storage_enabled:
+        return True
+
+    request_record = _request_record(chat, request_id)
+    if not isinstance(request_record, dict):
+        st.session_state["_supabase_last_storage_error"] = (
+            "تعذر تحديد Request canonical قبل حفظ نقطة الاستمرارية؛ أوقفنا التنفيذ."
+        )
+        return False
+
+    if results is not None:
+        request_record["results"] = copy.deepcopy(results)
+    if rounds_executed is not None:
+        request_record["rounds_executed"] = int(rounds_executed)
+
+    canonical_upsert_request(chat, request_record, st.session_state)
+    commit_canonical_record(chat, st.session_state)
+    if not _supabase_persist_completed_chat(chat):
+        return False
+
+    st.session_state["_supabase_last_durable_checkpoint"] = {
+        "conversation_id": str(chat.get("conversation_id") or ""),
+        "request_id": str(request_id),
+        "phase": str(phase),
+        "confirmed": True,
+        "confirmed_at": _now(),
+    }
+    return True
+
+
 def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, attachments: list[dict], model_candidates: dict, current_user_message_id: str, request_id: str, bridge_controls: list[tuple[str, str]] | None = None, continuation_request_id: str = "") -> list[dict]:
     # HOTFIX123.2: one orchestrator invocation per Request ID. A secondary
     # execution path must never create another lifecycle/round/bridge. A completed
@@ -2898,6 +2943,14 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             # V26.3.8 hard gate: provider dispatch cannot begin until the canonical
             # ConversationRecord contains the exact Message→Request→Round chain.
             assert_canonical_lifecycle_ready(chat, current_user_message_id, request_id, runtime_round_id)
+            # A durable Round STARTED checkpoint must be acknowledged before any
+            # provider code is entered. A failed save therefore cannot consume an API call.
+            if not _durable_round_checkpoint(
+                chat,
+                request_id,
+                phase="ROUND_STARTED_BEFORE_PROVIDER",
+            ):
+                raise RuntimeError("SUPABASE_ROUND_START_CHECKPOINT_NOT_CONFIRMED")
             lifecycle.record("PROVIDER_EXECUTION", round_id=round_no, status="STARTED")
             round_results = _run_round(user_prompt, chat, round_no, credentials, attachments, model_candidates, current_user_message_id, deadline, request_id, bridge_controls)
             seen_keys = set()
@@ -2940,6 +2993,17 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
             round_row = next((x for x in reversed(chat.get("round_ledger", [])) if isinstance(x, dict) and x.get("round_id") == runtime_round_id), None)
             if round_row:
                 persist_identity(chat, st.session_state, round_row=round_row)
+            # Persist the terminal Round and all results gathered so far before
+            # beginning another Round. The Request itself remains RUNNING until
+            # the entire request reaches its final commit.
+            if not _durable_round_checkpoint(
+                chat,
+                request_id,
+                phase="ROUND_COMPLETED",
+                results=all_results,
+                rounds_executed=local_round_no,
+            ):
+                raise RuntimeError("SUPABASE_ROUND_COMPLETION_CHECKPOINT_NOT_CONFIRMED")
             lifecycle.record("RESPONSE_VALIDATION", round_id=round_no, status="PASS" if all(str(r.get("status") or "").upper() != "SUCCESS" or bool(r.get("content")) for r in round_results) else "FAIL")
             for r in round_results:
                 runtime_events = r.get("runtime_execution_events") or []
@@ -2960,10 +3024,22 @@ def _run_council(user_prompt: str, chat: dict, rounds: int, credentials: dict, a
         if lifecycle.state.value == "RUNNING":
             lifecycle.finish(success=False)
         with _ORCHESTRATOR_REQUEST_LOCK:
-            record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), None)
-            if record is not None:
-                record["state"] = "FAILED"
+            failed_record = next((r for r in chat.get("request_records", []) if isinstance(r, dict) and str(r.get("request_id") or "") == request_id), None)
+            if failed_record is not None:
+                failed_record["state"] = "FAILED"
             _ACTIVE_ORCHESTRATOR_REQUESTS.discard(request_id)
+        if failed_record is not None:
+            # Best-effort terminal checkpoint: retain a FAILED Request and any
+            # fully completed prior Rounds. Never mask the original execution error.
+            try:
+                _durable_round_checkpoint(
+                    chat,
+                    request_id,
+                    phase="REQUEST_FAILED",
+                    results=all_results,
+                )
+            except Exception:
+                pass
         raise
     chat["audit_events"] = lifecycle.audit_snapshot()[-500:]
     with _ORCHESTRATOR_REQUEST_LOCK:
