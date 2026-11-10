@@ -258,14 +258,16 @@ def _rsa_signing_key(
     current = int(time.time()) if now is None else int(now)
     with _JWKS_LOCK:
         cached = _JWKS_CACHE.get(issuer)
-        if cached and cached[0] > current:
-            if kid in cached[1]:
-                return cached[1][kid]
-            # Unknown-kid tokens must not force one JWKS request per attacker request.
-            if current - _JWKS_LAST_REFRESH.get(issuer, 0) < 30:
-                raise ClerkPilotAuthError(
-                    "مفتاح توقيع جلسة Clerk غير موجود في مجموعة المفاتيح الحالية."
-                )
+        if cached and cached[0] > current and kid in cached[1]:
+            return cached[1][kid]
+
+        # This throttle also applies when the last JWKS response did not contain
+        # the requested kid (and therefore no positive key cache was created).
+        last_refresh = _JWKS_LAST_REFRESH.get(issuer, 0)
+        if last_refresh and current - last_refresh < 30:
+            raise ClerkPilotAuthError(
+                "مفتاح توقيع جلسة Clerk غير موجود في مجموعة المفاتيح الحالية."
+            )
 
         fetch = jwks_fetcher or _fetch_jwks_document
         document = fetch(issuer)
