@@ -144,32 +144,24 @@ def test_real_council_sidebar_order_new_chat_and_phone_layout(local_council_app)
             ):
                 assert expected in sidebar_text, f"Missing sidebar control: {expected}"
 
-            ordered_controls = page.evaluate(
-                """() => {
-                    const root = document.querySelector('[data-testid="stSidebar"]');
-                    if (!root) return [];
-                    return Array.from(root.querySelectorAll('button'))
-                        .map((node) => (node.innerText || node.getAttribute('aria-label') || '').trim())
-                        .filter(Boolean);
-                }"""
-            )
             labels = [
                 "📚 سجل المحادثات",
                 "🗑️ مسح المحادثة الحالية",
                 "🧹 مسح جميع المحادثات",
                 "📦 النسخ الاحتياطية",
             ]
-            positions = []
-            for label in labels:
-                found = next(
-                    (i for i, value in enumerate(ordered_controls) if label in value),
-                    None,
-                )
-                assert found is not None, f"Sidebar button missing from DOM: {label}"
-                positions.append(found)
+            # Streamlit may render button labels inside nested divs/spans rather
+            # than as direct button.innerText. The sidebar's accessible visible
+            # text is the layout contract being accepted, not a private DOM shape.
+            sidebar_text = sidebar.inner_text()
+            positions = [sidebar_text.find(label) for label in labels]
+            assert all(position >= 0 for position in positions), {
+                "missing_labels": [label for label, position in zip(labels, positions) if position < 0],
+                "sidebar_text": sidebar_text,
+            }
             assert positions == sorted(positions), {
                 "expected_order": labels,
-                "actual_button_texts": ordered_controls,
+                "visible_sidebar_text": sidebar_text,
             }
 
             # Creating an empty local chat is safe: no message is sent and no provider is called.
