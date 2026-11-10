@@ -93,20 +93,24 @@ def local_council_app(tmp_path_factory):
 
 def _open_sidebar(page) -> None:
     sidebar = page.locator('[data-testid="stSidebar"]')
-    if sidebar.locator("button").count() and sidebar.is_visible():
+    sidebar.wait_for(state="attached", timeout=10_000)
+
+    collapsed = sidebar.get_attribute("data-collapsed")
+    if collapsed == "false":
         return
 
-    possible_controls = [
-        page.locator('[data-testid="stSidebarCollapsedControl"] button'),
-        page.get_by_role("button", name="Open sidebar"),
-        page.get_by_role("button", name="Open sidebar", exact=False),
-    ]
-    for control in possible_controls:
-        if control.count() and control.first.is_visible():
-            control.first.click()
-            sidebar.wait_for(state="visible", timeout=10_000)
-            return
-    raise AssertionError("Streamlit sidebar could not be opened at the phone viewport")
+    # Streamlit 1.66 renders the collapsed mobile control as an icon-only
+    # header hit target; its accessible label/test-id differs across builds.
+    # The control occupies the fixed top-left corner at phone widths.
+    page.mouse.click(30, 30)
+    page.wait_for_function(
+        """() => {
+            const element = document.querySelector('[data-testid="stSidebar"]');
+            return !!element && element.getAttribute("data-collapsed") === "false";
+        }""",
+        timeout=10_000,
+    )
+    assert sidebar.locator("button").count() > 0, "Sidebar opened without interactive controls"
 
 
 def test_real_council_sidebar_order_new_chat_and_phone_layout(local_council_app):
