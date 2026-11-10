@@ -102,8 +102,16 @@ def test_publishable_key_rejects_live_or_unexpected_domain():
     with pytest.raises(auth.ClerkPilotAuthError):
         auth._decode_publishable_domain("pk_live_fake")
     wrong_domain = "pk_test_aW52YWxpZC5jbGVyay5hY2NvdW50cy5kZXYk"
+    assert auth._decode_publishable_domain(wrong_domain) == "invalid.clerk.accounts.dev"
+
+    class FakeStreamlit:
+        secrets = {
+            "CLERK_TEST_PUBLISHABLE_KEY": wrong_domain,
+            "CLERK_TEST_DOMAIN": "invalid.clerk.accounts.dev",
+        }
+
     with pytest.raises(auth.ClerkPilotAuthError):
-        auth._decode_publishable_domain(wrong_domain)
+        auth.get_clerk_pilot_config(FakeStreamlit())
 
 
 def test_pilot_config_is_pinned_to_the_test_project_and_authorized_origin():
