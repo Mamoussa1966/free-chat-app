@@ -228,6 +228,42 @@ def test_unknown_kid_forces_jwks_refresh_then_fails_closed(signing_keys):
         auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
 
 
+
+def test_unknown_kid_refresh_is_rate_limited(signing_keys):
+    token = make_token(signing_keys["private"], kid="unknown-key")
+    doc = jwks_document(signing_keys["public"])
+    calls = []
+
+    def fetch(_issuer):
+        calls.append(1)
+        return doc
+
+    options = {
+        "issuer": ISSUER,
+        "authorized_parties": (AUTHORIZED_PARTY,),
+        "jwks_fetcher": fetch,
+        "now": 1000,
+    }
+    with pytest.raises(auth.ClerkPilotAuthError, match="غير موجود"):
+        auth.verify_clerk_session_token(token, **options)
+    assert len(calls) == 1
+
+    options["now"] = 1001
+    with pytest.raises(auth.ClerkPilotAuthError, match="غير موجود"):
+        auth.verify_clerk_session_token(token, **options)
+    assert len(calls) == 1
+
+
+def test_clerk_cdn_uses_documented_publishable_key_bootstrap_and_no_constructor():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert '"data-clerk-publishable-key": publishableKey' in source
+    assert "clerk = window.Clerk;" in source
+    assert "new window.Clerk(" not in source
+    assert "window.__internal_ClerkUICtor" in source
+
+
 def test_repository_uses_verified_identity_and_clerk_bearer_token(signing_keys):
     token = make_token(signing_keys["private"])
     verified = auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
