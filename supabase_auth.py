@@ -18,13 +18,17 @@ import requests
 
 
 def _check_pwned_passwords_range(password: str) -> bool:
-    """Check a password against HIBP using only its five-character SHA-1 prefix.
+    """Check HIBP with k-anonymity and validate the complete padded response.
 
-    The full password and full hash stay local. HIBP's free Pwned Passwords
-    endpoint returns suffixes for the supplied prefix (k-anonymity).
+    Only the first five SHA-1 characters leave this process. The HIBP
+    Add-Padding contract returns 800-1000 unique 35-hex-character suffixes.
+    Any incomplete, malformed, or unexpected response fails closed.
     """
-    digest = hashlib.sha1(str(password).encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+    digest = hashlib.sha1(
+        str(password).encode("utf-8"), usedforsecurity=False
+    ).hexdigest().upper()
     prefix, suffix = digest[:5], digest[5:]
+
     try:
         response = requests.get(
             f"https://api.pwnedpasswords.com/range/{prefix}",
@@ -40,29 +44,53 @@ def _check_pwned_passwords_range(password: str) -> bool:
             "لم يتم إنشاء الحساب أو تغيير كلمة المرور. أعد المحاولة لاحقًا."
         ) from None
 
-    if int(getattr(response, "status_code", 0) or 0) != 200:
+    try:
+        status_code = int(getattr(response, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    if status_code != 200:
         raise SupabaseAuthError(
             "تعذّر إكمال فحص أمان كلمة المرور؛ لم يتم حفظ التغيير. أعد المحاولة لاحقًا."
         )
 
     body = getattr(response, "text", None)
-    if not isinstance(body, str):
-        raise SupabaseAuthError("استجابة خدمة فحص كلمات المرور غير صالحة؛ لم يتم حفظ التغيير.")
+    if not isinstance(body, str) or not body or len(body) > 64_000:
+        raise SupabaseAuthError(
+            "استجابة خدمة فحص كلمات المرور غير مكتملة أو غير صالحة؛ لم يتم حفظ التغيير."
+        )
 
-    for line in body.splitlines():
-        candidate, separator, raw_count = line.strip().partition(":")
-        if not separator:
-            continue
-        if candidate.strip().upper() != suffix:
-            continue
-        try:
-            count = int(raw_count.strip())
-        except (TypeError, ValueError):
+    lines = body.splitlines()
+    if not 800 <= len(lines) <= 1000:
+        raise SupabaseAuthError(
+            "استجابة خدمة فحص كلمات المرور لا تطابق تنسيق الحشو المتوقع؛ لم يتم حفظ التغيير."
+        )
+
+    seen_suffixes: set[str] = set()
+    compromised = False
+    for line in lines:
+        candidate, separator, raw_count = line.partition(":")
+        if (
+            not separator
+            or re.fullmatch(r"[0-9A-Fa-f]{35}", candidate) is None
+            or re.fullmatch(r"[0-9]{1,12}", raw_count) is None
+        ):
             raise SupabaseAuthError(
-                "استجابة خدمة فحص كلمات المرور غير صالحة؛ لم يتم حفظ التغيير."
-            ) from None
-        return count > 0
-    return False
+                "استجابة خدمة فحص كلمات المرور تحتوي على سجل غير صالح؛ لم يتم حفظ التغيير."
+            )
+
+        normalized_suffix = candidate.upper()
+        if normalized_suffix in seen_suffixes:
+            raise SupabaseAuthError(
+                "استجابة خدمة فحص كلمات المرور تحتوي على سجلات مكررة؛ لم يتم حفظ التغيير."
+            )
+        seen_suffixes.add(normalized_suffix)
+
+        # Padded records always have a zero count and are not compromised hits.
+        count = int(raw_count)
+        if normalized_suffix == suffix and count > 0:
+            compromised = True
+
+    return compromised
 
 
 class SupabaseAuthError(RuntimeError):
