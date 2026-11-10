@@ -462,6 +462,13 @@ export default function(component) {
         lastToken = token;
         setBackendState("signed_in_pending_verification", token, "");
       }
+      if (refreshTimer === null) {
+        if (refreshTimer === null) {
+          refreshTimer = window.setInterval(() => {
+            if (clerk?.session) publishSession(clerk.session, clerk.user);
+          }, 40000);
+        }
+      }
       if (userNode) userNode.hidden = false;
       if (signInNode) signInNode.hidden = true;
       if (signInNode && signInNode.dataset.mounted) {
