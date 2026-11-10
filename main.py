@@ -3800,6 +3800,60 @@ def _display_safe_agent_content(content: str) -> str:
     return value.replace(marker, notice)
 
 
+def _conversation_timeline_messages(chat: dict) -> list[dict]:
+    """Return the saved presentation messages in original chronological order."""
+    source = chat.get("messages") if isinstance(chat, dict) else None
+    if not isinstance(source, list):
+        return []
+    return [
+        message for message in source
+        if isinstance(message, dict)
+        and str(message.get("role") or "").strip().lower() in {"user", "assistant"}
+    ]
+
+
+def _render_conversation_timeline(chat: dict) -> None:
+    """Show every persisted user/seat response together, without merging seat identities."""
+    messages = _conversation_timeline_messages(chat)
+    if not messages:
+        return
+    with st.expander(
+        f"🧾 التسلسل الكامل للمحادثة — {len(messages)} رسالة",
+        expanded=False,
+    ):
+        st.caption(
+            "هذا عرض موحد لكل الرسائل المحفوظة بالترتيب الأصلي. "
+            "تُعرض إجابات Gemini وCloudflare منفصلة حتى عندما يتطابق نص الرد."
+        )
+        for message in messages:
+            role = str(message.get("role") or "").strip().lower()
+            with st.chat_message(role):
+                metadata = []
+                if role == "assistant":
+                    seat_name = str(message.get("seat") or message.get("provider_identity") or "").strip()
+                    if seat_name:
+                        metadata.append(seat_name)
+                    round_value = str(message.get("round") or "").strip()
+                    if round_value:
+                        metadata.append(f"الجولة {round_value}")
+                    model = str(message.get("executed_model") or message.get("model") or "").strip()
+                    if model:
+                        metadata.append(model)
+                created_at = str(message.get("created_at") or "").strip()
+                if created_at:
+                    metadata.append(created_at)
+                if metadata:
+                    st.caption(" · ".join(metadata))
+                content = str(message.get("content") or "")
+                st.markdown(_display_safe_agent_content(content) if role == "assistant" else content)
+                attachments = message.get("attachments") if isinstance(message.get("attachments"), list) else []
+                for attachment in attachments:
+                    if isinstance(attachment, dict):
+                        name = str(attachment.get("name") or "ملف مرفق")
+                        mime = str(attachment.get("mime") or "نوع غير محدد")
+                        st.caption(f"📎 {name} · {mime}")
+
+
 def _historical_not_configured_with_current_setup(latest_status: dict, current_models: tuple | list) -> bool:
     """Identify a historical NOT_CONFIGURED result when the current session is now ready."""
     status = str((latest_status or {}).get("status") or "").strip().upper()
@@ -5984,6 +6038,8 @@ def run_app() -> None:
             st.warning("وقت بدء عملية Streamlit: NOT_PROVEN — تعذر تفسير وقت النظام.")
     else:
         st.warning("وقت بدء عملية Streamlit: NOT_PROVEN — لم تتوفر بيانات procfs للعملية الحالية.")
+
+    _render_conversation_timeline(chat)
 
     round_repair = st.session_state.get("_canonical_round_status_repair")
     if isinstance(round_repair, dict) and str(round_repair.get("conversation_id") or "") == str(chat.get("conversation_id") or ""):
