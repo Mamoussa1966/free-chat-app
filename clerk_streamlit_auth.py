@@ -15,7 +15,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 import uuid
 
@@ -43,7 +43,7 @@ CLERK_COMPONENT_KEY = "ai_council_clerk_pilot_auth_v1"
 MAX_SESSION_TOKEN_LENGTH = 16_384
 MAX_RECORD_PAYLOAD_LENGTH = 2_000
 _RECORD_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_DOMAIN_RE = re.compile(r"^[a-z0-9-]+\\.clerk\\.accounts\\.dev$")
+_DOMAIN_RE = re.compile(r"^[a-z0-9-]+\.clerk\.accounts\.dev$")
 
 _JWKS_CLIENTS: dict[str, PyJWKClient] = {}
 _JWKS_LOCK = threading.RLock()
