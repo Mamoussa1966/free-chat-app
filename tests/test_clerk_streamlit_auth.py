@@ -276,8 +276,12 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'signUpUrl: flowUrl("sign-up")' in source
     assert 'withSignUp: true' in source
     assert 'transferable: true' in source
-    assert 'params.get("intent") === "signUp"' in source
-    assert 'mountSignedOut(initialFlow())' in source
+    assert 'currentUrl.searchParams.get("intent") === "signUp"' in source
+    assert 'mountSignedOut(selectedInitialFlow)' in source
+    assert 'afterSignOutUrl: flowUrl("sign-in")' in source
+    assert 'clerk.signOut({ redirectUrl: flowUrl("sign-in") })' in source
+    assert 'callbackParams' in source
+    assert 'url.searchParams.delete(name)' in source
     assert 'root.addEventListener("click", handleFlowNavigation, true)' in source
     assert 'event.preventDefault()' in source
     assert 'const FLOW_PARAM = "clerk_pilot_flow"' in source
