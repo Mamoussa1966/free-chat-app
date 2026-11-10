@@ -522,12 +522,23 @@ export default function(component) {
   let lastToken = "";
   let busy = false;
 
-  // Use same-page relative paths for the two Clerk form links.
-  // The click handler below switches forms inside this component without
-  // navigating to Clerk's hosted Account Portal or leaving the Streamlit app.
+  // Keep Clerk sign-in/sign-up inside this Streamlit page. Preserve the
+  // page path and existing query parameters so OAuth returns to this pilot
+  // page rather than the app home page or Clerk's hosted Account Portal.
   const FLOW_PARAM = "clerk_pilot_flow";
-  const appReturnUrl = window.location.origin + "/";
-  const flowUrl = (mode) => "/?" + FLOW_PARAM + "=" + encodeURIComponent(mode);
+  const appReturnUrl = (() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete(FLOW_PARAM);
+    return url.toString();
+  })();
+  const flowUrl = (mode) => {
+    const url = new URL(appReturnUrl);
+    url.searchParams.set(FLOW_PARAM, mode);
+    return url.pathname + url.search + url.hash;
+  };
+  const initialFlow = () =>
+    new URL(window.location.href).searchParams.get(FLOW_PARAM) === "sign-up"
+      ? "sign-up" : "sign-in";
 
   const setStatus = (message) => {
     if (statusNode) statusNode.textContent = message;
@@ -590,6 +601,7 @@ export default function(component) {
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    window.history.pushState({}, "", target.pathname + target.search + target.hash);
     mountSignedOut(mode);
   }
 
@@ -741,7 +753,7 @@ export default function(component) {
       if (clerk.session) {
         await mountAuthenticated();
       } else {
-        mountSignedOut("sign-in");
+        mountSignedOut(initialFlow());
       }
     } catch (_) {
       setStatus("تعذر تحميل Clerk أو الاتصال بخدمة المصادقة. تحقق من اتصال المتصفح وإعدادات Clerk.");
@@ -772,6 +784,7 @@ export default function(component) {
     root.removeEventListener("click", handleFlowNavigation, true);
     signOutButton?.removeEventListener("click", handleSignOut);
     try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignIn(signInNode); } catch (_) {}
+    try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignUp(signInNode); } catch (_) {}
     try { if (clerk && userButtonNode?.dataset.mounted) clerk.unmountUserButton(userButtonNode); } catch (_) {}
   };
 }
