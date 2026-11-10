@@ -3360,159 +3360,158 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                     st.session_state.last_results = []
                     st.session_state.last_diagnostics = []
                     st.rerun()
-        st.divider()
-        with st.expander("📦 النسخ الاحتياطية للمحادثات", expanded=False):
-            st.caption(
-                "إنشاء ملف JSON للقراءة فقط. عند تفعيل Supabase تُقرأ سجلات الحساب المصادق عليه مباشرةً "
-                "من قاعدة البيانات؛ وإلا تُصدّر المحادثات الموجودة في الجلسة الحالية."
-            )
-            if st.button(
-                "🧰 تجهيز نسخة احتياطية الآن",
-                key="council_prepare_conversation_backup",
-                use_container_width=True,
-            ):
-                try:
-                    backup_chats, backup_source, backup_may_be_truncated = _collect_conversation_backup_source()
-                    backup_document = build_conversation_backup(
-                        backup_chats,
-                        source=backup_source,
-                        possible_truncation=backup_may_be_truncated,
-                    )
-                    backup_payload = serialize_conversation_backup(backup_document)
-                    st.session_state["_council_backup_json"] = backup_payload
-                    st.session_state["_council_backup_count"] = int(backup_document["conversation_count"])
-                    st.session_state["_council_backup_truncated"] = bool(backup_document["limits"]["possible_truncation"])
-                    st.session_state["_council_backup_source"] = str(backup_document["source"])
-                except Exception:
-                    st.session_state.pop("_council_backup_json", None)
-                    st.session_state.pop("_council_backup_count", None)
-                    st.session_state.pop("_council_backup_truncated", None)
-                    st.error("تعذر إعداد نسخة احتياطية موثوقة؛ لم ننشئ ملفًا جزئيًا.")
-            backup_payload = st.session_state.get("_council_backup_json")
-            if isinstance(backup_payload, str) and backup_payload:
-                st.success(
-                    f"تم تجهيز ملف يحتوي على {st.session_state.get('_council_backup_count', 0)} محادثة."
+            with st.expander("📦 النسخ الاحتياطية للمحادثات", expanded=False):
+                st.caption(
+                    "إنشاء ملف JSON للقراءة فقط. عند تفعيل Supabase تُقرأ سجلات الحساب المصادق عليه مباشرةً "
+                    "من قاعدة البيانات؛ وإلا تُصدّر المحادثات الموجودة في الجلسة الحالية."
                 )
-                backup_source = str(st.session_state.get("_council_backup_source") or "")
-                if backup_source == "supabase_authenticated_owner":
-                    st.caption("مصدر النسخة: سجلات Supabase المملوكة للحساب المسجّل دخوله.")
-                elif backup_source == "streamlit_session_cache":
-                    st.warning("مصدر النسخة: ذاكرة الجلسة الحالية فقط؛ هذه ليست نسخة سحابية دائمة، وقد لا تشمل محادثات من جلسات سابقة.")
-                if st.session_state.get("_council_backup_truncated"):
-                    st.warning(
-                        "تم بلوغ حد 500 محادثة؛ قد توجد سجلات إضافية لم تدخل هذه النسخة."
-                    )
-                st.download_button(
-                    "⬇️ تنزيل نسخة AI Council الاحتياطية",
-                    data=backup_payload,
-                    file_name="AI_Council_Backup.json",
-                    mime="application/json",
-                    key="council_download_conversation_backup",
+                if st.button(
+                    "🧰 تجهيز نسخة احتياطية الآن",
+                    key="council_prepare_conversation_backup",
                     use_container_width=True,
-                )
-            st.caption(
-                "النطاق: سجلات المحادثات والهوية والتدقيق. لا تتضمن النسخة ملفات الصوت أو المرفقات الثنائية، "
-                "ولا مفاتيح API المحفوظة في الإعدادات. النص الذي أدخلته داخل المحادثة قد يتضمن بيانات حساسة؛ "
-                "احفظ الملف في مكان خاص. الاستعادة الإضافية متاحة فقط للحساب المصادق في Supabase، ولا تستبدل "
-                "أي محادثة موجودة؛ ملفات الصوت والمرفقات لا تُستعاد."
-            )
-            st.divider()
-            st.markdown("**📥 استعادة نسخة احتياطية إلى حسابك**")
-            _, _, restore_supabase_auth_enabled = get_supabase_config(st)
-            if not restore_supabase_auth_enabled or not is_supabase_auth_active(st):
-                st.info(
-                    "يلزم تفعيل Supabase Auth وتسجيل الدخول بالحساب المستهدف. "
-                    "ستُدرج المحادثات في جدول قاعدة البيانات مع تطبيق سياسات RLS؛ "
-                    "لا تُرفع النسخة إلى Supabase Storage ولا تُحفظ في ذاكرة جلسة مؤقتة."
-                )
-            else:
-                restore_summary = st.session_state.get("_council_restore_summary")
-                if isinstance(restore_summary, dict):
-                    if restore_summary.get("status") == "COMPLETED":
-                        st.success(
-                            f"آخر استعادة: أُضيفت {restore_summary.get('restored', 0)} محادثة، "
-                            f"وتُخطيت {restore_summary.get('skipped_existing', 0)} موجودة."
+                ):
+                    try:
+                        backup_chats, backup_source, backup_may_be_truncated = _collect_conversation_backup_source()
+                        backup_document = build_conversation_backup(
+                            backup_chats,
+                            source=backup_source,
+                            possible_truncation=backup_may_be_truncated,
                         )
-                    else:
+                        backup_payload = serialize_conversation_backup(backup_document)
+                        st.session_state["_council_backup_json"] = backup_payload
+                        st.session_state["_council_backup_count"] = int(backup_document["conversation_count"])
+                        st.session_state["_council_backup_truncated"] = bool(backup_document["limits"]["possible_truncation"])
+                        st.session_state["_council_backup_source"] = str(backup_document["source"])
+                    except Exception:
+                        st.session_state.pop("_council_backup_json", None)
+                        st.session_state.pop("_council_backup_count", None)
+                        st.session_state.pop("_council_backup_truncated", None)
+                        st.error("تعذر إعداد نسخة احتياطية موثوقة؛ لم ننشئ ملفًا جزئيًا.")
+                backup_payload = st.session_state.get("_council_backup_json")
+                if isinstance(backup_payload, str) and backup_payload:
+                    st.success(
+                        f"تم تجهيز ملف يحتوي على {st.session_state.get('_council_backup_count', 0)} محادثة."
+                    )
+                    backup_source = str(st.session_state.get("_council_backup_source") or "")
+                    if backup_source == "supabase_authenticated_owner":
+                        st.caption("مصدر النسخة: سجلات Supabase المملوكة للحساب المسجّل دخوله.")
+                    elif backup_source == "streamlit_session_cache":
+                        st.warning("مصدر النسخة: ذاكرة الجلسة الحالية فقط؛ هذه ليست نسخة سحابية دائمة، وقد لا تشمل محادثات من جلسات سابقة.")
+                    if st.session_state.get("_council_backup_truncated"):
                         st.warning(
-                            f"آخر استعادة جزئية: أُضيفت {restore_summary.get('restored', 0)}، "
-                            f"وتُخطيت {restore_summary.get('skipped_existing', 0)}، "
-                            f"وتعذر تأكيد {restore_summary.get('failed_count', 0)} سجل."
+                            "تم بلوغ حد 500 محادثة؛ قد توجد سجلات إضافية لم تدخل هذه النسخة."
                         )
-                    if restore_summary.get("session_hydration_warning"):
-                        st.caption("تم الحفظ الدائم، لكن بعض السجلات لم تظهر فورًا في الجلسة الحالية.")
-                restore_uploader_nonce = int(st.session_state.get("_council_restore_uploader_nonce", 0))
-                restore_upload = st.file_uploader(
-                    "اختر ملف AI_Council_Backup.json",
-                    type=["json"],
-                    key=f"council_backup_restore_upload_{restore_uploader_nonce}",
-                    help="يُتحقق من البصمات وسلسلة Message→Request→Round قبل أي كتابة.",
+                    st.download_button(
+                        "⬇️ تنزيل نسخة AI Council الاحتياطية",
+                        data=backup_payload,
+                        file_name="AI_Council_Backup.json",
+                        mime="application/json",
+                        key="council_download_conversation_backup",
+                        use_container_width=True,
+                    )
+                st.caption(
+                    "النطاق: سجلات المحادثات والهوية والتدقيق. لا تتضمن النسخة ملفات الصوت أو المرفقات الثنائية، "
+                    "ولا مفاتيح API المحفوظة في الإعدادات. النص الذي أدخلته داخل المحادثة قد يتضمن بيانات حساسة؛ "
+                    "احفظ الملف في مكان خاص. الاستعادة الإضافية متاحة فقط للحساب المصادق في Supabase، ولا تستبدل "
+                    "أي محادثة موجودة؛ ملفات الصوت والمرفقات لا تُستعاد."
                 )
-                if restore_upload is not None:
-                    restore_bytes = restore_upload.getvalue()
-                    if len(restore_bytes) > MAX_BACKUP_JSON_BYTES:
-                        st.error("حجم ملف الاستعادة يتجاوز الحد الأقصى المسموح وهو 25 MiB.")
-                    else:
-                        try:
-                            restore_document = json.loads(restore_bytes.decode("utf-8"))
-                            restore_owner, restore_repository = _supabase_identity_and_repository()
-                            restore_snapshots = build_restore_snapshots(restore_document, restore_owner)
-                            st.caption(
-                                f"فحص الملف ناجح: {len(restore_snapshots)} محادثة. "
-                                "سيتم إدراج المعرفات غير الموجودة فقط؛ أي معرف موجود سيُتخطى دون تعديل."
+                st.divider()
+                st.markdown("**📥 استعادة نسخة احتياطية إلى حسابك**")
+                _, _, restore_supabase_auth_enabled = get_supabase_config(st)
+                if not restore_supabase_auth_enabled or not is_supabase_auth_active(st):
+                    st.info(
+                        "يلزم تفعيل Supabase Auth وتسجيل الدخول بالحساب المستهدف. "
+                        "ستُدرج المحادثات في جدول قاعدة البيانات مع تطبيق سياسات RLS؛ "
+                        "لا تُرفع النسخة إلى Supabase Storage ولا تُحفظ في ذاكرة جلسة مؤقتة."
+                    )
+                else:
+                    restore_summary = st.session_state.get("_council_restore_summary")
+                    if isinstance(restore_summary, dict):
+                        if restore_summary.get("status") == "COMPLETED":
+                            st.success(
+                                f"آخر استعادة: أُضيفت {restore_summary.get('restored', 0)} محادثة، "
+                                f"وتُخطيت {restore_summary.get('skipped_existing', 0)} موجودة."
                             )
+                        else:
                             st.warning(
-                                "العملية تضيف سجلات إلى حساب Supabase المصادق فقط. لا تستعيد التسجيلات الصوتية "
-                                "أو المرفقات الثنائية، ولا تنفذ أي استدعاء لمزودي الذكاء الاصطناعي."
+                                f"آخر استعادة جزئية: أُضيفت {restore_summary.get('restored', 0)}، "
+                                f"وتُخطيت {restore_summary.get('skipped_existing', 0)}، "
+                                f"وتعذر تأكيد {restore_summary.get('failed_count', 0)} سجل."
                             )
-                            st.info(
-                                "تنبيه أمني: بصمة SHA-256 تكشف التلف والتناقض داخل الملف، لكنها لا تثبت هوية مصدره. "
-                                "استعد فقط ملفات نسخ احتياطية أنشأتها بنفسك أو حصلت عليها من مصدر موثوق."
-                            )
-                            if st.button(
-                                "استعادة المحادثات غير الموجودة فقط",
-                                key="council_restore_missing_conversations",
-                                use_container_width=True,
-                            ):
-                                restore_result = restore_only_missing_conversations(
-                                    restore_document,
-                                    owner=restore_owner,
-                                    repository=restore_repository,
+                        if restore_summary.get("session_hydration_warning"):
+                            st.caption("تم الحفظ الدائم، لكن بعض السجلات لم تظهر فورًا في الجلسة الحالية.")
+                    restore_uploader_nonce = int(st.session_state.get("_council_restore_uploader_nonce", 0))
+                    restore_upload = st.file_uploader(
+                        "اختر ملف AI_Council_Backup.json",
+                        type=["json"],
+                        key=f"council_backup_restore_upload_{restore_uploader_nonce}",
+                        help="يُتحقق من البصمات وسلسلة Message→Request→Round قبل أي كتابة.",
+                    )
+                    if restore_upload is not None:
+                        restore_bytes = restore_upload.getvalue()
+                        if len(restore_bytes) > MAX_BACKUP_JSON_BYTES:
+                            st.error("حجم ملف الاستعادة يتجاوز الحد الأقصى المسموح وهو 25 MiB.")
+                        else:
+                            try:
+                                restore_document = json.loads(restore_bytes.decode("utf-8"))
+                                restore_owner, restore_repository = _supabase_identity_and_repository()
+                                restore_snapshots = build_restore_snapshots(restore_document, restore_owner)
+                                st.caption(
+                                    f"فحص الملف ناجح: {len(restore_snapshots)} محادثة. "
+                                    "سيتم إدراج المعرفات غير الموجودة فقط؛ أي معرف موجود سيُتخطى دون تعديل."
                                 )
-                                inserted_chats = []
-                                session_hydration_warning = False
-                                for restored_id in restore_result.get("restored_conversation_ids", []):
-                                    try:
-                                        restored_snapshot = restore_repository.load(restore_owner, restored_id)
-                                        if restored_snapshot is None or restored_snapshot.owner != restore_owner:
+                                st.warning(
+                                    "العملية تضيف سجلات إلى حساب Supabase المصادق فقط. لا تستعيد التسجيلات الصوتية "
+                                    "أو المرفقات الثنائية، ولا تنفذ أي استدعاء لمزودي الذكاء الاصطناعي."
+                                )
+                                st.info(
+                                    "تنبيه أمني: بصمة SHA-256 تكشف التلف والتناقض داخل الملف، لكنها لا تثبت هوية مصدره. "
+                                    "استعد فقط ملفات نسخ احتياطية أنشأتها بنفسك أو حصلت عليها من مصدر موثوق."
+                                )
+                                if st.button(
+                                    "استعادة المحادثات غير الموجودة فقط",
+                                    key="council_restore_missing_conversations",
+                                    use_container_width=True,
+                                ):
+                                    restore_result = restore_only_missing_conversations(
+                                        restore_document,
+                                        owner=restore_owner,
+                                        repository=restore_repository,
+                                    )
+                                    inserted_chats = []
+                                    session_hydration_warning = False
+                                    for restored_id in restore_result.get("restored_conversation_ids", []):
+                                        try:
+                                            restored_snapshot = restore_repository.load(restore_owner, restored_id)
+                                            if restored_snapshot is None or restored_snapshot.owner != restore_owner:
+                                                session_hydration_warning = True
+                                                continue
+                                            inserted_chats.append(_chat_from_restored_owned_snapshot(restored_snapshot))
+                                        except Exception:
+                                            # The insert is already durable; a local display-hydration
+                                            # failure must not be reported as a database rollback.
                                             session_hydration_warning = True
-                                            continue
-                                        inserted_chats.append(_chat_from_restored_owned_snapshot(restored_snapshot))
-                                    except Exception:
-                                        # The insert is already durable; a local display-hydration
-                                        # failure must not be reported as a database rollback.
-                                        session_hydration_warning = True
-                                if inserted_chats:
-                                    current_chats = st.session_state.get("chats") or []
-                                    st.session_state.chats = inserted_chats + [
-                                        item for item in current_chats
-                                        if str(item.get("conversation_id") or item.get("id") or "") not in {
-                                            str(chat_item.get("conversation_id") or "") for chat_item in inserted_chats
-                                        }
-                                    ]
-                                st.session_state["_council_restore_summary"] = {
-                                    "status": restore_result["status"],
-                                    "restored": int(restore_result["restored"]),
-                                    "skipped_existing": int(restore_result["skipped_existing"]),
-                                    "failed_count": len(restore_result.get("failed_conversation_ids", [])),
-                                    "session_hydration_warning": bool(session_hydration_warning),
-                                }
-                                st.session_state["_council_restore_uploader_nonce"] = restore_uploader_nonce + 1
-                                st.rerun()
-                        except BackupRestoreError:
-                            st.error("رفضنا الاستعادة: الملف غير سليم أو لا يطابق سجل المحادثات القانوني.")
-                        except Exception:
-                            st.error("تعذرت الاستعادة أو لم يمكن تأكيد ملكية السجلات؛ لم نعرض تفاصيل الاعتماد أو قاعدة البيانات.")
+                                    if inserted_chats:
+                                        current_chats = st.session_state.get("chats") or []
+                                        st.session_state.chats = inserted_chats + [
+                                            item for item in current_chats
+                                            if str(item.get("conversation_id") or item.get("id") or "") not in {
+                                                str(chat_item.get("conversation_id") or "") for chat_item in inserted_chats
+                                            }
+                                        ]
+                                    st.session_state["_council_restore_summary"] = {
+                                        "status": restore_result["status"],
+                                        "restored": int(restore_result["restored"]),
+                                        "skipped_existing": int(restore_result["skipped_existing"]),
+                                        "failed_count": len(restore_result.get("failed_conversation_ids", [])),
+                                        "session_hydration_warning": bool(session_hydration_warning),
+                                    }
+                                    st.session_state["_council_restore_uploader_nonce"] = restore_uploader_nonce + 1
+                                    st.rerun()
+                            except BackupRestoreError:
+                                st.error("رفضنا الاستعادة: الملف غير سليم أو لا يطابق سجل المحادثات القانوني.")
+                            except Exception:
+                                st.error("تعذرت الاستعادة أو لم يمكن تأكيد ملكية السجلات؛ لم نعرض تفاصيل الاعتماد أو قاعدة البيانات.")
         st.divider()
         st.subheader("🧭 V24 Conversation Platform")
         ensure_store(chat)
