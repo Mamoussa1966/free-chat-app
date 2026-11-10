@@ -396,31 +396,36 @@ export default function(component) {
     setStateValue("auth_error", error || "");
   };
 
-  function loadScript(src, id) {
-    return new Promise((resolve, reject) => {
-      const existing = document.getElementById(id);
-      if (existing && existing.dataset.loaded === "true") {
+  function loadScript(src, id, isReady) {
+    if (typeof isReady === "function" && isReady()) return Promise.resolve();
+    window.__aiCouncilClerkScriptPromises = window.__aiCouncilClerkScriptPromises || {};
+    if (window.__aiCouncilClerkScriptPromises[id]) {
+      return window.__aiCouncilClerkScriptPromises[id];
+    }
+    const script = document.getElementById(id) || document.createElement("script");
+    window.__aiCouncilClerkScriptPromises[id] = new Promise((resolve, reject) => {
+      const loaded = () => {
+        script.dataset.loaded = "true";
         resolve();
-        return;
-      }
-      const script = existing || document.createElement("script");
-      if (!existing) {
+      };
+      const failed = () => {
+        delete window.__aiCouncilClerkScriptPromises[id];
+        reject(new Error("تعذر تحميل واجهة Clerk الرسمية."));
+      };
+      script.addEventListener("load", loaded, { once: true });
+      script.addEventListener("error", failed, { once: true });
+      if (!script.isConnected) {
         script.id = id;
         script.src = src;
         script.async = true;
         script.crossOrigin = "anonymous";
         script.referrerPolicy = "strict-origin-when-cross-origin";
         document.head.appendChild(script);
-      }
-      const loaded = () => {
-        script.dataset.loaded = "true";
+      } else if (script.dataset.loaded === "true" || (typeof isReady === "function" && isReady())) {
         resolve();
-      };
-      const failed = () => reject(new Error("تعذر تحميل واجهة Clerk الرسمية."));
-      script.addEventListener("load", loaded, { once: true });
-      script.addEventListener("error", failed, { once: true });
-      if (existing && window.__aiCouncilClerkScriptReady?.[id]) resolve();
+      }
     });
+    return window.__aiCouncilClerkScriptPromises[id];
   }
 
   function mountSignedOut() {
