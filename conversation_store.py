@@ -200,17 +200,19 @@ def _restore_saved_identity_order(target: list, saved: list, identity_key: str) 
     return ordered
 
 
-def reconcile_canonical_round_completion_statuses(record: dict) -> int:
-    """Repair stale STARTED labels only when complete application-owned proof exists.
-
-    A round is promoted to COMPLETED only when its exact canonical Request is
-    COMPLETED, the Message/Request/Round identity chain agrees, persisted
-    finished_at/result_count are present, and every per-seat result has its
-    exact request_id:round:seat key. No identity, counter, timestamp, or result
-    is invented; uncertain or partial records remain unchanged.
-    """
+def _canonical_round_completion_plan(record: dict) -> tuple[list[dict], dict]:
+    """Build a read-only proof plan for stale round completion labels."""
+    blocked: dict[str, int] = {}
+    eligible_rows: list[dict] = []
+    started_rounds = 0
     if not isinstance(record, dict):
-        return 0
+        return [], {
+            "status": "INVALID_RECORD",
+            "started_rounds": 0,
+            "eligible_rounds": 0,
+            "blocked_reasons": {"invalid_record": 1},
+        }
+
     conversation_id = str(record.get("conversation_id") or "").strip()
     messages = record.get("messages") if isinstance(record.get("messages"), list) else []
     requests = record.get("requests") if isinstance(record.get("requests"), list) else []
@@ -231,24 +233,31 @@ def reconcile_canonical_round_completion_statuses(record: dict) -> int:
         if request_id:
             requests_by_id.setdefault(request_id, []).append(request)
 
-    repaired = 0
+    def block(reason: str) -> None:
+        blocked[reason] = blocked.get(reason, 0) + 1
+
     for round_row in rounds:
         if not isinstance(round_row, dict) or str(round_row.get("status") or "").upper() != "STARTED":
             continue
+        started_rounds += 1
         request_id = str(round_row.get("request_id") or "").strip()
         message_id = str(round_row.get("message_id") or "").strip()
         round_id = str(round_row.get("round_id") or "").strip()
         if not request_id or not message_id or not round_id or not conversation_id:
+            block("missing_round_identity")
             continue
         matching_requests = requests_by_id.get(request_id, [])
         if len(matching_requests) != 1:
+            block("request_missing_or_ambiguous")
             continue
         request = matching_requests[0]
         matching_messages = messages_by_id.get(message_id, [])
         if len(matching_messages) != 1:
+            block("message_missing_or_ambiguous")
             continue
         message = matching_messages[0]
         if str(request.get("state") or "").upper() != "COMPLETED":
+            block("request_not_completed")
             continue
         if (
             str(message.get("role") or "").lower() != "user"
@@ -259,12 +268,14 @@ def reconcile_canonical_round_completion_statuses(record: dict) -> int:
             or str(request.get("conversation_id") or "") != conversation_id
             or str(request.get("session_id") or "") != str(round_row.get("session_id") or "")
         ):
+            block("message_request_round_binding_mismatch")
             continue
         try:
             round_number = int(round_row.get("ordinal"))
             legacy_round_number = int(round_row.get("round"))
             expected_result_count = int(round_row.get("result_count"))
         except (TypeError, ValueError):
+            block("invalid_round_numbers_or_result_count")
             continue
         if (
             round_number < 1
@@ -277,6 +288,7 @@ def reconcile_canonical_round_completion_statuses(record: dict) -> int:
                 != f"{conversation_id}:{request_id}:r{round_number}"
             or str(round_row.get("record_type") or "") != "CANONICAL_ROUND_RECORD"
         ):
+            block("round_identity_or_completion_proof_incomplete")
             continue
 
         results = request.get("results") if isinstance(request.get("results"), list) else []
@@ -306,12 +318,32 @@ def reconcile_canonical_round_completion_statuses(record: dict) -> int:
             or len(set(seats)) != expected_result_count
             or len(set(result_keys)) != expected_result_count
         ):
+            block("seat_result_set_incomplete_or_ambiguous")
             continue
+        eligible_rows.append(round_row)
+
+    eligible_count = len(eligible_rows)
+    status = "ELIGIBLE" if eligible_count else ("BLOCKED" if started_rounds else "NO_STALE_ROUNDS")
+    return eligible_rows, {
+        "status": status,
+        "started_rounds": started_rounds,
+        "eligible_rounds": eligible_count,
+        "blocked_reasons": blocked,
+    }
+
+
+def canonical_round_completion_reconciliation_audit(record: dict) -> dict:
+    """Return safe counts and reason codes without mutating the canonical record."""
+    _, diagnostics = _canonical_round_completion_plan(record)
+    return diagnostics
+
+
+def reconcile_canonical_round_completion_statuses(record: dict) -> int:
+    """Promote only STARTED rounds whose exact canonical completion proof passes."""
+    eligible_rows, _ = _canonical_round_completion_plan(record)
+    for round_row in eligible_rows:
         round_row["status"] = "COMPLETED"
-        repaired += 1
-    return repaired
-
-
+    return len(eligible_rows)
 def commit_canonical_record(chat: dict, session_state=None) -> dict:
     """Commit the complete canonical ConversationRecord at a lifecycle boundary.
 
