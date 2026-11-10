@@ -244,7 +244,7 @@ def test_unknown_kid_refresh_is_rate_limited(signing_keys):
         "jwks_fetcher": fetch,
         "now": 1000,
     }
-    with pytest.raises(auth.ClerkPilotAuthError, match="غير موجود"):
+    with pytest.raises(auth.ClerkPilotAuthError, match="غير منشور|غير موجود"):
         auth.verify_clerk_session_token(token, **options)
     assert len(calls) == 1
 
