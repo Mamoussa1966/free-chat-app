@@ -510,8 +510,8 @@ export default function(component) {
 
     try {
       const base = "https://" + domain + "/npm/";
-      await loadScript(base + "@clerk/ui@1/dist/ui.browser.js", "ai-council-clerk-ui-js");
-      await loadScript(base + "@clerk/clerk-js@6/dist/clerk.browser.js", "ai-council-clerk-js");
+      await loadScript(base + "@clerk/ui@1/dist/ui.browser.js", "ai-council-clerk-ui-js", () => !!window.__internal_ClerkUICtor);
+      await loadScript(base + "@clerk/clerk-js@6/dist/clerk.browser.js", "ai-council-clerk-js", () => typeof window.Clerk === "function");
       if (disposed) return;
       if (typeof window.Clerk !== "function" || !window.__internal_ClerkUICtor) {
         throw new Error("ClerkJS UI bundle did not initialize.");
