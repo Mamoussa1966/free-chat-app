@@ -134,6 +134,16 @@ class RlsFakeSession:
                 for field in fields:
                     if old.get(field) not in (None, "") and new_by_id[identity].get(field) != old[field]:
                         raise ConversationIdentityConflict("canonical identity binding cannot be rewritten")
+                lifecycle_field = {"requests": "state", "rounds": "status"}.get(collection)
+                if lifecycle_field:
+                    terminal_states = {
+                        "COMPLETED", "SUCCEEDED", "FAILED", "REJECTED",
+                        "CANCELLED", "CANCELED", "ABORTED", "EXPIRED",
+                    }
+                    old_state = str(old.get(lifecycle_field) or "").strip().upper()
+                    new_state = str(new_by_id[identity].get(lifecycle_field) or "").strip().upper()
+                    if old_state in terminal_states and new_state != old_state:
+                        raise ConversationIdentityConflict("terminal lifecycle state cannot be rewritten")
 
     def request(self, method, url, *, params=None, json=None, headers=None, timeout=None):
         params = dict(params or {})
@@ -374,6 +384,63 @@ def test_list_limit_is_bounded_and_rejects_bool(fake_session):
     for limit in (0, -1, True, "10", 501):
         with pytest.raises(ValueError, match="between 1 and 500"):
             repo.list_ids(OWNER_A, limit=limit)
+
+
+def test_list_ids_requests_most_recent_conversations_first(fake_session):
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
+
+    repo.list_ids(OWNER_A, limit=30)
+
+    list_call = next(
+        call for call in reversed(fake_session.calls)
+        if call["method"] == "GET" and call["params"].get("select") == "conversation_id"
+    )
+    assert list_call["params"]["owner_id"] == f"eq.{OWNER_A.subject}"
+    assert list_call["params"]["order"] == "updated_at.desc,conversation_id.asc"
+    assert list_call["params"]["limit"] == "30"
+
+
+def test_save_rejects_downgrade_or_rewrite_of_terminal_request_and_round_states(fake_session):
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
+
+    started = canonical_record()
+    started["requests"][0]["state"] = "RUNNING"
+    started["rounds"][0]["status"] = "STARTED"
+    started_snapshot = OwnedConversationSnapshot(OWNER_A, started)
+    repo.save(started_snapshot)
+
+    completed = copy.deepcopy(started)
+    completed["requests"][0]["state"] = "COMPLETED"
+    completed["rounds"][0]["status"] = "COMPLETED"
+    completed_snapshot = OwnedConversationSnapshot(OWNER_A, completed)
+    repo.save(completed_snapshot)
+
+    stale = copy.deepcopy(started)
+    with pytest.raises(ConversationIdentityConflict, match="terminal lifecycle state"):
+        repo.save(OwnedConversationSnapshot(OWNER_A, stale))
+
+    stored = repo.load(OWNER_A, started_snapshot.conversation_id)
+    assert stored is not None
+    assert stored.canonical_record["requests"][0]["state"] == "COMPLETED"
+    assert stored.canonical_record["rounds"][0]["status"] == "COMPLETED"
+
+
+def test_save_allows_started_lifecycle_to_advance_to_a_terminal_state(fake_session):
+    repo = make_repository(OWNER_A, TOKEN_A, fake_session)
+    started = canonical_record()
+    started["requests"][0]["state"] = "RUNNING"
+    started["rounds"][0]["status"] = "STARTED"
+    repo.save(OwnedConversationSnapshot(OWNER_A, started))
+
+    completed = copy.deepcopy(started)
+    completed["requests"][0]["state"] = "COMPLETED"
+    completed["rounds"][0]["status"] = "COMPLETED"
+    repo.save(OwnedConversationSnapshot(OWNER_A, completed))
+
+    stored = repo.load(OWNER_A, "conversation-1")
+    assert stored is not None
+    assert stored.canonical_record["requests"][0]["state"] == "COMPLETED"
+    assert stored.canonical_record["rounds"][0]["status"] == "COMPLETED"
 
 
 def test_migration_defines_rls_grants_and_no_service_role_shortcut():
