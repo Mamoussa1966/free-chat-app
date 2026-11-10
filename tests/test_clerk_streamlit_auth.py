@@ -264,6 +264,20 @@ def test_clerk_cdn_uses_documented_publishable_key_bootstrap_and_no_constructor(
     assert "window.__internal_ClerkUICtor" in source
 
 
+def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigation():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert 'signUpUrl: flowUrl("sign-up")' in source
+    assert 'signInUrl: flowUrl("sign-in")' in source
+    assert 'clerk.mountSignUp(signInNode' in source
+    assert 'clerk.mountSignIn(signInNode' in source
+    assert 'root.addEventListener("click", handleFlowNavigation, true)' in source
+    assert 'event.preventDefault()' in source
+    assert 'const FLOW_PARAM = "clerk_pilot_flow"' in source
+    assert 'https://dear-hermit-1240.accounts.dev' not in source
+
+
 def test_repository_uses_verified_identity_and_clerk_bearer_token(signing_keys):
     token = make_token(signing_keys["private"])
     verified = auth.verify_clerk_session_token(token, **verifier_options(signing_keys["public"]))
