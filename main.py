@@ -1375,6 +1375,65 @@ def _new_chat() -> dict:
     return chat
 
 
+def _start_new_chat_session_state(session_state) -> dict:
+    """Activate a genuinely empty, uniquely identified chat without touching history."""
+    existing_chats = session_state.get("chats", [])
+    if not isinstance(existing_chats, list):
+        existing_chats = []
+    existing_chats = [
+        item for item in existing_chats
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+
+    existing_chat_ids = {str(item.get("id") or "").strip() for item in existing_chats}
+    existing_conversation_ids = {
+        str(item.get("conversation_id") or "").strip()
+        for item in existing_chats
+        if str(item.get("conversation_id") or "").strip()
+    }
+    existing_session_ids = {
+        str(item.get("session_id") or "").strip()
+        for item in existing_chats
+        if str(item.get("session_id") or "").strip()
+    }
+
+    # UUID collisions are practically impossible, but the invariant is explicit
+    # and checked rather than assumed.
+    new_chat = _new_chat()
+    if (
+        str(new_chat.get("id") or "") in existing_chat_ids
+        or str(new_chat.get("conversation_id") or "") in existing_conversation_ids
+        or str(new_chat.get("session_id") or "") in existing_session_ids
+        or new_chat.get("messages")
+    ):
+        raise RuntimeError("NEW_CONVERSATION_IDENTITY_COLLISION")
+
+    session_state["chats"] = [new_chat, *existing_chats]
+    session_state["active_chat_id"] = new_chat["id"]
+
+    # These values describe the previously active conversation. Reset only
+    # presentation/runtime caches; preserve provider configuration and all
+    # historical chat objects, messages, Request IDs, and Round IDs.
+    session_state["last_results"] = []
+    session_state["last_diagnostics"] = []
+    session_state["last_synthesis"] = {}
+    session_state["last_continuation_audit"] = {}
+    session_state["last_hotfix141_harness"] = []
+    session_state["_canonical_round_status_repair"] = {}
+    session_state["last_voice_transcription"] = {}
+    session_state["pending_voice_recording"] = {}
+    session_state["last_voice_error"] = ""
+
+    for key in ("input_nonce", "folder_nonce", "voice_nonce"):
+        try:
+            session_state[key] = int(session_state.get(key) or 0) + 1
+        except (TypeError, ValueError):
+            session_state[key] = 1
+
+    session_state["_new_chat_notice_id"] = new_chat["id"]
+    return new_chat
+
+
 def _ensure_chat_identity_state(chat: dict) -> None:
     chat.setdefault("request_ids", [])
     chat.setdefault("request_records", [])
@@ -3090,32 +3149,32 @@ def _conversation_history_caption(item: dict) -> str:
     created_at = str(item.get("created_at") or "").strip()
     return f"{count} رسالة • {created_at}" if created_at else f"{count} رسالة"
 
-def _render_main_conversation_history() -> None:
-    """Render saved conversations in the main pane for easier mobile discovery."""
+def _render_sidebar_conversation_history() -> None:
+    """Render owner-scoped saved conversations inside the Streamlit sidebar."""
     history_items = [
-        item for item in list(st.session_state.get("chats", []))[:30]
+        item for item in list(st.session_state.get("chats", []))
         if isinstance(item, dict) and str(item.get("id") or "").strip()
     ]
+    # Blank drafts stay out of saved history and cannot push older saved
+    # conversations out of the visible 30-row window.
     saved_items = [
         item for item in history_items
         if isinstance(item.get("messages"), list) and item.get("messages")
-    ]
-    open_once = bool(st.session_state.pop("_open_main_conversation_history_once", False))
+    ][:30]
     with st.expander(
-        f"📚 سجل المحادثات المحفوظة — {len(saved_items)} محادثة",
-        expanded=open_once,
+        f"📚 سجل المحادثات — {len(saved_items)} محفوظة",
+        expanded=False,
     ):
-        st.caption("اختر عنوان المحادثة لفتح سجلها في الغرفة الرئيسية.")
+        st.caption("اختر محادثة محفوظة لفتحها. المحادثات الجديدة تبقى مستقلة.")
         if is_supabase_auth_active(st) and st.button(
             "🔄 إعادة تحميل المحادثات المحفوظة",
-            key="main_supabase_history_reload",
+            key="sidebar_supabase_history_reload",
             use_container_width=True,
         ):
             # Retry only the authenticated, owner-scoped GET path.
             st.session_state.pop("_supabase_history_loaded_subject", None)
             st.session_state.pop("_supabase_last_storage_error", None)
             _supabase_load_saved_chats()
-            st.session_state["_open_main_conversation_history_once"] = True
             st.rerun()
         if not saved_items:
             storage_error = str(st.session_state.get("_supabase_last_storage_error") or "").strip()
@@ -3129,7 +3188,7 @@ def _render_main_conversation_history() -> None:
             selected = conversation_id == str(st.session_state.get("active_chat_id") or "")
             if st.button(
                 f"{'🟢' if selected else '⚪'} {title}",
-                key=f"main_history_load_{conversation_id}",
+                key=f"sidebar_history_load_{conversation_id}",
                 use_container_width=True,
             ):
                 st.session_state.active_chat_id = conversation_id
@@ -3251,23 +3310,16 @@ def _render_sidebar(rounds: int, credentials: dict, model_candidates: dict) -> i
                 chat["title"] = rename.strip()[:80]
                 st.rerun()
         with c2:
-            if st.button("➕ جديد", use_container_width=True):
-                new_chat = _new_chat()
-                st.session_state.chats.insert(0, new_chat)
-                st.session_state.active_chat_id = new_chat["id"]
-                st.session_state.last_results = []
-                st.session_state.last_diagnostics = []
+            if st.button(
+                "➕ محادثة جديدة مستقلة",
+                key="create_independent_conversation",
+                use_container_width=True,
+                help="يفتح غرفة فارغة بمعرّفات محادثة وجلسة جديدة، مع الاحتفاظ بكل المحادثات السابقة.",
+            ):
+                _start_new_chat_session_state(st.session_state)
                 st.rerun()
+        _render_sidebar_conversation_history()
         st.divider()
-        if st.button(
-            "📚 فتح سجل المحادثات",
-            key="open_main_conversation_history",
-            use_container_width=True,
-        ):
-            # Open the history panel in the main page so it is discoverable on
-            # narrow mobile sidebars, rather than making a static heading look clickable.
-            st.session_state["_open_main_conversation_history_once"] = True
-            st.rerun()
         c3, c4 = st.columns(2)
         with c3:
             if st.button("🗑️ حذف الحالية", use_container_width=True):
@@ -6033,7 +6085,6 @@ def run_app() -> None:
     credentials = capture_credentials()
     model_candidates = capture_model_candidates()
     rounds = _render_sidebar(st.session_state.rounds, credentials, model_candidates)
-    _render_main_conversation_history()
     chat = _active_chat()
     # Reconcile only stale STARTED labels when the existing Request, exact
     # seat result keys, result count and finished timestamp prove completion.
@@ -6063,6 +6114,12 @@ def run_app() -> None:
     _render_main_room_shell()
     st.title("🏛️ AI Council — Shared Context Arena")
     st.caption(f"{DISPLAY_VERSION} • المستخدم (المقعد 6) + {len(get_seats())} مقاعد API • Gemini / Cloudflare Workers AI بعد تأكيد الخطة المجانية • Provider: {PROVIDER_VERSION}")
+    if (
+        str(st.session_state.get("_new_chat_notice_id") or "")
+        == str(chat.get("id") or "")
+        and not (chat.get("messages") or [])
+    ):
+        st.success("محادثة جديدة مستقلة وجاهزة. المحادثات السابقة محفوظة في السجل ولم يتم نقل رسائلها إلى هذه الغرفة.")
     runtime_commit, runtime_commit_source, runtime_commit_proven = _runtime_commit_summary(
         st.session_state.get("_hotfix16430_runtime_attestation", {})
     )
@@ -6401,6 +6458,8 @@ def run_app() -> None:
         user_message = {"role": "user", "id": user_message_id, "content": prompt, "attachments": public_metadata(attachments), "attachment_context": attachment_context, "request_id": request_id, "request_no": request_no, "created_at": _now()}
         user_message = register_message(chat, user_message)
         chat["messages"].append(user_message)
+        if str(st.session_state.get("_new_chat_notice_id") or "") == str(chat.get("id") or ""):
+            st.session_state.pop("_new_chat_notice_id", None)
         canonical_upsert_message(chat, {"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": user_message.get("created_at")}, st.session_state)
         persist_identity(chat, st.session_state, message={"message_id": user_message_id, "conversation_id": chat.get("conversation_id"), "session_id": chat.get("session_id"), "role": "user", "request_id": request_id, "created_at": user_message.get("created_at")})
         record_message(chat, user_message_id, "user", prompt, user_message.get("created_at"), request_id=request_id)
