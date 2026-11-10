@@ -3159,10 +3159,9 @@ def _render_sidebar_conversation_history() -> None:
         item for item in history_items
         if isinstance(item.get("messages"), list) and item.get("messages")
     ]
-    open_once = bool(st.session_state.pop("_open_main_conversation_history_once", False))
     with st.expander(
         f"📚 سجل المحادثات — {len(saved_items)} محفوظة",
-        expanded=open_once,
+        expanded=False,
     ):
         st.caption("اختر محادثة محفوظة لفتحها. المحادثات الجديدة تبقى مستقلة.")
         if is_supabase_auth_active(st) and st.button(
@@ -3174,7 +3173,6 @@ def _render_sidebar_conversation_history() -> None:
             st.session_state.pop("_supabase_history_loaded_subject", None)
             st.session_state.pop("_supabase_last_storage_error", None)
             _supabase_load_saved_chats()
-            st.session_state["_open_main_conversation_history_once"] = True
             st.rerun()
         if not saved_items:
             storage_error = str(st.session_state.get("_supabase_last_storage_error") or "").strip()
