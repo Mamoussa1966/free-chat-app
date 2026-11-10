@@ -52,10 +52,10 @@ begin
             end if;
 
             v_old_state := pg_catalog.upper(
-                pg_catalog.btrim(pg_catalog.coalesce(v_old_row ->> v_spec.state_field, ''))
+                pg_catalog.btrim(coalesce(v_old_row ->> v_spec.state_field, ''))
             );
             v_new_state := pg_catalog.upper(
-                pg_catalog.btrim(pg_catalog.coalesce(v_new_row ->> v_spec.state_field, ''))
+                pg_catalog.btrim(coalesce(v_new_row ->> v_spec.state_field, ''))
             );
 
             if v_old_state = any (array[
