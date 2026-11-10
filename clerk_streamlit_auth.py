@@ -522,6 +522,24 @@ export default function(component) {
   let lastToken = "";
   let busy = false;
 
+  // Keep sign-up/sign-in navigation inside this isolated Streamlit test app.
+  // Clerk's default Account Portal link is external and may not open in embedded browsers.
+  const FLOW_PARAM = "clerk_pilot_flow";
+  const initialUrl = new URL(window.location.href);
+  const initialMode = initialUrl.searchParams.get(FLOW_PARAM) === "sign-up"
+    ? "sign-up" : "sign-in";
+  initialUrl.searchParams.delete(FLOW_PARAM);
+  const appReturnUrl = initialUrl.toString();
+  if (new URL(window.location.href).searchParams.has(FLOW_PARAM)
+      && window.history && typeof window.history.replaceState === "function") {
+    window.history.replaceState(window.history.state, "", appReturnUrl);
+  }
+  const flowUrl = (mode) => {
+    const target = new URL(appReturnUrl);
+    target.searchParams.set(FLOW_PARAM, mode);
+    return target.toString();
+  };
+
   const setStatus = (message) => {
     if (statusNode) statusNode.textContent = message;
   };
@@ -568,25 +586,46 @@ export default function(component) {
     return window.__aiCouncilClerkScriptPromises[id];
   }
 
-  function mountSignedOut() {
+  function mountSignedOut(mode = "sign-in") {
     if (!clerk || disposed) return;
     try { clerk.unmountUserButton(userButtonNode); } catch (_) {}
+    try { clerk.unmountSignIn(signInNode); } catch (_) {}
+    try { clerk.unmountSignUp(signInNode); } catch (_) {}
     if (userButtonNode) userButtonNode.dataset.mounted = "";
+    if (signInNode) {
+      signInNode.dataset.mounted = "";
+      signInNode.dataset.mode = "";
+      signInNode.hidden = false;
+    }
     if (userNode) userNode.hidden = true;
-    if (signInNode) signInNode.hidden = false;
-    if (signInNode && !signInNode.dataset.mounted) {
+
+    const selectedMode = mode === "sign-up" ? "sign-up" : "sign-in";
+    if (signInNode) {
       signInNode.dataset.mounted = "true";
+      signInNode.dataset.mode = selectedMode;
       try {
-        clerk.mountSignIn(signInNode, {
-          fallbackRedirectUrl: window.location.href,
-          signUpFallbackRedirectUrl: window.location.href
-        });
+        if (selectedMode === "sign-up") {
+          clerk.mountSignUp(signInNode, {
+            signInUrl: flowUrl("sign-in"),
+            fallbackRedirectUrl: appReturnUrl,
+            signInFallbackRedirectUrl: appReturnUrl
+          });
+        } else {
+          clerk.mountSignIn(signInNode, {
+            signUpUrl: flowUrl("sign-up"),
+            fallbackRedirectUrl: appReturnUrl,
+            signUpFallbackRedirectUrl: appReturnUrl
+          });
+        }
       } catch (_) {
         signInNode.dataset.mounted = "";
-        setStatus("تعذر عرض نموذج الدخول. أعد تحميل الصفحة.");
+        signInNode.dataset.mode = "";
+        setStatus("تعذر عرض نموذج المصادقة. أعد تحميل الصفحة.");
       }
     }
-    setStatus("سجّل الدخول أو أنشئ حساب اختبار من خلال Clerk.");
+    setStatus(selectedMode === "sign-up"
+      ? "أنشئ حساب اختبار جديدًا باستخدام البريد الإلكتروني."
+      : "سجّل الدخول أو أنشئ حساب اختبار من خلال Clerk.");
     setBackendState("signed_out", "", "");
   }
 
@@ -612,7 +651,9 @@ export default function(component) {
       if (signInNode) signInNode.hidden = true;
       if (signInNode && signInNode.dataset.mounted) {
         try { clerk.unmountSignIn(signInNode); } catch (_) {}
+        try { clerk.unmountSignUp(signInNode); } catch (_) {}
         signInNode.dataset.mounted = "";
+        signInNode.dataset.mode = "";
       }
       if (userButtonNode && !userButtonNode.dataset.mounted) {
         userButtonNode.dataset.mounted = "true";
@@ -684,7 +725,7 @@ export default function(component) {
         if (session === undefined) return;
         if (session === null) {
           lastToken = "";
-          mountSignedOut();
+          mountSignedOut("sign-in");
           return;
         }
         publishSession(session, user);
@@ -693,7 +734,7 @@ export default function(component) {
       if (clerk.session) {
         await mountAuthenticated();
       } else {
-        mountSignedOut();
+        mountSignedOut(initialMode);
       }
     } catch (_) {
       setStatus("تعذر تحميل Clerk أو الاتصال بخدمة المصادقة. تحقق من اتصال المتصفح وإعدادات Clerk.");
