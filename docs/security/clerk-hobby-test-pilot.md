@@ -22,30 +22,28 @@ The existing `public.council_conversations` table is not directly compatible wit
 
 Do not cast, truncate, hash, or synthesize UUIDs from Clerk subjects. Do not alter the existing conversation table, its foreign key, triggers, RLS policies, or the Cloudflare admin operator table as part of this pilot.
 
-## Applied isolated test migration
+## Applied isolated test migrations
 
-The test project has the migration:
+The test project has two dedicated migrations:
 
-`20261110123054_clerk_auth_pilot_isolated_rls`
+1. `20261110123054_clerk_auth_pilot_isolated_rls`
+   `supabase/migrations/20261110123054_clerk_auth_pilot_isolated_rls.sql`
+   Creates only `public.clerk_auth_pilot_records`, an isolated table whose owner subject is text. It enables RLS, adds a **restrictive** issuer policy pinned to exactly `https://dear-hermit-1240.clerk.accounts.dev`, and per-operation owner policies comparing `owner_subject` with the JWT `sub`.
+2. `20261110125010_clerk_auth_pilot_restrict_table_grants`
+   `supabase/migrations/20261110124800_clerk_auth_pilot_restrict_table_grants.sql`
+   Revokes inherited/default `PUBLIC` and `anon` table privileges, then grants CRUD only to `authenticated`.
 
-Repository migration file:
-`supabase/migrations/20261110123054_clerk_auth_pilot_isolated_rls.sql`
-
-It creates only `public.clerk_auth_pilot_records`, a separate, currently empty test table. The table stores the Clerk `sub` claim as text. Because this pilot pins a single issuer, the issuer is enforced as a fixed literal in a **restrictive** RLS policy rather than stored redundantly per row.
-
-The migration:
-- Enables RLS on the test table.
-- Grants table CRUD privileges only to the `authenticated` database role.
-- Requires `auth.jwt()->>'iss'` to equal exactly `https://dear-hermit-1240.clerk.accounts.dev` through a restrictive `FOR ALL` policy.
-- Requires each operation's permissive policy to match `owner_subject` to the token's `sub`.
-- Does not modify `public.council_conversations`, `private_cloudflare.worker_admin_operators`, Supabase Auth users, or any production project.
-
-The migration is applied and recorded in the test project's migration history. Its SQL is also tracked in this PR branch for review/reproducibility. No test rows have been inserted into the hosted test project.
+Both migrations are applied and recorded in the hosted test project's migration history. Read-only verification confirms:
+- RLS is enabled.
+- `anon` has no SELECT privilege.
+- `authenticated` has the intended SELECT/INSERT/UPDATE/DELETE privileges.
+- The exact restrictive issuer policy and four owner policies exist.
+- The pilot table contains zero rows.
+- `public.council_conversations`, `private_cloudflare.worker_admin_operators`, Supabase Auth users, and all production resources remain unchanged.
 
 ## Database RLS test coverage
 
 Added `supabase/tests/clerk_auth_pilot_rls.test.sql` to the local Supabase pgTAP workflow. It verifies:
-
 - RLS is enabled and `anon` lacks SELECT privilege.
 - Clerk issuer + subject A can insert/read its own record.
 - Clerk user B cannot read, modify, delete, or spoof ownership of A's record, but can insert/read its own record.
@@ -53,12 +51,13 @@ Added `supabase/tests/clerk_auth_pilot_rls.test.sql` to the local Supabase pgTAP
 - A token with a wrong issuer cannot read or insert.
 - User A's original data remains unchanged after B's attempted modification/deletion.
 
-The same workflow applies versioned migrations in a disposable local Supabase stack and runs `supabase test db --local`. These are local database JWT-claim tests, not proof of a real browser sign-in or a live Clerk session token. The live external-token acceptance tests below remain required.
+The first run exposed three test expectation issues: the table inherited a default `PUBLIC`/anon grant, and PostgreSQL's RLS error message includes the restrictive policy name. Both were corrected with the second migration and updated assertions. The **initial RLS test run failed (3 of 17)**; the corrected rerun on the latest branch is pending. Do not interpret the earlier run as a pass.
+
+The workflow applies versioned migrations in a disposable local Supabase stack and runs `supabase test db --local`. These are synthetic local JWT-claim tests, not proof of a real browser sign-in or a live Clerk session token. The live external-token acceptance tests below remain required.
 
 ## Security acceptance gates — still pending
 
 Before any app integration can be called safe, verify with real, short-lived session tokens:
-
 1. Clerk user A can insert, read, update, and delete only A's pilot rows.
 2. Clerk user B cannot read/update/delete A's rows or insert a row claiming A as owner.
 3. A native Supabase Auth JWT is denied read/insert/update/delete on the pilot table despite its `authenticated` role.
@@ -92,10 +91,9 @@ No AI provider requests are needed for this authentication pilot.
 - Clerk's Supabase integration shows `Enabled`.
 - Supabase Third-Party Auth shows Clerk as `Enabled` with issuer/domain `https://dear-hermit-1240.clerk.accounts.dev`.
 - Test project status is `ACTIVE_HEALTHY`.
-- Migration `20261110123054_clerk_auth_pilot_isolated_rls` is present in the test database migration history.
-- Read-only verification confirms the pilot table exists, RLS is enabled, the exact restrictive issuer policy and four owner policies exist, and authenticated CRUD privileges are present.
-- Pilot table row count is zero. Existing conversation table row count remains zero in this test project; its schema, FK, and four existing owner policies were not modified.
-- Existing Supabase Security Advisor warnings remain: the exposed `public.cloudflare_worker_admin_dispatch(...)` SECURITY DEFINER execute warning and the native Supabase Auth leaked-password-protection warning. Neither was modified by this pilot. Clerk's HIBP protection protects Clerk-managed passwords; it does not turn on HIBP for Supabase's native Auth endpoints.
+- Both pilot migrations are applied and present in test migration history.
+- Post-migration read-only verification confirms `anon_select=false`, authenticated CRUD grants are true, RLS is true, and pilot row count is zero.
+- The existing Supabase Security Advisor warnings remain: the exposed `public.cloudflare_worker_admin_dispatch(...)` SECURITY DEFINER execute warning and the native Supabase Auth leaked-password-protection warning. Neither was modified by this pilot. Clerk's HIBP protection protects Clerk-managed passwords; it does not turn on HIBP for the native Supabase Auth endpoints.
 - No real Clerk session token, native Supabase bypass attempt, two-account external-token test, or Streamlit Clerk sign-in has yet been executed.
 - No production schema, secrets, Auth configuration, Cloudflare Worker, deployment, or AI provider call was changed.
 
