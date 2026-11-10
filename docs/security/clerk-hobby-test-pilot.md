@@ -70,9 +70,19 @@ Implemented on the isolated branch:
 
 The Publishable Key is public configuration, not a secret. The test code deliberately contains only the test Publishable Key and test project Publishable Key. It contains no Clerk Secret Key, Supabase service-role key, Supabase JWT signing secret, or any production credential.
 
-## JWT verification dependency
+## JWT verification implementation
 
-The pilot adds `PyJWT[crypto]>=2.15.1,<3`. The minimum is intentionally set to a patched release because PyJWT versions through 2.14.0 were affected by an unauthenticated recursion denial-of-service issue in the pre-verification JWKS parsing path. Do not lower this minimum.
+The pilot deliberately uses the repository's existing `cryptography==50.0.2` dependency plus `requests`; it does not add or change `requirements.txt`. It implements the narrow RS256/JWKS verification path directly:
+
+- The JWKS URL is constructed from the pinned Clerk Development issuer. No `jku`, `x5u`, or other URL from the untrusted token is followed.
+- The token is size-bounded and split into exactly three compact-JWT segments. The header and payload are parsed as untrusted data; no claim is acted on until the RSA signature verifies.
+- Only `alg=RS256` and a non-empty bounded `kid` are accepted.
+- The matching JWK must be an RSA signing key with a modulus of at least 2048 bits.
+- The RSA signature is verified using PKCS#1 v1.5 with SHA-256.
+- The verified claims are then checked for the exact issuer, user/session ID shape, expiry, not-before and issued-at times, the expected `azp` origin, and `role=authenticated`.
+- The pinned issuer's JWK set is cached in process memory for five minutes and refreshed when a requested key ID is not in the cache.
+
+This keeps the dependency contract unchanged and ensures the application does not rely on a generic JWT parser's pre-verification behavior for untrusted tokens.
 
 ## Security acceptance gates — still pending
 
