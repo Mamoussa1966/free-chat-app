@@ -15,14 +15,15 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 import uuid
 
-import jwt
 import requests
-from jwt import PyJWKClient
-from jwt.exceptions import InvalidTokenError, PyJWKClientError
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from streamlit.components.v2 import component
 
 
@@ -45,8 +46,9 @@ MAX_RECORD_PAYLOAD_LENGTH = 2_000
 _RECORD_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DOMAIN_RE = re.compile(r"^[a-z0-9-]+\.clerk\.accounts\.dev$")
 
-_JWKS_CLIENTS: dict[str, PyJWKClient] = {}
+_JWKS_CACHE: dict[str, tuple[int, dict[str, RSAPublicKey]]] = {}
 _JWKS_LOCK = threading.RLock()
+_B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class ClerkPilotAuthError(RuntimeError):
@@ -171,18 +173,112 @@ def get_clerk_pilot_config(st: Any) -> ClerkPilotConfig:
     )
 
 
-def _jwks_client(issuer: str) -> PyJWKClient:
+def _decode_b64url(value: str, *, max_length: int) -> bytes:
+    if not isinstance(value, str) or not value or len(value) > max_length or not _B64URL_RE.fullmatch(value):
+        raise ClerkPilotAuthError("صيغة JWT غير صالحة.")
+    try:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except Exception:
+        raise ClerkPilotAuthError("تعذر فك ترميز JWT.") from None
+
+
+def _decode_jwt_json(segment: str, *, max_length: int) -> dict[str, Any]:
+    raw = _decode_b64url(segment, max_length=max_length)
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError, RecursionError, TypeError):
+        raise ClerkPilotAuthError("بنية JWT غير صالحة.") from None
+    if not isinstance(value, dict):
+        raise ClerkPilotAuthError("حقول JWT غير صالحة.")
+    return value
+
+
+def _fetch_jwks_document(issuer: str) -> dict[str, Any]:
+    """Fetch only the fixed Clerk issuer's public JWKS; never follow token URLs."""
+    try:
+        response = requests.get(
+            f"{issuer}/.well-known/jwks.json",
+            headers={"Accept": "application/json"},
+            timeout=5.0,
+        )
+    except requests.RequestException:
+        raise ClerkPilotAuthError("تعذر الاتصال بخدمة مفاتيح توقيع Clerk.") from None
+    if int(getattr(response, "status_code", 0) or 0) != 200:
+        raise ClerkPilotAuthError("خدمة مفاتيح توقيع Clerk أعادت استجابة غير صالحة.")
+    body = getattr(response, "text", None)
+    if not isinstance(body, str) or not body or len(body) > 131_072:
+        raise ClerkPilotAuthError("حجم مفاتيح توقيع Clerk غير صالح.")
+    try:
+        document = json.loads(body)
+    except (ValueError, TypeError, RecursionError):
+        raise ClerkPilotAuthError("استجابة مفاتيح توقيع Clerk ليست JSON صالحًا.") from None
+    if not isinstance(document, dict):
+        raise ClerkPilotAuthError("بنية مفاتيح توقيع Clerk غير صالحة.")
+    return document
+
+
+def _jwk_to_rsa_public_key(jwk: dict[str, Any]) -> RSAPublicKey:
+    if (
+        jwk.get("kty") != "RSA"
+        or jwk.get("use") not in (None, "sig")
+        or jwk.get("alg") not in (None, "RS256")
+        or not isinstance(jwk.get("n"), str)
+        or not isinstance(jwk.get("e"), str)
+    ):
+        raise ClerkPilotAuthError("نوع مفتاح توقيع Clerk غير مقبول.")
+    modulus_bytes = _decode_b64url(jwk["n"], max_length=4096)
+    exponent_bytes = _decode_b64url(jwk["e"], max_length=32)
+    modulus = int.from_bytes(modulus_bytes, "big")
+    exponent = int.from_bytes(exponent_bytes, "big")
+    try:
+        public_key = rsa.RSAPublicNumbers(exponent, modulus).public_key()
+    except (ValueError, TypeError):
+        raise ClerkPilotAuthError("مفتاح RSA المنشور من Clerk غير صالح.") from None
+    if public_key.key_size < 2048:
+        raise ClerkPilotAuthError("مفتاح توقيع Clerk أقصر من الحد الأمني المطلوب.")
+    return public_key
+
+
+def _rsa_signing_key(
+    issuer: str,
+    kid: str,
+    *,
+    jwks_fetcher: Callable[[str], dict[str, Any]] | None = None,
+    now: int | None = None,
+) -> RSAPublicKey:
+    """Return a cached RS256 signing key, refreshing once for rotation/unknown kid."""
+    current = int(time.time()) if now is None else int(now)
     with _JWKS_LOCK:
-        client = _JWKS_CLIENTS.get(issuer)
-        if client is None:
-            client = PyJWKClient(
-                f"{issuer}/.well-known/jwks.json",
-                cache_jwk_set=True,
-                lifespan=300,
-                timeout=5,
-            )
-            _JWKS_CLIENTS[issuer] = client
-        return client
+        cached = _JWKS_CACHE.get(issuer)
+        if cached and cached[0] > current and kid in cached[1]:
+            return cached[1][kid]
+
+        fetch = jwks_fetcher or _fetch_jwks_document
+        document = fetch(issuer)
+        raw_keys = document.get("keys")
+        if not isinstance(raw_keys, list) or not raw_keys or len(raw_keys) > 50:
+            raise ClerkPilotAuthError("قائمة مفاتيح Clerk فارغة أو غير صالحة.")
+
+        resolved: dict[str, RSAPublicKey] = {}
+        for item in raw_keys:
+            if not isinstance(item, dict):
+                continue
+            item_kid = item.get("kid")
+            if not isinstance(item_kid, str) or not item_kid or len(item_kid) > 128:
+                continue
+            if item_kid in resolved:
+                raise ClerkPilotAuthError("استجابة JWKS تحتوي على معرّف مفتاح مكرر.")
+            if (
+                item.get("kty") == "RSA"
+                and item.get("use") in (None, "sig")
+                and item.get("alg") in (None, "RS256")
+            ):
+                resolved[item_kid] = _jwk_to_rsa_public_key(item)
+
+        if kid not in resolved:
+            raise ClerkPilotAuthError("مفتاح توقيع جلسة Clerk غير منشور في JWKS المعتمد.")
+        _JWKS_CACHE[issuer] = (current + 300, resolved)
+        return resolved[kid]
 
 
 def verify_clerk_session_token(
@@ -190,14 +286,16 @@ def verify_clerk_session_token(
     *,
     issuer: str,
     authorized_parties: tuple[str, ...] | list[str],
-    jwks_client: Any | None = None,
+    jwks_fetcher: Callable[[str], dict[str, Any]] | None = None,
     leeway_seconds: int = 15,
     now: int | None = None,
 ) -> VerifiedClerkSession:
     """Verify an RS256 Clerk session JWT signature and all authorization claims.
 
-    The token is never decoded and trusted without signature verification.
-    The issuer is fixed by server configuration, not read from the token.
+    The JWT header and payload are parsed only to locate the fixed issuer's
+    public signing key and obtain claims. No claim is trusted until RS256
+    verification succeeds. The JWKS URL is constructed from server config and
+    is never read from the untrusted JWT header.
     """
     if not isinstance(token, str) or not token or len(token) > MAX_SESSION_TOKEN_LENGTH:
         raise ClerkPilotAuthError("جلسة Clerk غير موجودة أو تجاوزت الحجم المسموح.")
@@ -207,42 +305,46 @@ def verify_clerk_session_token(
     if not parties:
         raise ClerkPilotAuthError("لا توجد واجهة تطبيق معتمدة لهذه الجلسة.")
 
-    try:
-        header = jwt.get_unverified_header(token)
-    except InvalidTokenError:
-        raise ClerkPilotAuthError("رمز جلسة Clerk ليس JWT صالحًا.") from None
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ClerkPilotAuthError("رمز جلسة Clerk ليس JWT صالحًا.")
+    header = _decode_jwt_json(parts[0], max_length=2048)
     if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
-        raise ClerkPilotAuthError("خوارزمية أو مفتاح توقيع Clerk غير مقبول.")
+        raise ClerkPilotAuthError("خوارزمية أو معرّف مفتاح توقيع Clerk غير مقبول.")
+    kid = header["kid"]
+    if not kid or len(kid) > 128:
+        raise ClerkPilotAuthError("معرّف مفتاح توقيع Clerk غير صالح.")
 
-    client = jwks_client or _jwks_client(issuer)
+    claims = _decode_jwt_json(parts[1], max_length=8192)
+    signing_key = _rsa_signing_key(
+        issuer,
+        kid,
+        jwks_fetcher=jwks_fetcher,
+        now=now,
+    )
+    signature = _decode_b64url(parts[2], max_length=2048)
+    signed_message = f"{parts[0]}.{parts[1]}".encode("ascii")
     try:
-        signing_key = client.get_signing_key_from_jwt(token).key
-        claims = jwt.decode(
-            token,
-            signing_key,
-            algorithms=["RS256"],
-            issuer=issuer,
-            options={
-                "require": ["exp", "iat", "nbf", "iss", "sub", "sid", "azp", "role"],
-                "verify_aud": False,
-            },
-            leeway=max(0, min(int(leeway_seconds), 30)),
+        signing_key.verify(
+            signature,
+            signed_message,
+            padding.PKCS1v15(),
+            hashes.SHA256(),
         )
-    except (InvalidTokenError, PyJWKClientError, requests.RequestException, ValueError):
-        raise ClerkPilotAuthError(
-            "تعذر التحقق من توقيع جلسة Clerk أو صلاحيتها أو مُصدرها."
-        ) from None
-    except Exception:
-        raise ClerkPilotAuthError(
-            "خدمة مفاتيح التوقيع لدى Clerk غير متاحة حاليًا؛ تم رفض الجلسة احترازيًا."
-        ) from None
+    except (InvalidSignature, ValueError, TypeError):
+        raise ClerkPilotAuthError("توقيع جلسة Clerk غير صحيح.") from None
 
+    required = ("exp", "iat", "nbf", "iss", "sub", "sid", "azp", "role")
+    if any(name not in claims for name in required):
+        raise ClerkPilotAuthError("جلسة Clerk تفتقد حقول المصادقة الإلزامية.")
+    if claims.get("iss") != issuer:
+        raise ClerkPilotAuthError("مُصدر جلسة Clerk لا يطابق بيئة الاختبار.")
     subject = claims.get("sub")
     session_id = claims.get("sid")
     authorized_party = claims.get("azp")
     if not isinstance(subject, str) or not subject.startswith("user_") or len(subject) > 255:
         raise ClerkPilotAuthError("جلسة Clerk لا تحتوي على User ID صالح.")
-    if not isinstance(session_id, str) or not session_id.startswith("sess_"):
+    if not isinstance(session_id, str) or not session_id.startswith("sess_") or len(session_id) > 255:
         raise ClerkPilotAuthError("جلسة Clerk لا تحتوي على Session ID صالح.")
     if claims.get("role") != "authenticated":
         raise ClerkPilotAuthError(
@@ -252,12 +354,28 @@ def verify_clerk_session_token(
         raise ClerkPilotAuthError(
             "هذا النطاق غير مدرج ضمن Authorized Parties المسموح بها لتطبيق الاختبار."
         )
+    if claims.get("sts") == "pending":
+        raise ClerkPilotAuthError("جلسة Clerk ما زالت قيد التهيئة ولا يُسمح لها بفتح البيانات.")
 
-    issued_at = int(claims["iat"])
-    expires_at = int(claims["exp"])
+    numeric_claims: dict[str, int] = {}
+    for name in ("exp", "iat", "nbf"):
+        value = claims.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ClerkPilotAuthError(f"قيمة {name} في جلسة Clerk غير صالحة.")
+        numeric_claims[name] = int(value)
+
+    issued_at = numeric_claims["iat"]
+    expires_at = numeric_claims["exp"]
+    not_before = numeric_claims["nbf"]
     current = int(time.time()) if now is None else int(now)
-    if issued_at > current + 30 or expires_at <= current:
-        raise ClerkPilotAuthError("انتهت صلاحية جلسة Clerk أو أن وقت إصدارها غير صالح.")
+    leeway = max(0, min(int(leeway_seconds), 30))
+    if (
+        issued_at > current + 30
+        or not_before > current + leeway
+        or expires_at <= current - leeway
+        or expires_at <= issued_at
+    ):
+        raise ClerkPilotAuthError("انتهت صلاحية جلسة Clerk أو أن توقيتها غير صالح.")
 
     return VerifiedClerkSession(
         subject=subject,
