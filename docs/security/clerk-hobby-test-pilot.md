@@ -30,7 +30,7 @@ The test project has two dedicated migrations:
    `supabase/migrations/20261110123054_clerk_auth_pilot_isolated_rls.sql`
    Creates only `public.clerk_auth_pilot_records`, an isolated table whose owner subject is text. It enables RLS, adds a **restrictive** issuer policy pinned to exactly `https://dear-hermit-1240.clerk.accounts.dev`, and per-operation owner policies comparing `owner_subject` with the JWT `sub`.
 2. `20261110125010_clerk_auth_pilot_restrict_table_grants`
-   `supabase/migrations/20261110124800_clerk_auth_pilot_restrict_table_grants.sql`
+   `supabase/migrations/20261110125010_clerk_auth_pilot_restrict_table_grants.sql`
    Revokes inherited/default `PUBLIC` and `anon` table privileges, then grants CRUD only to `authenticated`.
 
 Both migrations are applied and recorded in the hosted test project's migration history. Read-only verification confirms:
@@ -54,6 +54,25 @@ Added `supabase/tests/clerk_auth_pilot_rls.test.sql` to the local Supabase pgTAP
 The first run exposed three test expectation issues: the table inherited a default `PUBLIC`/anon grant, and PostgreSQL's RLS error message includes the restrictive policy name. Both were corrected with the second migration and updated assertions. The **initial RLS test run failed (3 of 17)**; the corrected rerun on the latest branch is pending. Do not interpret the earlier run as a pass.
 
 The workflow applies versioned migrations in a disposable local Supabase stack and runs `supabase test db --local`. These are synthetic local JWT-claim tests, not proof of a real browser sign-in or a live Clerk session token. The live external-token acceptance tests below remain required.
+
+## Streamlit Clerk UI and server-side JWT verification
+
+Implemented on the isolated branch:
+
+- `clerk_streamlit_auth.py` registers a Streamlit Components v2 UI using ClerkJS 6 and Clerk UI 1 from the pinned Clerk Development Frontend API. The sign-in, sign-up, account button, and sign-out are rendered in the actual Streamlit page context; no Next.js runtime or `NEXT_PUBLIC_*` naming is used.
+- `pages/11_Clerk_Auth_Pilot.py` provides a separate test-only login and PostgREST validation page. It does not alter the main application's Supabase Auth gate or the Cloudflare Worker Admin page.
+- The public `pk_test_` Publishable Key and the Development domain are test-only defaults in the module; the public key can also be overridden through `CLERK_TEST_PUBLISHABLE_KEY`. No Clerk `sk_test_`/Secret Key is required.
+- The component obtains a short-lived Clerk session token and forwards it to the Streamlit server through the bidirectional Components v2 state channel. It does not copy tokens into a custom localStorage store, URLs, application logs, or conversation records. The server keeps the current token only in Streamlit server-side session state and re-verifies it on every page run; the browser SDK refreshes it while the page remains open.
+- The Python verifier fetches the public JWKS from `https://dear-hermit-1240.clerk.accounts.dev/.well-known/jwks.json`, caches the key set for five minutes, and verifies the RS256 signature before trusting any claims. It requires `iss`, `sub`, `sid`, `exp`, `iat`, `nbf`, `azp`, and `role`; pins `iss` to the configured Clerk Development issuer; requires `role=authenticated`; and requires `azp` to match the exact allow-listed Streamlit origin. Unknown signing keys, unsupported algorithms, wrong issuers/origins, missing claims, and expired tokens fail closed.
+- The authorized party defaults to `https://free-chat-app-qmqyxzh2oe2n3qwcvqvpdh.streamlit.app`. It can be overridden only through server-side `CLERK_TEST_AUTHORIZED_PARTIES` configuration, as a comma-separated list of HTTPS origins.
+- The page uses the verified Clerk token as the PostgREST Bearer token and the test project's publishable key. It can create/read/delete only the isolated pilot records owned by the verified Clerk subject, and provides an explicit negative test for owner spoofing.
+- The existing `SupabaseConversationRepository` remains UUID/Supabase-Auth-only. No attempt was made to coerce Clerk IDs into UUIDs or to redirect ordinary council conversation storage to the pilot table.
+
+The Publishable Key is public configuration, not a secret. The test code deliberately contains only the test Publishable Key and test project Publishable Key. It contains no Clerk Secret Key, Supabase service-role key, Supabase JWT signing secret, or any production credential.
+
+## JWT verification dependency
+
+The pilot adds `PyJWT[crypto]>=2.15.1,<3`. The minimum is intentionally set to a patched release because PyJWT versions through 2.14.0 were affected by an unauthenticated recursion denial-of-service issue in the pre-verification JWKS parsing path. Do not lower this minimum.
 
 ## Security acceptance gates — still pending
 
