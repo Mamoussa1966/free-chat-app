@@ -633,7 +633,9 @@ export default function(component) {
           clerk.mountSignIn(signInNode, {
             signUpUrl: flowUrl("sign-up"),
             fallbackRedirectUrl: appReturnUrl,
-            signUpFallbackRedirectUrl: appReturnUrl
+            signUpFallbackRedirectUrl: appReturnUrl,
+            withSignUp: true,
+            transferable: true
           });
         }
       } catch (_) {
@@ -735,7 +737,14 @@ export default function(component) {
       // The CDN script creates the Clerk singleton from data-clerk-publishable-key.
       // This follows Clerk's documented script-tag setup (not the npm constructor path).
       clerk = window.Clerk;
+      // Register both in-app routes on the Clerk instance itself. Clerk uses
+      // these global URLs when an OAuth attempt must transfer between sign-in
+      // and sign-up; component-level link props alone do not cover that flow.
       await clerk.load({
+        signInUrl: flowUrl("sign-in"),
+        signUpUrl: flowUrl("sign-up"),
+        signInFallbackRedirectUrl: appReturnUrl,
+        signUpFallbackRedirectUrl: appReturnUrl,
         ui: { ClerkUI: window.__internal_ClerkUICtor }
       });
       if (disposed) return;
