@@ -618,6 +618,8 @@ export default function(component) {
     return localFlow === "sign-up" ? "sign-up" : "sign-in";
   };
   const selectedInitialFlow = initialFlow();
+  // Keep the active auth route while Clerk emits intermediate signed-out states during sign-up.
+  let activeFlow = selectedInitialFlow;
   const appBaseUrl = (() => {
     const url = new URL(currentUrl);
     for (const name of callbackParams) url.searchParams.delete(name);
@@ -769,6 +771,7 @@ export default function(component) {
     if (userNode) userNode.hidden = true;
 
     const selectedMode = mode === "sign-up" ? "sign-up" : "sign-in";
+    activeFlow = selectedMode;
     if (signUpPanel) signUpPanel.hidden = selectedMode !== "sign-up";
     if (signInNode) signInNode.hidden = selectedMode === "sign-up";
 
@@ -1083,7 +1086,7 @@ export default function(component) {
         if (session === undefined) return;
         if (session === null) {
           lastToken = "";
-          mountSignedOut("sign-in");
+          mountSignedOut(activeFlow);
           return;
         }
         publishSession(session, user);
