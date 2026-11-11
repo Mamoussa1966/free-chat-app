@@ -321,9 +321,12 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'id="ai-council-clerk-signin-start"' in source
     assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
-    assert 'prepareSecondFactor({' in source
-    assert 'attemptSecondFactor({ strategy: "email_code", code })' in source
-    assert 'attemptFirstFactor({ strategy: "email_code", code })' in source
+    assert 'if (signIn?.status === "needs_client_trust"' in source
+    assert 'signIn.mfa.sendEmailCode()' in source
+    assert 'signIn.mfa.verifyEmailCode({ code })' in source
+    assert 'signIn.emailCode.sendCode({ emailAddressId: factor.emailAddressId })' in source
+    assert 'signIn.emailCode.verifyCode({ code })' in source
+    assert 'const result = await signIn.create({ identifier, password });' in source
     assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
     assert 'function mountCustomSignIn()' in source
     assert 'لم نطلب إرسال رمز جديد.' in source
@@ -373,9 +376,12 @@ def test_clerk_email_password_sign_in_has_an_explicit_code_verification_step():
     assert 'autocomplete="one-time-code"' in source
     assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
-    assert 'prepareSecondFactor({' in source
-    assert 'attemptSecondFactor({ strategy: "email_code", code })' in source
-    assert 'attemptFirstFactor({ strategy: "email_code", code })' in source
+    assert 'if (signIn?.status === "needs_client_trust"' in source
+    assert 'signIn.mfa.sendEmailCode()' in source
+    assert 'signIn.mfa.verifyEmailCode({ code })' in source
+    assert 'signIn.emailCode.sendCode({ emailAddressId: factor.emailAddressId })' in source
+    assert 'signIn.emailCode.verifyCode({ code })' in source
+    assert 'const result = await signIn.create({ identifier, password });' in source
     assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
     assert 'signInStartForm?.addEventListener("submit", handleSignInStart)' in source
     assert 'signInVerifyForm?.addEventListener("submit", handleSignInVerify)' in source
@@ -386,6 +392,7 @@ def test_pending_clerk_sign_in_verification_is_resumed_without_resending_code():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert 'pending?.status === "needs_client_trust"' in source
     assert 'pending?.status === "needs_second_factor"' in source
     assert 'pending?.status === "needs_first_factor"' in source
     assert 'يوجد طلب تحقق لتسجيل الدخول. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد.' in source
