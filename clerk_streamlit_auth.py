@@ -859,9 +859,11 @@ export default function(component) {
   async function inspectSupportedSignInAlternatives(signIn, identifier) {
     try {
       await signIn.reset();
-      const result = await signIn.create({ identifier });
-      if (result?.error) return { emailCode: false, google: false };
-      return supportedSignInAlternatives(signIn);
+      const signInAttempt = await signIn.create({ identifier });
+      if (signInAttempt?.error) return { emailCode: false, google: false };
+      // ClerkJS Legacy returns supportedFirstFactors on the SignIn attempt
+      // returned by create(), not necessarily on the client resource object.
+      return supportedSignInAlternatives(signInAttempt);
     } catch (_) {
       return { emailCode: false, google: false };
     }
