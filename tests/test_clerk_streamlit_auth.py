@@ -317,7 +317,15 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
     assert 'signUpUrl: flowUrl("sign-up")' in source
     assert 'signInUrl: flowUrl("sign-in")' in source
-    assert 'clerk.mountSignIn(signInNode' in source
+    assert 'id="ai-council-clerk-signin-code"' in source
+    assert 'id="ai-council-clerk-signin-start"' in source
+    assert 'signIn.create({ identifier, password })' in source
+    assert 'prepareSecondFactor({' in source
+    assert 'attemptSecondFactor({ strategy: "email_code", code })' in source
+    assert 'attemptFirstFactor({ strategy: "email_code", code })' in source
+    assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
+    assert 'function mountCustomSignIn()' in source
+    assert 'لم نطلب إرسال رمز جديد.' in source
     assert 'signInUrl: flowUrl("sign-in")' in source
     assert 'signUpUrl: flowUrl("sign-up")' in source
     assert 'withSignUp: true' in source
@@ -352,6 +360,35 @@ def test_clerk_email_sign_up_has_an_explicit_email_code_input_and_verify_button(
     assert 'attemptEmailAddressVerification({ code })' in source
     assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
     assert 'if (signUpPanel) signUpPanel.hidden = true;' in source
+
+
+
+
+def test_clerk_email_password_sign_in_has_an_explicit_code_verification_step():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert 'id="ai-council-clerk-signin-email"' in source
+    assert 'id="ai-council-clerk-signin-password"' in source
+    assert 'id="ai-council-clerk-signin-code"' in source
+    assert 'autocomplete="one-time-code"' in source
+    assert 'signIn.create({ identifier, password })' in source
+    assert 'prepareSecondFactor({' in source
+    assert 'attemptSecondFactor({ strategy: "email_code", code })' in source
+    assert 'attemptFirstFactor({ strategy: "email_code", code })' in source
+    assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
+    assert 'signInStartForm?.addEventListener("submit", handleSignInStart)' in source
+    assert 'signInVerifyForm?.addEventListener("submit", handleSignInVerify)' in source
+    assert 'clerk.mountSignIn(signInNode' not in source
+
+
+def test_pending_clerk_sign_in_verification_is_resumed_without_resending_code():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert 'pending?.status === "needs_second_factor"' in source
+    assert 'pending?.status === "needs_first_factor"' in source
+    assert 'يوجد طلب تحقق لتسجيل الدخول. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد.' in source
 
 
 def test_clerk_sign_up_resumes_pending_email_verification_without_automatic_resend():
