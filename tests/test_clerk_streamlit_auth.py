@@ -356,7 +356,7 @@ def test_clerk_sign_up_resumes_pending_email_verification_without_automatic_rese
     source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
     assert 'pending?.status === "missing_requirements"' in source
     assert 'pending.unverifiedFields.includes("emailAddress")' in source
-    assert 'showSignUpVerification(pending.emailAddress' in source
+    assert 'showSignUpVerification(\n        pending.emailAddress,' in source
     assert 'تم استرجاع طلب التسجيل غير المكتمل من جلسة Clerk الحالية.' in source
     assert 'أدخل أحدث رمز وصلك؛ لن ننشئ حسابًا جديدًا.' in source
 
