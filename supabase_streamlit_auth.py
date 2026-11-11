@@ -644,11 +644,18 @@ def ensure_supabase_auth(st: Any) -> bool | None:
     # Mount the legacy localStorage bridge only after the v2 page-level
     # callback listener has confirmed that it inspected the current URL.
     browser_result = _render_browser_session_bridge(st)
-    if cipher_status != "READY":
+    if cipher_status == "MISSING":
         st.warning(
-            "استعادة الدخول عند فتح اتصال جديد غير مفعّلة بعد. أضف سر "
-            "SUPABASE_SESSION_ENCRYPTION_KEY (مفتاح Fernet محفوظ في Streamlit Secrets) "
-            "لتمكين حفظ الجلسة المشفّر؛ تسجيل الدخول الحالي يظل متاحًا."
+            "استعادة الدخول عند فتح اتصال جديد غير مفعّلة: التطبيق لا يرى قيمة "
+            "SUPABASE_SESSION_ENCRYPTION_KEY في إعدادات التشغيل الحالية. "
+            "تحقق من حفظ السر في Secrets الخاصة بهذا التطبيق الاختباري تحديدًا."
+        )
+    elif cipher_status == "INVALID":
+        st.warning(
+            "استعادة الدخول عند فتح اتصال جديد غير مفعّلة: تم العثور على "
+            "SUPABASE_SESSION_ENCRYPTION_KEY لكن قيمة Fernet غير صالحة. "
+            "لا ترسل المفتاح هنا؛ أنشئ مفتاح Fernet جديدًا محليًا وألصقه كاملًا "
+            "في Secrets الخاصة بتطبيق الاختبار."
         )
     elif isinstance(browser_result, dict) and browser_result.get("status") == "unavailable":
         st.warning(
