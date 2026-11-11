@@ -626,7 +626,7 @@ export default function(component) {
   let busy = false;
   let signUpBusy = false;
   let signInBusy = false;
-  let signInVerificationStage = "second_factor";
+  let signInVerificationStage = "client_trust";
 
   // Keep Clerk sign-in/sign-up inside this Streamlit page. Preserve the
   // page path and existing query parameters so OAuth returns to this pilot
@@ -835,7 +835,8 @@ export default function(component) {
   }
 
   function showSignInVerification(email, stage, message) {
-    signInVerificationStage = stage === "first_factor" ? "first_factor" : "second_factor";
+    const supportedStages = ["first_factor", "second_factor", "client_trust"];
+    signInVerificationStage = supportedStages.includes(stage) ? stage : "client_trust";
     if (signInNode) signInNode.hidden = false;
     if (signInStartForm) signInStartForm.hidden = true;
     if (signInVerifyForm) signInVerifyForm.hidden = false;
@@ -859,16 +860,25 @@ export default function(component) {
     if (code === "form_identifier_not_found") {
       return "لم يعثر Clerk على حساب بهذا البريد الإلكتروني في بيئة الاختبار.";
     }
+    if (code === "strategy_for_user_invalid") {
+      return "Clerk رفض طريقة التحقق المطلوبة لهذا الحساب. أوقفنا المحاولة دون طلب رمز إضافي؛ يلزم تصحيح مسار التحقق في التطبيق.";
+    }
     if (code) return "لم يكتمل تسجيل الدخول. رمز الخطأ: " + code;
     return "لم يكتمل تسجيل الدخول. تحقق من الاتصال ولا تكرر المحاولة تلقائيًا.";
   }
 
-  async function finalizeSignInAttempt(attempt) {
-    if (attempt?.status !== "complete" || !attempt.createdSessionId) {
-      showSignInMessage("لم تكتمل المصادقة بعد. حالة Clerk: " + String(attempt?.status || "غير معروفة"));
+  async function finalizeSignInAttempt(signIn) {
+    if (signIn?.status !== "complete" || !signIn.createdSessionId) {
+      showSignInMessage("لم تكتمل المصادقة بعد. حالة Clerk: " + String(signIn?.status || "غير معروفة"));
       return false;
     }
-    await clerk.setActive({ session: attempt.createdSessionId });
+    if (typeof signIn.finalize === "function") {
+      const result = await signIn.finalize();
+      if (result?.error) throw result.error;
+      return true;
+    }
+    // Compatibility fallback for ClerkJS resources that expose only setActive.
+    await clerk.setActive({ session: signIn.createdSessionId });
     return true;
   }
 
@@ -878,59 +888,76 @@ export default function(component) {
       : null;
   }
 
-  async function prepareSignInCode(attempt) {
-    if (attempt?.status === "complete") {
-      await finalizeSignInAttempt(attempt);
+  async function prepareSignInCode(signIn) {
+    if (signIn?.status === "complete") {
+      await finalizeSignInAttempt(signIn);
       return;
     }
 
-    if (attempt?.status === "needs_second_factor") {
-      const factor = emailCodeFactor(attempt.supportedSecondFactors);
+    if (signIn?.status === "needs_client_trust"
+      || signIn?.status === "needs_second_factor") {
+      const factor = emailCodeFactor(signIn.supportedSecondFactors);
       if (!factor) {
-        showSignInMessage("الحساب يطلب عامل تحقق إضافيًا غير مدعوم حاليًا في هذه الواجهة. لا تكرر المحاولة.");
+        showSignInMessage("Clerk يطلب عامل تحقق إضافيًا، لكن البريد الإلكتروني ليس من الوسائل المتاحة لهذا الحساب. لا تكرر المحاولة.");
         return;
       }
-      await currentSignInAttempt().prepareSecondFactor({
-        strategy: "email_code",
-        emailAddressId: factor.emailAddressId
-      });
+      if (typeof signIn.mfa?.sendEmailCode !== "function") {
+        showSignInMessage("واجهة Clerk الحالية لا تعرض وظيفة إرسال رمز Device Trust المطلوبة. لم نطلب رمزًا بطريقة بديلة.");
+        return;
+      }
+      const result = await signIn.mfa.sendEmailCode();
+      if (result?.error) throw result.error;
+      const stage = signIn.status === "needs_client_trust" ? "client_trust" : "second_factor";
       showSignInVerification(
-        signInEmailInput?.value || attempt.identifier,
-        "second_factor",
-        "أرسل Clerk رمز تحقق لتأكيد تسجيل الدخول من هذا الجهاز. أدخل أحدث رمز."
+        signIn.identifier || signInEmailInput?.value,
+        stage,
+        stage === "client_trust"
+          ? "أرسل Clerk رمز Device Trust إلى البريد المرتبط بالحساب. أدخل أحدث رمز عند وصوله."
+          : "أرسل Clerk رمز العامل الثاني إلى البريد المرتبط بالحساب. أدخل أحدث رمز عند وصوله."
       );
       return;
     }
 
-    if (attempt?.status === "needs_first_factor") {
-      const factor = emailCodeFactor(attempt.supportedFirstFactors);
+    if (signIn?.status === "needs_first_factor") {
+      const factor = emailCodeFactor(signIn.supportedFirstFactors);
       if (!factor) {
         showSignInMessage("لم يُرجع Clerk وسيلة تحقق أولى بالبريد الإلكتروني لهذا الحساب.");
         return;
       }
-      await currentSignInAttempt().prepareFirstFactor({
-        strategy: "email_code",
-        emailAddressId: factor.emailAddressId
-      });
+      if (typeof signIn.emailCode?.sendCode !== "function") {
+        showSignInMessage("واجهة Clerk الحالية لا تعرض وظيفة إرسال رمز البريد للمرحلة الأولى.");
+        return;
+      }
+      const result = await signIn.emailCode.sendCode({ emailAddressId: factor.emailAddressId });
+      if (result?.error) throw result.error;
       showSignInVerification(
-        signInEmailInput?.value || attempt.identifier,
+        signIn.identifier || signInEmailInput?.value,
         "first_factor",
-        "أرسل Clerk رمز تحقق بالبريد الإلكتروني لإكمال تسجيل الدخول. أدخل أحدث رمز."
+        "أرسل Clerk رمز التحقق الأول إلى البريد المرتبط بالحساب. أدخل أحدث رمز عند وصوله."
       );
       return;
     }
 
-    showSignInMessage("لم يكتمل تسجيل الدخول. حالة Clerk: " + String(attempt?.status || "غير معروفة"));
+    showSignInMessage("لم يكتمل تسجيل الدخول. حالة Clerk: " + String(signIn?.status || "غير معروفة"));
   }
 
   function mountCustomSignIn() {
     const pending = currentSignInAttempt();
+    if (pending?.status === "needs_client_trust"
+      && emailCodeFactor(pending.supportedSecondFactors)) {
+      showSignInVerification(
+        pending.identifier || signInEmailInput?.value,
+        "client_trust",
+        "يوجد طلب Device Trust معلّق. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد."
+      );
+      return;
+    }
     if (pending?.status === "needs_second_factor"
       && emailCodeFactor(pending.supportedSecondFactors)) {
       showSignInVerification(
         pending.identifier || signInEmailInput?.value,
         "second_factor",
-        "يوجد طلب تحقق لتسجيل الدخول. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد."
+        "يوجد طلب تحقق للعامل الثاني معلّق. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد."
       );
       return;
     }
@@ -965,8 +992,9 @@ export default function(component) {
     if (signInStartButton) signInStartButton.disabled = true;
     showSignInMessage("جارٍ التحقق من بيانات الحساب لدى Clerk…");
     try {
-      const attempt = await signIn.create({ identifier, password });
-      await prepareSignInCode(attempt);
+      const result = await signIn.create({ identifier, password });
+      if (result?.error) throw result.error;
+      await prepareSignInCode(signIn);
     } catch (error) {
       const message = signInErrorMessage(error);
       showSignInMessage(message);
@@ -995,14 +1023,24 @@ export default function(component) {
     if (signInVerifyButton) signInVerifyButton.disabled = true;
     showSignInMessage("جارٍ التحقق من الرمز لدى Clerk…");
     try {
-      const attempt = signInVerificationStage === "first_factor"
-        ? await signIn.attemptFirstFactor({ strategy: "email_code", code })
-        : await signIn.attemptSecondFactor({ strategy: "email_code", code });
-      if (attempt?.status === "complete") {
-        showSignInMessage("تم قبول رمز التحقق. جارٍ تفعيل جلسة الدخول…");
-        await finalizeSignInAttempt(attempt);
+      let result;
+      if (signInVerificationStage === "first_factor") {
+        if (typeof signIn.emailCode?.verifyCode !== "function") {
+          throw new Error("Clerk emailCode verification method is unavailable.");
+        }
+        result = await signIn.emailCode.verifyCode({ code });
       } else {
-        showSignInMessage("لم تكتمل المصادقة بعد. حالة Clerk: " + String(attempt?.status || "غير معروفة"));
+        if (typeof signIn.mfa?.verifyEmailCode !== "function") {
+          throw new Error("Clerk MFA email verification method is unavailable.");
+        }
+        result = await signIn.mfa.verifyEmailCode({ code });
+      }
+      if (result?.error) throw result.error;
+      if (signIn.status === "complete") {
+        showSignInMessage("تم قبول رمز التحقق. جارٍ تفعيل جلسة الدخول…");
+        await finalizeSignInAttempt(signIn);
+      } else {
+        showSignInMessage("لم تكتمل المصادقة بعد. حالة Clerk: " + String(signIn.status || "غير معروفة"));
       }
     } catch (error) {
       showSignInMessage(signInErrorMessage(error));
