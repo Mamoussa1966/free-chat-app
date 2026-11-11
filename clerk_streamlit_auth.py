@@ -414,6 +414,26 @@ _CLERK_COMPONENT_HTML = """
   </div>
   <div id="ai-council-clerk-status" class="clerk-pilot-status">جارٍ تهيئة Clerk…</div>
   <div id="ai-council-clerk-signin" class="clerk-pilot-signin"></div>
+  <section id="ai-council-clerk-signup" class="clerk-pilot-signup" hidden aria-live="polite">
+    <form id="ai-council-clerk-signup-start" novalidate>
+      <h4>إنشاء حساب بالبريد الإلكتروني</h4>
+      <label for="ai-council-clerk-signup-email">البريد الإلكتروني</label>
+      <input id="ai-council-clerk-signup-email" type="email" autocomplete="email" required />
+      <label for="ai-council-clerk-signup-password">كلمة المرور</label>
+      <input id="ai-council-clerk-signup-password" type="password" autocomplete="new-password" required />
+      <button id="ai-council-clerk-signup-submit" type="submit">متابعة وإرسال رمز التحقق</button>
+    </form>
+    <form id="ai-council-clerk-signup-verify" novalidate hidden>
+      <h4>تحقق من بريدك الإلكتروني</h4>
+      <p id="ai-council-clerk-signup-email-hint"></p>
+      <label for="ai-council-clerk-signup-code">رمز التحقق المرسل إلى بريدك</label>
+      <input id="ai-council-clerk-signup-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required />
+      <button id="ai-council-clerk-signup-verify-submit" type="submit">تحقق وأكمل التسجيل</button>
+      <button id="ai-council-clerk-signup-resend" type="button" class="clerk-pilot-secondary">إعادة إرسال الرمز</button>
+      <button id="ai-council-clerk-signup-back" type="button" class="clerk-pilot-secondary">العودة لتسجيل الدخول</button>
+    </form>
+    <p id="ai-council-clerk-signup-message" role="status" aria-live="polite"></p>
+  </section>
   <div id="ai-council-clerk-user" class="clerk-pilot-user" hidden>
     <div id="ai-council-clerk-user-button"></div>
     <button id="ai-council-clerk-signout" type="button">تسجيل الخروج</button>
@@ -470,6 +490,47 @@ _CLERK_COMPONENT_CSS = """
   font-size: .86rem;
 }
 .clerk-pilot-signin { min-height: 80px; }
+.clerk-pilot-signup {
+  margin: .5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--st-border-color);
+  border-radius: 12px;
+  background: var(--st-background-color);
+  color: var(--st-text-color);
+}
+.clerk-pilot-signup h4 { margin: 0 0 .8rem; color: var(--st-text-color); }
+.clerk-pilot-signup label {
+  display: block;
+  margin: .7rem 0 .25rem;
+  font-size: .88rem;
+  color: var(--st-text-color);
+}
+.clerk-pilot-signup input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  padding: .55rem .7rem;
+  border: 1px solid var(--st-border-color);
+  border-radius: 8px;
+  background: var(--st-secondary-background-color);
+  color: var(--st-text-color);
+}
+.clerk-pilot-signup button {
+  margin: .75rem .4rem .2rem 0;
+  padding: .55rem .85rem;
+  border: 1px solid var(--st-primary-color);
+  border-radius: 8px;
+  background: var(--st-primary-color);
+  color: white;
+  cursor: pointer;
+}
+.clerk-pilot-signup button:disabled { opacity: .55; cursor: wait; }
+.clerk-pilot-signup button.clerk-pilot-secondary {
+  background: transparent;
+  color: var(--st-text-color);
+  border-color: var(--st-border-color);
+}
+#ai-council-clerk-signup-message { margin: .6rem 0 0; font-size: .88rem; }
 .clerk-pilot-user {
   display: flex;
   align-items: center;
@@ -509,6 +570,18 @@ export default function(component) {
     ? data.authorized_parties.map(String) : [];
   const statusNode = root.querySelector("#ai-council-clerk-status");
   const signInNode = root.querySelector("#ai-council-clerk-signin");
+  const signUpPanel = root.querySelector("#ai-council-clerk-signup");
+  const signUpStartForm = root.querySelector("#ai-council-clerk-signup-start");
+  const signUpVerifyForm = root.querySelector("#ai-council-clerk-signup-verify");
+  const signUpEmailInput = root.querySelector("#ai-council-clerk-signup-email");
+  const signUpPasswordInput = root.querySelector("#ai-council-clerk-signup-password");
+  const signUpCodeInput = root.querySelector("#ai-council-clerk-signup-code");
+  const signUpEmailHint = root.querySelector("#ai-council-clerk-signup-email-hint");
+  const signUpMessage = root.querySelector("#ai-council-clerk-signup-message");
+  const signUpStartButton = root.querySelector("#ai-council-clerk-signup-submit");
+  const signUpVerifyButton = root.querySelector("#ai-council-clerk-signup-verify-submit");
+  const signUpResendButton = root.querySelector("#ai-council-clerk-signup-resend");
+  const signUpBackButton = root.querySelector("#ai-council-clerk-signup-back");
   const userNode = root.querySelector("#ai-council-clerk-user");
   const userButtonNode = root.querySelector("#ai-council-clerk-user-button");
   const signOutButton = root.querySelector("#ai-council-clerk-signout");
@@ -519,6 +592,7 @@ export default function(component) {
   let refreshTimer = null;
   let lastToken = "";
   let busy = false;
+  let signUpBusy = false;
 
   // Keep Clerk sign-in/sign-up inside this Streamlit page. Preserve the
   // page path and existing query parameters so OAuth returns to this pilot
@@ -693,25 +767,22 @@ export default function(component) {
     if (userNode) userNode.hidden = true;
 
     const selectedMode = mode === "sign-up" ? "sign-up" : "sign-in";
-    if (signInNode) {
+    if (signUpPanel) signUpPanel.hidden = selectedMode !== "sign-up";
+    if (signInNode) signInNode.hidden = selectedMode === "sign-up";
+
+    if (selectedMode === "sign-up") {
+      mountCustomSignUp();
+    } else if (signInNode) {
       signInNode.dataset.mounted = "true";
       signInNode.dataset.mode = selectedMode;
       try {
-        if (selectedMode === "sign-up") {
-          clerk.mountSignUp(signInNode, {
-            signInUrl: flowUrl("sign-in"),
-            fallbackRedirectUrl: appReturnUrl,
-            signInFallbackRedirectUrl: appReturnUrl
-          });
-        } else {
-          clerk.mountSignIn(signInNode, {
-            signUpUrl: flowUrl("sign-up"),
-            fallbackRedirectUrl: appReturnUrl,
-            signUpFallbackRedirectUrl: appReturnUrl,
-            withSignUp: true,
-            transferable: true
-          });
-        }
+        clerk.mountSignIn(signInNode, {
+          signUpUrl: flowUrl("sign-up"),
+          fallbackRedirectUrl: appReturnUrl,
+          signUpFallbackRedirectUrl: appReturnUrl,
+          withSignUp: true,
+          transferable: true
+        });
       } catch (_) {
         signInNode.dataset.mounted = "";
         signInNode.dataset.mode = "";
@@ -722,6 +793,179 @@ export default function(component) {
       ? "أنشئ حساب اختبار جديدًا باستخدام البريد الإلكتروني."
       : "سجّل الدخول أو أنشئ حساب اختبار من خلال Clerk.");
     setBackendState("signed_out", "", "");
+  }
+
+  function currentSignUpAttempt() {
+    return clerk?.client?.signUp || null;
+  }
+
+  function showSignUpMessage(message) {
+    if (signUpMessage) signUpMessage.textContent = String(message || "");
+  }
+
+  function showSignUpVerification(email, message) {
+    if (signUpPanel) signUpPanel.hidden = false;
+    if (signInNode) signInNode.hidden = true;
+    if (signUpStartForm) signUpStartForm.hidden = true;
+    if (signUpVerifyForm) signUpVerifyForm.hidden = false;
+    if (signUpEmailHint) signUpEmailHint.textContent = "أُرسل رمز التحقق إلى: " + String(email || "");
+    if (signUpCodeInput) signUpCodeInput.focus();
+    showSignUpMessage(message || "أدخل أحدث رمز وصلك إلى بريدك الإلكتروني.");
+    setStatus("في انتظار إدخال رمز التحقق من البريد الإلكتروني.");
+  }
+
+  function showSignUpStart(message) {
+    if (signUpPanel) signUpPanel.hidden = false;
+    if (signInNode) signInNode.hidden = true;
+    if (signUpStartForm) signUpStartForm.hidden = false;
+    if (signUpVerifyForm) signUpVerifyForm.hidden = true;
+    showSignUpMessage(message || "");
+    setStatus("أنشئ حساب اختبار جديدًا باستخدام البريد الإلكتروني.");
+  }
+
+  function signUpErrorMessage(error) {
+    const first = Array.isArray(error?.errors) ? error.errors[0] : null;
+    const code = String(first?.code || error?.code || "");
+    if (code === "too_many_requests") {
+      return "Clerk يفرض تقييدًا مؤقتًا للمحاولات. أوقف المحاولات الآن ولا تطلب رمزًا جديدًا.";
+    }
+    if (code === "form_identifier_exists") {
+      return "هذا البريد مرتبط بحساب موجود بالفعل. استخدم شاشة تسجيل الدخول بدل إنشاء حساب جديد.";
+    }
+    if (code === "form_password_pwned") {
+      return "كلمة المرور مرفوضة لأنها ظهرت في بيانات كلمات مرور مخترقة. اختر كلمة مرور مختلفة.";
+    }
+    if (code) return "لم يكتمل طلب Clerk. رمز الخطأ: " + code;
+    return "لم يكتمل طلب التسجيل. تحقق من الاتصال وحاول لاحقًا دون تكرار المحاولة.";
+  }
+
+  async function finalizeSignUpAttempt(attempt) {
+    if (attempt?.status !== "complete" || !attempt.createdSessionId) {
+      showSignUpMessage("تم التحقق من البريد، لكن Clerk أبلغ أن هناك متطلبات أخرى لم تكتمل. لا تعِد التسجيل.");
+      return false;
+    }
+    await clerk.setActive({ session: attempt.createdSessionId });
+    return true;
+  }
+
+  async function handleSignUpStart(event) {
+    event.preventDefault();
+    if (disposed || signUpBusy) return;
+    const emailAddress = String(signUpEmailInput?.value || "").trim();
+    const password = String(signUpPasswordInput?.value || "");
+    if (!emailAddress || !password) {
+      showSignUpMessage("أدخل البريد الإلكتروني وكلمة المرور أولًا.");
+      return;
+    }
+    const signUp = currentSignUpAttempt();
+    if (!signUp || typeof signUp.create !== "function") {
+      showSignUpMessage("واجهة Clerk لم تجهز كائن التسجيل. أعد تحميل الصفحة مرة واحدة.");
+      return;
+    }
+
+    signUpBusy = true;
+    if (signUpStartButton) signUpStartButton.disabled = true;
+    showSignUpMessage("جارٍ إرسال طلب التسجيل إلى Clerk…");
+    try {
+      const attempt = await signUp.create({ emailAddress, password });
+      if (attempt?.status === "complete") {
+        await finalizeSignUpAttempt(attempt);
+        return;
+      }
+      const updatedSignUp = currentSignUpAttempt() || attempt;
+      await updatedSignUp.prepareEmailAddressVerification({ strategy: "email_code" });
+      showSignUpVerification(
+        updatedSignUp.emailAddress || emailAddress,
+        "أرسل Clerk رمز تحقق جديدًا. أدخل الرمز في الخانة أدناه."
+      );
+    } catch (error) {
+      const message = signUpErrorMessage(error);
+      showSignUpMessage(message);
+      setStatus(message);
+      const pending = currentSignUpAttempt();
+      if (pending?.status === "missing_requirements"
+        && Array.isArray(pending.unverifiedFields)
+        && pending.unverifiedFields.includes("emailAddress")) {
+        showSignUpVerification(
+          pending.emailAddress || emailAddress,
+          "وجدنا طلب تسجيل غير مكتمل لهذا البريد. أدخل أحدث رمز وصلك، أو استخدم إعادة الإرسال مرة واحدة."
+        );
+      }
+    } finally {
+      signUpBusy = false;
+      if (signUpStartButton) signUpStartButton.disabled = false;
+    }
+  }
+
+  async function handleSignUpVerify(event) {
+    event.preventDefault();
+    if (disposed || signUpBusy) return;
+    const code = String(signUpCodeInput?.value || "").trim();
+    if (!/^\d{4,12}$/.test(code)) {
+      showSignUpMessage("أدخل رمز التحقق الرقمي الذي وصلك إلى البريد الإلكتروني.");
+      return;
+    }
+    const signUp = currentSignUpAttempt();
+    if (!signUp || typeof signUp.attemptEmailAddressVerification !== "function") {
+      showSignUpMessage("لم يعثر Clerk على طلب التسجيل المعلّق في هذه الجلسة. لا تنشئ حسابًا جديدًا قبل مراجعة الحالة.");
+      return;
+    }
+
+    signUpBusy = true;
+    if (signUpVerifyButton) signUpVerifyButton.disabled = true;
+    showSignUpMessage("جارٍ التحقق من الرمز…");
+    try {
+      const attempt = await signUp.attemptEmailAddressVerification({ code });
+      if (attempt?.status === "complete") {
+        showSignUpMessage("تم التحقق من البريد. جارٍ تفعيل جلسة الحساب…");
+        await finalizeSignUpAttempt(attempt);
+      } else {
+        showSignUpMessage("الرمز قُبل جزئيًا لكن التسجيل لم يكتمل. حالة Clerk: " + String(attempt?.status || "غير معروفة"));
+      }
+    } catch (error) {
+      showSignUpMessage(signUpErrorMessage(error));
+    } finally {
+      signUpBusy = false;
+      if (signUpVerifyButton) signUpVerifyButton.disabled = false;
+    }
+  }
+
+  async function handleSignUpResend() {
+    if (disposed || signUpBusy) return;
+    const signUp = currentSignUpAttempt();
+    if (!signUp || typeof signUp.prepareEmailAddressVerification !== "function") {
+      showSignUpMessage("لا يوجد طلب تسجيل معلّق يمكن إعادة إرسال رمزه.");
+      return;
+    }
+    signUpBusy = true;
+    if (signUpResendButton) signUpResendButton.disabled = true;
+    showSignUpMessage("جارٍ طلب إعادة إرسال رمز تحقق واحد…");
+    try {
+      await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+      showSignUpMessage("أُعيد إرسال رمز التحقق. أدخل أحدث رمز وصلك.");
+    } catch (error) {
+      showSignUpMessage(signUpErrorMessage(error));
+    } finally {
+      signUpBusy = false;
+      if (signUpResendButton) signUpResendButton.disabled = false;
+    }
+  }
+
+  function mountCustomSignUp() {
+    const pending = currentSignUpAttempt();
+    const hasPendingEmail = pending?.status === "missing_requirements"
+      && typeof pending.emailAddress === "string"
+      && Array.isArray(pending.unverifiedFields)
+      && pending.unverifiedFields.includes("emailAddress");
+    if (hasPendingEmail) {
+      if (signUpEmailInput) signUpEmailInput.value = pending.emailAddress;
+      showSignUpVerification(
+        pending.emailAddress,
+        "تم استرجاع طلب التسجيل غير المكتمل من جلسة Clerk الحالية. استخدم أحدث رمز وصلك؛ لن ننشئ حسابًا جديدًا."
+      );
+    } else {
+      showSignUpStart("");
+    }
   }
 
   async function publishSession(session, user) {
@@ -875,6 +1119,13 @@ export default function(component) {
 
   root.addEventListener("click", handleFlowNavigation, true);
   signOutButton?.addEventListener("click", handleSignOut);
+  signUpStartForm?.addEventListener("submit", handleSignUpStart);
+  signUpVerifyForm?.addEventListener("submit", handleSignUpVerify);
+  signUpResendButton?.addEventListener("click", handleSignUpResend);
+  signUpBackButton?.addEventListener("click", () => {
+    window.history.pushState({}, "", flowUrl("sign-in"));
+    mountSignedOut("sign-in");
+  });
   initialize();
 
   return () => {
@@ -883,6 +1134,9 @@ export default function(component) {
     if (typeof unsubscribe === "function") unsubscribe();
     root.removeEventListener("click", handleFlowNavigation, true);
     signOutButton?.removeEventListener("click", handleSignOut);
+    signUpStartForm?.removeEventListener("submit", handleSignUpStart);
+    signUpVerifyForm?.removeEventListener("submit", handleSignUpVerify);
+    signUpResendButton?.removeEventListener("click", handleSignUpResend);
     try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignIn(signInNode); } catch (_) {}
     try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignUp(signInNode); } catch (_) {}
     try { if (clerk && userButtonNode?.dataset.mounted) clerk.unmountUserButton(userButtonNode); } catch (_) {}
