@@ -409,3 +409,13 @@ def test_repository_denial_probe_passes_only_on_401_or_403(signing_keys):
 
     repository._http = FakeHTTP()
     assert repository.probe_owner_spoof_denial() is True
+
+
+
+def test_signed_out_user_container_is_hidden_despite_flex_layout():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert ".clerk-pilot-user[hidden]" in source
+    assert "display: none !important;" in source
+    assert "if (userNode) userNode.hidden = true;" in source
