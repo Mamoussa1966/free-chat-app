@@ -322,7 +322,7 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
     assert 'if (signIn?.status === "needs_client_trust"' in source
-    assert 'signIn.prepareSecondFactor({' in source
+    assert 'currentSignInAttempt().prepareSecondFactor({' in source
     assert 'signIn.attemptSecondFactor({' in source
     assert 'signIn.prepareFirstFactor({' in source
     assert 'signIn.attemptFirstFactor({' in source
@@ -377,7 +377,7 @@ def test_clerk_email_password_sign_in_has_an_explicit_code_verification_step():
     assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
     assert 'if (signIn?.status === "needs_client_trust"' in source
-    assert 'signIn.prepareSecondFactor({' in source
+    assert 'currentSignInAttempt().prepareSecondFactor({' in source
     assert 'signIn.attemptSecondFactor({' in source
     assert 'signIn.prepareFirstFactor({' in source
     assert 'signIn.attemptFirstFactor({' in source
@@ -387,6 +387,11 @@ def test_clerk_email_password_sign_in_has_an_explicit_code_verification_step():
     assert 'signInEmailCodeButton?.addEventListener("click", handleSignInEmailCode)' in source
     assert 'signInGoogleButton?.addEventListener("click", handleSignInGoogle)' in source
     assert 'signIn.authenticateWithRedirect({' in source
+    assert 'signIn.password(' not in source
+    assert 'signIn.emailCode.' not in source
+    assert 'signIn.mfa.sendEmailCode' not in source
+    assert 'signIn.mfa.verifyEmailCode' not in source
+    assert 'signIn.sso(' not in source
     assert 'strategy: "oauth_google"' in source
     assert 'signIn.prepareFirstFactor({' in source
     assert 'signInVerifyForm?.addEventListener("submit", handleSignInVerify)' in source
