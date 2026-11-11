@@ -370,6 +370,8 @@ def test_clerk_sign_up_surfaces_rate_limit_and_existing_account_errors_without_r
     assert 'code === "form_identifier_exists"' in source
     assert 'Clerk يفرض تقييدًا مؤقتًا للمحاولات.' in source
     assert 'هذا البريد مرتبط بحساب موجود بالفعل.' in source
+    assert 'لدي حساب بالفعل — تسجيل الدخول' in source
+    assert 'signUpStartBackButton?.addEventListener("click", handleSignUpBack)' in source
 
 
 def test_repository_uses_verified_identity_and_clerk_bearer_token(signing_keys):
