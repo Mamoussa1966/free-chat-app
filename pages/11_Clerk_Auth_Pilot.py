@@ -60,6 +60,56 @@ except ClerkPilotAuthError as exc:
     st.error(str(exc))
     st.stop()
 
+diagnostics = st.session_state.get("_clerk_pilot_environment_diagnostics")
+if isinstance(diagnostics, dict):
+    st.divider()
+    st.subheader("تشخيص إعدادات Clerk الفعلية — قراءة فقط")
+    st.caption(
+        f"ClerkJS: {diagnostics.get('sdk_version') or 'غير متاح'} · "
+        f"Clerk UI: {diagnostics.get('ui_version') or 'غير متاح'} · "
+        f"Frontend API: {diagnostics.get('frontend_api') or 'غير متاح'}"
+    )
+    diag_left, diag_mid, diag_right = st.columns(3)
+    with diag_left:
+        st.metric(
+            "البريد الإلكتروني",
+            "مفعّل" if diagnostics.get("email_enabled") is True
+            else "معطّل" if diagnostics.get("email_enabled") is False
+            else "غير معروف",
+        )
+    with diag_mid:
+        st.metric(
+            "كلمة المرور",
+            "مفعّلة" if diagnostics.get("password_enabled") is True
+            else "معطّلة" if diagnostics.get("password_enabled") is False
+            else "غير معروفة",
+        )
+    with diag_right:
+        st.metric(
+            "رمز التحقق عند التسجيل",
+            "مفعّل" if diagnostics.get("email_verify_at_sign_up") is True
+            else "غير مفعّل" if diagnostics.get("email_verify_at_sign_up") is False
+            else "غير معروف",
+        )
+
+    st.caption(
+        "تطابق نطاق الواجهة: "
+        + ("نعم" if diagnostics.get("domain_matches") is True else "لا" if diagnostics.get("domain_matches") is False else "غير معروف")
+        + " · تطابق المفتاح الذي شغّل SDK مع الإعداد: "
+        + ("نعم" if diagnostics.get("publishable_key_matches") is True else "لا" if diagnostics.get("publishable_key_matches") is False else "غير معروف")
+        + " · طرق تحقق البريد: "
+        + ", ".join(diagnostics.get("email_verifications") or [])
+    )
+    if diagnostics.get("email_enabled") is False or diagnostics.get("password_enabled") is False:
+        st.error("إعداد البريد أو كلمة المرور معطّل فعليًا في بيئة Clerk التي استجاب لها SDK.")
+    elif diagnostics.get("email_enabled") is True and diagnostics.get("password_enabled") is True:
+        st.success("إعدادا البريد الإلكتروني وكلمة المرور مفعّلان في بيئة Clerk الفعلية.")
+    else:
+        st.warning(
+            "لم يتمكن SDK من إرجاع إعدادات البيئة كاملة. "
+            f"رمز التشخيص: {diagnostics.get('error_code') or diagnostics.get('status') or 'غير متاح'}"
+        )
+
 if verified is None:
     st.info(
         "سجّل الدخول من نافذة Clerk أعلاه. لن تظهر بيانات الاختبار حتى يتحقق "
