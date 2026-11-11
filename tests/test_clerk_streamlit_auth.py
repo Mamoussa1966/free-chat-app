@@ -395,7 +395,7 @@ def test_pending_clerk_sign_in_verification_is_resumed_without_resending_code():
     assert 'pending?.status === "needs_client_trust"' in source
     assert 'pending?.status === "needs_second_factor"' in source
     assert 'pending?.status === "needs_first_factor"' in source
-    assert 'يوجد طلب تحقق لتسجيل الدخول. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد.' in source
+    assert 'يوجد طلب Device Trust معلّق. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد.' in source
 
 
 def test_clerk_sign_up_resumes_pending_email_verification_without_automatic_resend():
