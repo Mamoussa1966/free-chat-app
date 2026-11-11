@@ -981,7 +981,7 @@ export default function(component) {
     event.preventDefault();
     if (disposed || signInBusy) return;
     const code = String(signInCodeInput?.value || "").trim();
-    if (!/^\\d{4,12}$/.test(code)) {
+    if (!/^\d{4,12}$/.test(code)) {
       showSignInMessage("أدخل رمز التحقق الرقمي الذي وصلك إلى البريد الإلكتروني.");
       return;
     }
