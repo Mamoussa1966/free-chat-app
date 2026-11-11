@@ -988,6 +988,7 @@ export default function(component) {
       }
       if (userNode) userNode.hidden = false;
       if (signInNode) signInNode.hidden = true;
+      if (signUpPanel) signUpPanel.hidden = true;
       if (signInNode && signInNode.dataset.mounted) {
         try { clerk.unmountSignIn(signInNode); } catch (_) {}
         try { clerk.unmountSignUp(signInNode); } catch (_) {}
