@@ -13,7 +13,7 @@ import clerk_streamlit_auth as auth
 
 
 ISSUER = "https://dear-hermit-1240.clerk.accounts.dev"
-AUTHORIZED_PARTY = "https://ai-council-clerk-pilot-test.streamlit.app"
+AUTHORIZED_PARTY = "https://free-chat-app-vrbyn5tesfyhhz5skphzn5.streamlit.app"
 USER_A = "user_test_A"
 SESSION_A = "sess_test_A"
 TEST_KID = "clerk-pilot-test-key"
@@ -129,20 +129,22 @@ def test_pilot_config_is_pinned_to_the_test_project_and_authorized_origin():
 
 
 
-def test_pilot_config_requires_separate_test_origin_and_rejects_production():
+def test_pilot_config_is_pinned_to_the_only_deployed_test_origin():
     class MissingOrigin:
         secrets = {}
 
-    with pytest.raises(auth.ClerkPilotAuthError, match="تطبيق الاختبار"):
-        auth.get_clerk_pilot_config(MissingOrigin())
+    config = auth.get_clerk_pilot_config(MissingOrigin())
+    assert config.authorized_parties == (auth.TEST_CLERK_AUTHORIZED_ORIGIN,)
 
-    class ProductionOrigin:
+    class MisconfiguredOrigin:
         secrets = {
-            "CLERK_TEST_AUTHORIZED_PARTIES": auth.PRODUCTION_STREAMLIT_ORIGIN,
+            "CLERK_TEST_AUTHORIZED_PARTIES": "https://wrong-origin.example",
         }
 
-    with pytest.raises(auth.ClerkPilotAuthError, match="عنوان تطبيق الإنتاج"):
-        auth.get_clerk_pilot_config(ProductionOrigin())
+    # Runtime secrets cannot widen or redirect the trusted origin.
+    assert auth.get_clerk_pilot_config(MisconfiguredOrigin()).authorized_parties == (
+        auth.TEST_CLERK_AUTHORIZED_ORIGIN,
+    )
 
 
 def test_pilot_config_rejects_wrong_clerk_instance():
