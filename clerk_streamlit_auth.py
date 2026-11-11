@@ -589,7 +589,7 @@ export default function(component) {
       // frontendApi fallback for older CDN builds.
       const frontendApi = String(clerk.domain || clerk.frontendApi || "")
         .toLowerCase()
-        .replace(/^https?:\\/\\//, "")
+        .replace(/^https?:\/\//, "")
         .split("/")[0];
 
       setStateValue("environment_status", environment ? "loaded" : "missing");
