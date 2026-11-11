@@ -266,6 +266,19 @@ def test_clerk_cdn_uses_documented_publishable_key_bootstrap_and_no_constructor(
     assert "window.__internal_ClerkUICtor" in source
 
 
+def test_environment_diagnostics_read_effective_sdk_snapshot_not_an_unauthenticated_fetch():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert "clerk.__internal_environment" in source
+    assert "attributes.email_address" in source
+    assert "attributes.password" in source
+    assert 'setStateValue("environment_email_enabled"' in source
+    assert 'setStateValue("environment_password_enabled"' in source
+    assert 'setStateValue("environment_domain_matches"' in source
+    assert "fetch(\"https://dear-hermit-1240.clerk.accounts.dev/v1/environment\"" not in source
+
+
 def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigation():
     from pathlib import Path
 
