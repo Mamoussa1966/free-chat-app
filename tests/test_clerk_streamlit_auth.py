@@ -527,3 +527,20 @@ def test_clerk_alternative_factors_are_read_from_the_signin_create_result():
     assert "const signInAttempt = await signIn.create({ identifier });" in function_source
     assert "return supportedSignInAlternatives(signInAttempt);" in function_source
     assert "return supportedSignInAlternatives(signIn);" not in function_source
+
+
+
+def test_pilot_owner_spoof_result_is_persisted_in_session_and_subject_bound():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "pages"
+        / "11_Clerk_Auth_Pilot.py"
+    ).read_text(encoding="utf-8")
+    assert 'OWNER_SPOOF_RESULT_STATE_KEY = "_clerk_pilot_owner_spoof_result"' in source
+    assert 'st.session_state[OWNER_SPOOF_RESULT_STATE_KEY]' in source
+    assert 'probe_result.get("subject") == verified.subject' in source
+    assert 'probe_result.get("status") == "pass"' in source
+    assert "تبقى آخر نتيجة ظاهرة عند إعادة تشغيل واجهة Streamlit" in source
+    assert "قد تختفي عند انتهاء جلسة المتصفح" in source
