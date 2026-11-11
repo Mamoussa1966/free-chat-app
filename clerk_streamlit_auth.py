@@ -551,12 +551,18 @@ export default function(component) {
     url.searchParams.set(FLOW_PARAM, mode);
     return url.toString();
   };
-  // Remove OAuth callback state once consumed so signing out or switching
-  // accounts cannot inherit a stale intent=signUp from a previous session.
-  if (typeof window.history?.replaceState === "function") {
+  // Keep Clerk Development's __clerk_db_jwt callback parameter intact until
+  // Clerk.load() has consumed it. Removing it before initialization can leave
+  // the development browser unauthenticated and prevent environment loading.
+  function cleanConsumedCallbackUrl() {
+    if (typeof window.history?.replaceState !== "function") return;
     const cleanUrl = new URL(appBaseUrl);
     cleanUrl.searchParams.set(FLOW_PARAM, selectedInitialFlow);
-    window.history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search);
+    window.history.replaceState(
+      window.history.state || {},
+      "",
+      cleanUrl.pathname + cleanUrl.search
+    );
   }
 
   const setStatus = (message) => {
@@ -579,10 +585,11 @@ export default function(component) {
       const attributes = environment?.userSettings?.attributes || {};
       const email = attributes.email_address;
       const password = attributes.password;
-      const frontendApi = String(clerk.frontendApi || "")
+      // domain is the documented ClerkJS property. Keep the legacy
+      // frontendApi fallback for older CDN builds.
+      const frontendApi = String(clerk.domain || clerk.frontendApi || "")
         .toLowerCase()
-        .replace("https://", "")
-        .replace("http://", "")
+        .replace(/^https?:\\/\\//, "")
         .split("/")[0];
 
       setStateValue("environment_status", environment ? "loaded" : "missing");
@@ -812,6 +819,10 @@ export default function(component) {
         ui: { ClerkUI: window.__internal_ClerkUICtor }
       });
       if (disposed) return;
+
+      // Clerk has now consumed any __clerk_db_jwt callback token. Remove
+      // transient OAuth/development parameters from browser history only now.
+      cleanConsumedCallbackUrl();
 
       // Clerk.load() has already fetched and authenticated the environment.
       // Read the effective server-side values from that SDK-owned snapshot.
