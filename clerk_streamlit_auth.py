@@ -35,6 +35,9 @@ TEST_CLERK_PUBLISHABLE_KEY = (
 PRODUCTION_STREAMLIT_ORIGIN = (
     "https://free-chat-app-qmqyxzh2oe2n3qwcvqvpdh.streamlit.app"
 )
+TEST_CLERK_AUTHORIZED_ORIGIN = (
+    "https://free-chat-app-vrbyn5tesfyhhz5skphzn5.streamlit.app"
+)
 TEST_SUPABASE_PUBLISHABLE_KEY = (
     "sb_publishable_DYeRykN5_v4KIpwfF6uY6A_yj18ggAz"
 )
@@ -149,20 +152,10 @@ def get_clerk_pilot_config(st: Any) -> ClerkPilotConfig:
             "نطاق Clerk لا يطابق تطبيق AI Council Test المعتمد لهذه التجربة."
         )
 
-    # Require a separate test Streamlit deployment; never default to production.
-    parties_raw = _read_setting(st, "CLERK_TEST_AUTHORIZED_PARTIES", "")
-    parties = tuple(
-        dict.fromkeys(
-            _normalize_origin(item)
-            for item in parties_raw.split(",")
-            if item.strip()
-        )
-    )
-    if not parties:
-        raise ClerkPilotAuthError(
-            "لم يتم ضبط عنوان تطبيق الاختبار. أضف CLERK_TEST_AUTHORIZED_PARTIES "
-            "في Secrets لتطبيق Streamlit التجريبي المنفصل."
-        )
+    # This pilot has exactly one deployed Streamlit origin. Pin it in code so
+    # a missing or mistyped runtime secret cannot silently block Clerk login,
+    # and never accept production or arbitrary caller-supplied origins.
+    parties = (TEST_CLERK_AUTHORIZED_ORIGIN,)
     if PRODUCTION_STREAMLIT_ORIGIN in parties:
         raise ClerkPilotAuthError(
             "رُفض عنوان تطبيق الإنتاج. يجب استخدام Streamlit test app مستقل."
