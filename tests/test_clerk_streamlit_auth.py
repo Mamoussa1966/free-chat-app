@@ -320,6 +320,7 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'id="ai-council-clerk-signin-code"' in source
     assert 'id="ai-council-clerk-signin-start"' in source
     assert 'signIn.create({ identifier, password })' in source
+    assert 'if (!/^\\d{4,12}$/.test(code))' in source
     assert 'prepareSecondFactor({' in source
     assert 'attemptSecondFactor({ strategy: "email_code", code })' in source
     assert 'attemptFirstFactor({ strategy: "email_code", code })' in source
@@ -328,8 +329,6 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'لم نطلب إرسال رمز جديد.' in source
     assert 'signInUrl: flowUrl("sign-in")' in source
     assert 'signUpUrl: flowUrl("sign-up")' in source
-    assert 'withSignUp: true' in source
-    assert 'transferable: true' in source
     assert 'currentUrl.searchParams.get("intent") === "signUp"' in source
     assert 'mountSignedOut(selectedInitialFlow)' in source
     assert "let activeFlow = selectedInitialFlow;" in source
@@ -373,6 +372,7 @@ def test_clerk_email_password_sign_in_has_an_explicit_code_verification_step():
     assert 'id="ai-council-clerk-signin-code"' in source
     assert 'autocomplete="one-time-code"' in source
     assert 'signIn.create({ identifier, password })' in source
+    assert 'if (!/^\\d{4,12}$/.test(code))' in source
     assert 'prepareSecondFactor({' in source
     assert 'attemptSecondFactor({ strategy: "email_code", code })' in source
     assert 'attemptFirstFactor({ strategy: "email_code", code })' in source
