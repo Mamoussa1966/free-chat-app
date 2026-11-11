@@ -317,7 +317,6 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
     assert 'signUpUrl: flowUrl("sign-up")' in source
     assert 'signInUrl: flowUrl("sign-in")' in source
-    assert 'clerk.mountSignUp(signInNode' in source
     assert 'clerk.mountSignIn(signInNode' in source
     assert 'signInUrl: flowUrl("sign-in")' in source
     assert 'signUpUrl: flowUrl("sign-up")' in source
@@ -333,6 +332,43 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'event.preventDefault()' in source
     assert 'const FLOW_PARAM = "clerk_pilot_flow"' in source
     assert 'https://dear-hermit-1240.accounts.dev' not in source
+
+
+def test_clerk_email_sign_up_has_an_explicit_email_code_input_and_verify_button():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert 'id="ai-council-clerk-signup-code"' in source
+    assert 'autocomplete="one-time-code"' in source
+    assert 'تحقق وأكمل التسجيل' in source
+    assert 'إعادة إرسال الرمز' in source
+    assert 'function currentSignUpAttempt()' in source
+    assert 'return clerk?.client?.signUp || null;' in source
+    assert 'signUp.create({ emailAddress, password })' in source
+    assert 'prepareEmailAddressVerification({ strategy: "email_code" })' in source
+    assert 'attemptEmailAddressVerification({ code })' in source
+    assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
+
+
+def test_clerk_sign_up_resumes_pending_email_verification_without_automatic_resend():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert 'pending?.status === "missing_requirements"' in source
+    assert 'pending.unverifiedFields.includes("emailAddress")' in source
+    assert 'showSignUpVerification(pending.emailAddress' in source
+    assert 'تم استرجاع طلب التسجيل غير المكتمل من جلسة Clerk الحالية.' in source
+    assert 'أدخل أحدث رمز وصلك؛ لن ننشئ حسابًا جديدًا.' in source
+
+
+def test_clerk_sign_up_surfaces_rate_limit_and_existing_account_errors_without_retrying():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert 'code === "too_many_requests"' in source
+    assert 'code === "form_identifier_exists"' in source
+    assert 'Clerk يفرض تقييدًا مؤقتًا للمحاولات.' in source
+    assert 'هذا البريد مرتبط بحساب موجود بالفعل.' in source
 
 
 def test_repository_uses_verified_identity_and_clerk_bearer_token(signing_keys):
