@@ -319,14 +319,14 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'signInUrl: flowUrl("sign-in")' in source
     assert 'id="ai-council-clerk-signin-code"' in source
     assert 'id="ai-council-clerk-signin-start"' in source
-    assert 'signIn.password({ identifier, password })' in source
+    assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
     assert 'if (signIn?.status === "needs_client_trust"' in source
-    assert 'signIn.mfa.sendEmailCode()' in source
-    assert 'signIn.mfa.verifyEmailCode({ code })' in source
-    assert 'const result = await signIn.emailCode.sendCode();' in source
-    assert 'signIn.emailCode.verifyCode({ code })' in source
-    assert 'const result = await signIn.password({ identifier, password });' in source
+    assert 'signIn.prepareSecondFactor({' in source
+    assert 'signIn.attemptSecondFactor({' in source
+    assert 'signIn.prepareFirstFactor({' in source
+    assert 'signIn.attemptFirstFactor({' in source
+    assert 'const signInAttempt = await signIn.create({ identifier, password });' in source
     assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
     assert 'function mountCustomSignIn()' in source
     assert 'لم نطلب إرسال رمز جديد.' in source
@@ -374,21 +374,21 @@ def test_clerk_email_password_sign_in_has_an_explicit_code_verification_step():
     assert 'id="ai-council-clerk-signin-password"' in source
     assert 'id="ai-council-clerk-signin-code"' in source
     assert 'autocomplete="one-time-code"' in source
-    assert 'signIn.password({ identifier, password })' in source
+    assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
     assert 'if (signIn?.status === "needs_client_trust"' in source
-    assert 'signIn.mfa.sendEmailCode()' in source
-    assert 'signIn.mfa.verifyEmailCode({ code })' in source
-    assert 'const result = await signIn.emailCode.sendCode();' in source
-    assert 'signIn.emailCode.verifyCode({ code })' in source
-    assert 'const result = await signIn.password({ identifier, password });' in source
+    assert 'signIn.prepareSecondFactor({' in source
+    assert 'signIn.attemptSecondFactor({' in source
+    assert 'signIn.prepareFirstFactor({' in source
+    assert 'signIn.attemptFirstFactor({' in source
+    assert 'const signInAttempt = await signIn.create({ identifier, password });' in source
     assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
     assert 'signInStartForm?.addEventListener("submit", handleSignInStart)' in source
     assert 'signInEmailCodeButton?.addEventListener("click", handleSignInEmailCode)' in source
     assert 'signInGoogleButton?.addEventListener("click", handleSignInGoogle)' in source
-    assert 'signIn.sso({' in source
+    assert 'signIn.authenticateWithRedirect({' in source
     assert 'strategy: "oauth_google"' in source
-    assert 'const result = await signIn.emailCode.sendCode();' in source
+    assert 'signIn.prepareFirstFactor({' in source
     assert 'signInVerifyForm?.addEventListener("submit", handleSignInVerify)' in source
     assert 'clerk.mountSignIn(signInNode' not in source
 
