@@ -348,6 +348,7 @@ def test_clerk_email_sign_up_has_an_explicit_email_code_input_and_verify_button(
     assert 'prepareEmailAddressVerification({ strategy: "email_code" })' in source
     assert 'attemptEmailAddressVerification({ code })' in source
     assert 'clerk.setActive({ session: attempt.createdSessionId })' in source
+    assert 'if (signUpPanel) signUpPanel.hidden = true;' in source
 
 
 def test_clerk_sign_up_resumes_pending_email_verification_without_automatic_resend():
