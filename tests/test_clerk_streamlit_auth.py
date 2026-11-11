@@ -273,10 +273,20 @@ def test_environment_diagnostics_read_effective_sdk_snapshot_not_an_unauthentica
     assert "clerk.__internal_environment" in source
     assert "attributes.email_address" in source
     assert "attributes.password" in source
-    assert 'setStateValue("environment_email_enabled"' in source
-    assert 'setStateValue("environment_password_enabled"' in source
+    assert re.search(r'setStateValue\\(\\s*"environment_email_enabled"', source)
+    assert re.search(r'setStateValue\\(\\s*"environment_password_enabled"', source)
     assert 'setStateValue("environment_domain_matches"' in source
+    assert "clerk.domain || clerk.frontendApi" in source
     assert "fetch(\"https://dear-hermit-1240.clerk.accounts.dev/v1/environment\"" not in source
+
+
+def test_dev_browser_callback_token_is_preserved_until_clerk_load_completes():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    assert '"__clerk_db_jwt"' in source
+    assert "function cleanConsumedCallbackUrl()" in source
+    assert source.index("await clerk.load({") < source.index("cleanConsumedCallbackUrl();")
 
 
 def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigation():
