@@ -476,6 +476,10 @@ _CLERK_COMPONENT_CSS = """
   gap: .8rem;
   flex-wrap: wrap;
 }
+/* The component's flex display overrides the browser's default [hidden] rule. */
+.clerk-pilot-user[hidden] {
+  display: none !important;
+}
 #ai-council-clerk-signout {
   border: 1px solid var(--st-border-color);
   border-radius: 8px;
