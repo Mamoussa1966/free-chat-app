@@ -422,6 +422,7 @@ _CLERK_COMPONENT_HTML = """
       <label for="ai-council-clerk-signup-password">كلمة المرور</label>
       <input id="ai-council-clerk-signup-password" type="password" autocomplete="new-password" required />
       <button id="ai-council-clerk-signup-submit" type="submit">متابعة وإرسال رمز التحقق</button>
+      <button id="ai-council-clerk-signup-start-back" type="button" class="clerk-pilot-secondary">لدي حساب بالفعل — تسجيل الدخول</button>
     </form>
     <form id="ai-council-clerk-signup-verify" novalidate hidden>
       <h4>تحقق من بريدك الإلكتروني</h4>
@@ -582,6 +583,7 @@ export default function(component) {
   const signUpVerifyButton = root.querySelector("#ai-council-clerk-signup-verify-submit");
   const signUpResendButton = root.querySelector("#ai-council-clerk-signup-resend");
   const signUpBackButton = root.querySelector("#ai-council-clerk-signup-back");
+  const signUpStartBackButton = root.querySelector("#ai-council-clerk-signup-start-back");
   const userNode = root.querySelector("#ai-council-clerk-user");
   const userButtonNode = root.querySelector("#ai-council-clerk-user-button");
   const signOutButton = root.querySelector("#ai-council-clerk-signout");
@@ -1123,10 +1125,12 @@ export default function(component) {
   signUpStartForm?.addEventListener("submit", handleSignUpStart);
   signUpVerifyForm?.addEventListener("submit", handleSignUpVerify);
   signUpResendButton?.addEventListener("click", handleSignUpResend);
-  signUpBackButton?.addEventListener("click", () => {
+  const handleSignUpBack = () => {
     window.history.pushState({}, "", flowUrl("sign-in"));
     mountSignedOut("sign-in");
-  });
+  };
+  signUpBackButton?.addEventListener("click", handleSignUpBack);
+  signUpStartBackButton?.addEventListener("click", handleSignUpBack);
   initialize();
 
   return () => {
@@ -1138,6 +1142,8 @@ export default function(component) {
     signUpStartForm?.removeEventListener("submit", handleSignUpStart);
     signUpVerifyForm?.removeEventListener("submit", handleSignUpVerify);
     signUpResendButton?.removeEventListener("click", handleSignUpResend);
+    signUpBackButton?.removeEventListener("click", handleSignUpBack);
+    signUpStartBackButton?.removeEventListener("click", handleSignUpBack);
     try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignIn(signInNode); } catch (_) {}
     try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignUp(signInNode); } catch (_) {}
     try { if (clerk && userButtonNode?.dataset.mounted) clerk.unmountUserButton(userButtonNode); } catch (_) {}
