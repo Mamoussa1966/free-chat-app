@@ -324,6 +324,9 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'transferable: true' in source
     assert 'currentUrl.searchParams.get("intent") === "signUp"' in source
     assert 'mountSignedOut(selectedInitialFlow)' in source
+    assert "let activeFlow = selectedInitialFlow;" in source
+    assert "activeFlow = selectedMode;" in source
+    assert "mountSignedOut(activeFlow);" in source
     assert 'afterSignOutUrl: flowUrl("sign-in")' in source
     assert 'clerk.signOut({ redirectUrl: flowUrl("sign-in") })' in source
     assert 'callbackParams' in source
