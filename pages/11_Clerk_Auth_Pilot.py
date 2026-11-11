@@ -34,7 +34,7 @@ st.caption(
     "بيئة اختبار معزولة: Clerk Development → Supabase Third-Party Auth → "
     "جدول اختبار محمي بسياسات RLS."
 )
-st.caption("Build marker: CLERK-PILOT-FACTOR-RESULT-READ-FIX-20261111")
+st.caption("Build marker: CLERK-PILOT-PERSISTENT-RLS-PROBE-RESULT-20261111")
 
 st.warning(
     "هذه الصفحة لا تغيّر تسجيل الدخول الحالي، ولا تستخدم قاعدة بيانات الإنتاج، "
@@ -210,6 +210,8 @@ st.write(
     "يرسل هذا الاختبار محاولة INSERT واحدة باسم subject مختلف عن حسابك. "
     "النتيجة الآمنة هي رفض Supabase العملية برمز HTTP 401 أو 403."
 )
+OWNER_SPOOF_RESULT_STATE_KEY = "_clerk_pilot_owner_spoof_result"
+
 if st.button(
     "اختبار رفض انتحال المالك",
     key="clerk_pilot_owner_spoof_probe",
@@ -218,14 +220,49 @@ if st.button(
     try:
         denied = repository.probe_owner_spoof_denial()
     except ClerkPilotAPIError as exc:
+        st.session_state[OWNER_SPOOF_RESULT_STATE_KEY] = {
+            "subject": verified.subject,
+            "status": "error",
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
         st.error(str(exc))
     else:
-        if denied:
-            st.success(
-                "PASS — رفضت Supabase محاولة الكتابة باسم مستخدم آخر."
-            )
-        else:
-            st.error("لم يمكن إثبات رفض انتحال المالك.")
+        st.session_state[OWNER_SPOOF_RESULT_STATE_KEY] = {
+            "subject": verified.subject,
+            "status": "pass" if denied else "fail",
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+
+# Keep the last result visible across Streamlit reruns in this browser session.
+# Bind it to the verified Clerk subject so a different account cannot inherit it.
+probe_result = st.session_state.get(OWNER_SPOOF_RESULT_STATE_KEY)
+if (
+    isinstance(probe_result, dict)
+    and probe_result.get("subject") == verified.subject
+):
+    checked_at = probe_result.get("checked_at") or "وقت غير متاح"
+    if probe_result.get("status") == "pass":
+        st.success(
+            "PASS — رفضت Supabase محاولة الكتابة باسم مستخدم آخر. "
+            f"آخر تحقق: {checked_at}"
+        )
+    elif probe_result.get("status") == "fail":
+        st.error(
+            "FAIL — لم يثبت رفض محاولة انتحال المالك. "
+            f"آخر اختبار: {checked_at}"
+        )
+    elif probe_result.get("status") == "error":
+        st.warning(
+            "لم تكتمل آخر محاولة لاختبار انتحال المالك. "
+            "أعد الاختبار لمعرفة النتيجة. "
+            f"وقت المحاولة: {checked_at}"
+        )
+
+st.caption(
+    "تبقى آخر نتيجة ظاهرة عند إعادة تشغيل واجهة Streamlit خلال الجلسة الحالية "
+    "وللحساب الذي نفّذ الاختبار فقط. لا تُحفظ النتيجة في قاعدة البيانات، "
+    "وقد تختفي عند انتهاء جلسة المتصفح."
+)
 
 st.divider()
 st.subheader("حدود ما تم إثباته")
