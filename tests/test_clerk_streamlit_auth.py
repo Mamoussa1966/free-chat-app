@@ -321,7 +321,7 @@ def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigati
     assert 'id="ai-council-clerk-signin-start"' in source
     assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
-    assert 'if (signIn?.status === "needs_client_trust"' in source
+    assert 'if (signInAttempt?.status === "needs_client_trust"' in source
     assert 'currentSignInAttempt().prepareSecondFactor({' in source
     assert 'signIn.attemptSecondFactor({' in source
     assert 'signIn.prepareFirstFactor({' in source
@@ -376,7 +376,7 @@ def test_clerk_email_password_sign_in_has_an_explicit_code_verification_step():
     assert 'autocomplete="one-time-code"' in source
     assert 'signIn.create({ identifier, password })' in source
     assert 'if (!/^\\d{4,12}$/.test(code))' in source
-    assert 'if (signIn?.status === "needs_client_trust"' in source
+    assert 'if (signInAttempt?.status === "needs_client_trust"' in source
     assert 'currentSignInAttempt().prepareSecondFactor({' in source
     assert 'signIn.attemptSecondFactor({' in source
     assert 'signIn.prepareFirstFactor({' in source
