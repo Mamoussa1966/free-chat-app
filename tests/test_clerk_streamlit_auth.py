@@ -515,3 +515,15 @@ def test_signed_out_user_container_is_hidden_despite_flex_layout():
     assert ".clerk-pilot-user[hidden]" in source
     assert "display: none !important;" in source
     assert "if (userNode) userNode.hidden = true;" in source
+
+
+def test_clerk_alternative_factors_are_read_from_the_signin_create_result():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    start = source.index("async function inspectSupportedSignInAlternatives")
+    end = source.index("function showSignInVerification", start)
+    function_source = source[start:end]
+    assert "const signInAttempt = await signIn.create({ identifier });" in function_source
+    assert "return supportedSignInAlternatives(signInAttempt);" in function_source
+    assert "return supportedSignInAlternatives(signIn);" not in function_source
