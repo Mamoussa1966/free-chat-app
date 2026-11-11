@@ -43,6 +43,7 @@ TEST_SUPABASE_PUBLISHABLE_KEY = (
 )
 
 CLERK_SESSION_STATE_KEY = "_clerk_pilot_verified_session"
+CLERK_ENV_DIAGNOSTICS_KEY = "_clerk_pilot_environment_diagnostics"
 CLERK_COMPONENT_KEY = "ai_council_clerk_pilot_auth_v1"
 MAX_SESSION_TOKEN_LENGTH = 16_384
 MAX_RECORD_PAYLOAD_LENGTH = 2_000
@@ -569,6 +570,49 @@ export default function(component) {
     setStateValue("auth_error", error || "");
   };
 
+  // Read the effective environment through the already initialized Clerk SDK.
+  // This avoids a separate unauthenticated browser request to /v1/environment.
+  function publishEnvironmentDiagnostics() {
+    if (!clerk || disposed) return;
+    try {
+      const environment = clerk.__internal_environment;
+      const attributes = environment?.userSettings?.attributes || {};
+      const email = attributes.email_address;
+      const password = attributes.password;
+      const frontendApi = String(clerk.frontendApi || "")
+        .replace(/^https?:\\/\\//i, "")
+        .replace(/\\/+$/, "")
+        .toLowerCase();
+
+      setStateValue("environment_status", environment ? "loaded" : "missing");
+      setStateValue(
+        "environment_email_enabled",
+        typeof email?.enabled === "boolean" ? email.enabled : null
+      );
+      setStateValue(
+        "environment_password_enabled",
+        typeof password?.enabled === "boolean" ? password.enabled : null
+      );
+      setStateValue(
+        "environment_email_verify_at_sign_up",
+        typeof email?.verify_at_sign_up === "boolean" ? email.verify_at_sign_up : null
+      );
+      setStateValue(
+        "environment_email_verifications",
+        Array.isArray(email?.verifications) ? email.verifications : []
+      );
+      setStateValue("environment_sdk_version", String(clerk.version || ""));
+      setStateValue("environment_ui_version", String(clerk.uiVersion || ""));
+      setStateValue("environment_frontend_api", frontendApi);
+      setStateValue("environment_domain_matches", frontendApi === domain.toLowerCase());
+      setStateValue("environment_publishable_key_matches", clerk.publishableKey === publishableKey);
+      setStateValue("environment_error_code", "");
+    } catch (_) {
+      setStateValue("environment_status", "read_error");
+      setStateValue("environment_error_code", "environment_snapshot_unavailable");
+    }
+  }
+
   function loadScript(src, id, isReady, attributes = {}) {
     if (typeof isReady === "function" && isReady()) return Promise.resolve();
     window.__aiCouncilClerkScriptPromises = window.__aiCouncilClerkScriptPromises || {};
@@ -768,6 +812,10 @@ export default function(component) {
       });
       if (disposed) return;
 
+      // Clerk.load() has already fetched and authenticated the environment.
+      // Read the effective server-side values from that SDK-owned snapshot.
+      publishEnvironmentDiagnostics();
+
       unsubscribe = clerk.addListener(({ session, user }) => {
         if (session === undefined) return;
         if (session === null) {
@@ -783,9 +831,17 @@ export default function(component) {
       } else {
         mountSignedOut(selectedInitialFlow);
       }
-    } catch (_) {
-      setStatus("تعذر تحميل Clerk أو الاتصال بخدمة المصادقة. تحقق من اتصال المتصفح وإعدادات Clerk.");
-      setBackendState("initialization_error", "", "Clerk initialization failed.");
+    } catch (error) {
+      const firstError = Array.isArray(error?.errors) ? error.errors[0] : null;
+      const errorCode = String(firstError?.code || error?.code || "");
+      setStateValue("environment_status", "initialization_error");
+      setStateValue("environment_error_code", errorCode || "clerk_initialization_failed");
+      setStatus(
+        errorCode === "dev_browser_unauthenticated"
+          ? "رفض Clerk رمز متصفح التطوير. أعد تحميل صفحة الاختبار مرة واحدة؛ لا تفتح /v1/environment مباشرة."
+          : "تعذر تحميل Clerk أو تهيئة بيئة المصادقة. راجع التشخيص المعروض أسفل الصفحة."
+      );
+      setBackendState("initialization_error", "", errorCode || "Clerk initialization failed.");
     }
   }
 
@@ -844,6 +900,31 @@ def render_clerk_login(st: Any) -> VerifiedClerkSession | None:
     status = getattr(result, "auth_status", "")
     error = getattr(result, "auth_error", "")
     token = getattr(result, "session_token", "")
+
+    def component_value(name: str, default: Any = None) -> Any:
+        value = getattr(result, name, default)
+        if isinstance(result, dict):
+            value = result.get(name, value)
+        return value
+
+    diagnostics = {
+        "status": component_value("environment_status", ""),
+        "email_enabled": component_value("environment_email_enabled"),
+        "password_enabled": component_value("environment_password_enabled"),
+        "email_verify_at_sign_up": component_value("environment_email_verify_at_sign_up"),
+        "email_verifications": component_value("environment_email_verifications", []),
+        "sdk_version": component_value("environment_sdk_version", ""),
+        "ui_version": component_value("environment_ui_version", ""),
+        "frontend_api": component_value("environment_frontend_api", ""),
+        "domain_matches": component_value("environment_domain_matches"),
+        "publishable_key_matches": component_value("environment_publishable_key_matches"),
+        "error_code": component_value("environment_error_code", ""),
+    }
+    if any(value not in ("", None, []) for value in diagnostics.values()):
+        st.session_state[CLERK_ENV_DIAGNOSTICS_KEY] = diagnostics
+    else:
+        st.session_state.pop(CLERK_ENV_DIAGNOSTICS_KEY, None)
+
     if isinstance(result, dict):
         status = result.get("auth_status", status)
         error = result.get("auth_error", error)
