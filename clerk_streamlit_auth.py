@@ -908,6 +908,19 @@ def render_clerk_login(st: Any) -> VerifiedClerkSession | None:
         on_session_token_change=lambda: None,
         on_auth_status_change=lambda: None,
         on_auth_error_change=lambda: None,
+        # Every setStateValue() diagnostic must be registered to make the
+        # value consistently available on the ComponentResult object.
+        on_environment_status_change=lambda: None,
+        on_environment_email_enabled_change=lambda: None,
+        on_environment_password_enabled_change=lambda: None,
+        on_environment_email_verify_at_sign_up_change=lambda: None,
+        on_environment_email_verifications_change=lambda: None,
+        on_environment_sdk_version_change=lambda: None,
+        on_environment_ui_version_change=lambda: None,
+        on_environment_frontend_api_change=lambda: None,
+        on_environment_domain_matches_change=lambda: None,
+        on_environment_publishable_key_matches_change=lambda: None,
+        on_environment_error_code_change=lambda: None,
     )
     status = getattr(result, "auth_status", "")
     error = getattr(result, "auth_error", "")
