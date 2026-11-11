@@ -359,7 +359,7 @@ def test_clerk_sign_up_resumes_pending_email_verification_without_automatic_rese
     assert 'pending.unverifiedFields.includes("emailAddress")' in source
     assert 'showSignUpVerification(\n        pending.emailAddress,' in source
     assert 'تم استرجاع طلب التسجيل غير المكتمل من جلسة Clerk الحالية.' in source
-    assert 'أدخل أحدث رمز وصلك؛ لن ننشئ حسابًا جديدًا.' in source
+    assert 'استخدم أحدث رمز وصلك؛ لن ننشئ حسابًا جديدًا.' in source
 
 
 def test_clerk_sign_up_surfaces_rate_limit_and_existing_account_errors_without_retrying():
