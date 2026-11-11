@@ -580,9 +580,10 @@ export default function(component) {
       const email = attributes.email_address;
       const password = attributes.password;
       const frontendApi = String(clerk.frontendApi || "")
-        .replace(/^https?:\\/\\//i, "")
-        .replace(/\\/+$/, "")
-        .toLowerCase();
+        .toLowerCase()
+        .replace("https://", "")
+        .replace("http://", "")
+        .split("/")[0];
 
       setStateValue("environment_status", environment ? "loaded" : "missing");
       setStateValue(
