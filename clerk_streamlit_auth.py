@@ -413,7 +413,26 @@ _CLERK_COMPONENT_HTML = """
     <span class="clerk-pilot-environment">DEVELOPMENT</span>
   </div>
   <div id="ai-council-clerk-status" class="clerk-pilot-status">جارٍ تهيئة Clerk…</div>
-  <div id="ai-council-clerk-signin" class="clerk-pilot-signin"></div>
+  <section id="ai-council-clerk-signin" class="clerk-pilot-signin clerk-pilot-signup" aria-live="polite">
+    <form id="ai-council-clerk-signin-start" novalidate>
+      <h4>تسجيل الدخول إلى حسابك</h4>
+      <label for="ai-council-clerk-signin-email">البريد الإلكتروني</label>
+      <input id="ai-council-clerk-signin-email" type="email" autocomplete="email" required />
+      <label for="ai-council-clerk-signin-password">كلمة المرور</label>
+      <input id="ai-council-clerk-signin-password" type="password" autocomplete="current-password" required />
+      <button id="ai-council-clerk-signin-submit" type="submit">تسجيل الدخول</button>
+      <button id="ai-council-clerk-signin-signup" type="button" class="clerk-pilot-secondary">إنشاء حساب جديد</button>
+    </form>
+    <form id="ai-council-clerk-signin-verify" novalidate hidden>
+      <h4>تحقق من بريدك الإلكتروني</h4>
+      <p id="ai-council-clerk-signin-email-hint"></p>
+      <label for="ai-council-clerk-signin-code">رمز التحقق الذي وصلك إلى بريدك</label>
+      <input id="ai-council-clerk-signin-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required />
+      <button id="ai-council-clerk-signin-verify-submit" type="submit">تحقق وأكمل تسجيل الدخول</button>
+      <button id="ai-council-clerk-signin-verify-back" type="button" class="clerk-pilot-secondary">العودة إلى بيانات تسجيل الدخول</button>
+    </form>
+    <p id="ai-council-clerk-signin-message" role="status" aria-live="polite"></p>
+  </section>
   <section id="ai-council-clerk-signup" class="clerk-pilot-signup" hidden aria-live="polite">
     <form id="ai-council-clerk-signup-start" novalidate>
       <h4>إنشاء حساب بالبريد الإلكتروني</h4>
@@ -571,6 +590,17 @@ export default function(component) {
     ? data.authorized_parties.map(String) : [];
   const statusNode = root.querySelector("#ai-council-clerk-status");
   const signInNode = root.querySelector("#ai-council-clerk-signin");
+  const signInStartForm = root.querySelector("#ai-council-clerk-signin-start");
+  const signInVerifyForm = root.querySelector("#ai-council-clerk-signin-verify");
+  const signInEmailInput = root.querySelector("#ai-council-clerk-signin-email");
+  const signInPasswordInput = root.querySelector("#ai-council-clerk-signin-password");
+  const signInCodeInput = root.querySelector("#ai-council-clerk-signin-code");
+  const signInEmailHint = root.querySelector("#ai-council-clerk-signin-email-hint");
+  const signInMessage = root.querySelector("#ai-council-clerk-signin-message");
+  const signInStartButton = root.querySelector("#ai-council-clerk-signin-submit");
+  const signInVerifyButton = root.querySelector("#ai-council-clerk-signin-verify-submit");
+  const signInSignupButton = root.querySelector("#ai-council-clerk-signin-signup");
+  const signInVerifyBackButton = root.querySelector("#ai-council-clerk-signin-verify-back");
   const signUpPanel = root.querySelector("#ai-council-clerk-signup");
   const signUpStartForm = root.querySelector("#ai-council-clerk-signup-start");
   const signUpVerifyForm = root.querySelector("#ai-council-clerk-signup-verify");
@@ -595,6 +625,8 @@ export default function(component) {
   let lastToken = "";
   let busy = false;
   let signUpBusy = false;
+  let signInBusy = false;
+  let signInVerificationStage = "second_factor";
 
   // Keep Clerk sign-in/sign-up inside this Streamlit page. Preserve the
   // page path and existing query parameters so OAuth returns to this pilot
@@ -777,27 +809,214 @@ export default function(component) {
 
     if (selectedMode === "sign-up") {
       mountCustomSignUp();
-    } else if (signInNode) {
-      signInNode.dataset.mounted = "true";
-      signInNode.dataset.mode = selectedMode;
-      try {
-        clerk.mountSignIn(signInNode, {
-          signUpUrl: flowUrl("sign-up"),
-          fallbackRedirectUrl: appReturnUrl,
-          signUpFallbackRedirectUrl: appReturnUrl,
-          withSignUp: true,
-          transferable: true
-        });
-      } catch (_) {
-        signInNode.dataset.mounted = "";
-        signInNode.dataset.mode = "";
-        setStatus("تعذر عرض نموذج المصادقة. أعد تحميل الصفحة.");
-      }
+    } else {
+      mountCustomSignIn();
     }
     setStatus(selectedMode === "sign-up"
       ? "أنشئ حساب اختبار جديدًا باستخدام البريد الإلكتروني."
       : "سجّل الدخول أو أنشئ حساب اختبار من خلال Clerk.");
     setBackendState("signed_out", "", "");
+  }
+
+  function currentSignInAttempt() {
+    return clerk?.client?.signIn || null;
+  }
+
+  function showSignInMessage(message) {
+    if (signInMessage) signInMessage.textContent = String(message || "");
+  }
+
+  function showSignInStart(message) {
+    if (signInNode) signInNode.hidden = false;
+    if (signInStartForm) signInStartForm.hidden = false;
+    if (signInVerifyForm) signInVerifyForm.hidden = true;
+    showSignInMessage(message || "");
+    setStatus("أدخل البريد الإلكتروني وكلمة المرور لتسجيل الدخول.");
+  }
+
+  function showSignInVerification(email, stage, message) {
+    signInVerificationStage = stage === "first_factor" ? "first_factor" : "second_factor";
+    if (signInNode) signInNode.hidden = false;
+    if (signInStartForm) signInStartForm.hidden = true;
+    if (signInVerifyForm) signInVerifyForm.hidden = false;
+    if (signInEmailHint) {
+      signInEmailHint.textContent = "أُرسل رمز التحقق إلى: " + String(email || "البريد المسجل في الحساب");
+    }
+    if (signInCodeInput) signInCodeInput.focus();
+    showSignInMessage(message || "أدخل أحدث رمز تحقق وصلك إلى بريدك الإلكتروني.");
+    setStatus("في انتظار إدخال رمز التحقق لإكمال تسجيل الدخول.");
+  }
+
+  function signInErrorMessage(error) {
+    const first = Array.isArray(error?.errors) ? error.errors[0] : null;
+    const code = String(first?.code || error?.code || "");
+    if (code === "too_many_requests") {
+      return "Clerk يفرض تقييدًا مؤقتًا للمحاولات. لا تكرر المحاولة ولا تطلب رمزًا جديدًا الآن.";
+    }
+    if (code === "form_password_incorrect" || code === "form_password_pwned") {
+      return "لم تُقبل كلمة المرور. تحقق منها قبل إعادة المحاولة.";
+    }
+    if (code === "form_identifier_not_found") {
+      return "لم يعثر Clerk على حساب بهذا البريد الإلكتروني في بيئة الاختبار.";
+    }
+    if (code) return "لم يكتمل تسجيل الدخول. رمز الخطأ: " + code;
+    return "لم يكتمل تسجيل الدخول. تحقق من الاتصال ولا تكرر المحاولة تلقائيًا.";
+  }
+
+  async function finalizeSignInAttempt(attempt) {
+    if (attempt?.status !== "complete" || !attempt.createdSessionId) {
+      showSignInMessage("لم تكتمل المصادقة بعد. حالة Clerk: " + String(attempt?.status || "غير معروفة"));
+      return false;
+    }
+    await clerk.setActive({ session: attempt.createdSessionId });
+    return true;
+  }
+
+  function emailCodeFactor(factors) {
+    return Array.isArray(factors)
+      ? factors.find((factor) => factor && factor.strategy === "email_code")
+      : null;
+  }
+
+  async function prepareSignInCode(attempt) {
+    if (attempt?.status === "complete") {
+      await finalizeSignInAttempt(attempt);
+      return;
+    }
+
+    if (attempt?.status === "needs_second_factor") {
+      const factor = emailCodeFactor(attempt.supportedSecondFactors);
+      if (!factor) {
+        showSignInMessage("الحساب يطلب عامل تحقق إضافيًا غير مدعوم حاليًا في هذه الواجهة. لا تكرر المحاولة.");
+        return;
+      }
+      await currentSignInAttempt().prepareSecondFactor({
+        strategy: "email_code",
+        emailAddressId: factor.emailAddressId
+      });
+      showSignInVerification(
+        signInEmailInput?.value || attempt.identifier,
+        "second_factor",
+        "أرسل Clerk رمز تحقق لتأكيد تسجيل الدخول من هذا الجهاز. أدخل أحدث رمز."
+      );
+      return;
+    }
+
+    if (attempt?.status === "needs_first_factor") {
+      const factor = emailCodeFactor(attempt.supportedFirstFactors);
+      if (!factor) {
+        showSignInMessage("لم يُرجع Clerk وسيلة تحقق أولى بالبريد الإلكتروني لهذا الحساب.");
+        return;
+      }
+      await currentSignInAttempt().prepareFirstFactor({
+        strategy: "email_code",
+        emailAddressId: factor.emailAddressId
+      });
+      showSignInVerification(
+        signInEmailInput?.value || attempt.identifier,
+        "first_factor",
+        "أرسل Clerk رمز تحقق بالبريد الإلكتروني لإكمال تسجيل الدخول. أدخل أحدث رمز."
+      );
+      return;
+    }
+
+    showSignInMessage("لم يكتمل تسجيل الدخول. حالة Clerk: " + String(attempt?.status || "غير معروفة"));
+  }
+
+  function mountCustomSignIn() {
+    const pending = currentSignInAttempt();
+    if (pending?.status === "needs_second_factor"
+      && emailCodeFactor(pending.supportedSecondFactors)) {
+      showSignInVerification(
+        pending.identifier || signInEmailInput?.value,
+        "second_factor",
+        "يوجد طلب تحقق لتسجيل الدخول. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد."
+      );
+      return;
+    }
+    if (pending?.status === "needs_first_factor"
+      && emailCodeFactor(pending.supportedFirstFactors)) {
+      showSignInVerification(
+        pending.identifier || signInEmailInput?.value,
+        "first_factor",
+        "يوجد طلب تحقق أولي بالبريد الإلكتروني. أدخل الرمز الذي وصلك؛ لم نطلب إرسال رمز جديد."
+      );
+      return;
+    }
+    showSignInStart("");
+  }
+
+  async function handleSignInStart(event) {
+    event.preventDefault();
+    if (disposed || signInBusy) return;
+    const identifier = String(signInEmailInput?.value || "").trim();
+    const password = String(signInPasswordInput?.value || "");
+    if (!identifier || !password) {
+      showSignInMessage("أدخل البريد الإلكتروني وكلمة المرور أولًا.");
+      return;
+    }
+    const signIn = currentSignInAttempt();
+    if (!signIn || typeof signIn.create !== "function") {
+      showSignInMessage("واجهة Clerk لم تجهز طلب تسجيل الدخول. أعد تحميل الصفحة مرة واحدة.");
+      return;
+    }
+
+    signInBusy = true;
+    if (signInStartButton) signInStartButton.disabled = true;
+    showSignInMessage("جارٍ التحقق من بيانات الحساب لدى Clerk…");
+    try {
+      const attempt = await signIn.create({ identifier, password });
+      await prepareSignInCode(attempt);
+    } catch (error) {
+      const message = signInErrorMessage(error);
+      showSignInMessage(message);
+      setStatus(message);
+    } finally {
+      signInBusy = false;
+      if (signInStartButton) signInStartButton.disabled = false;
+    }
+  }
+
+  async function handleSignInVerify(event) {
+    event.preventDefault();
+    if (disposed || signInBusy) return;
+    const code = String(signInCodeInput?.value || "").trim();
+    if (!/^\\d{4,12}$/.test(code)) {
+      showSignInMessage("أدخل رمز التحقق الرقمي الذي وصلك إلى البريد الإلكتروني.");
+      return;
+    }
+    const signIn = currentSignInAttempt();
+    if (!signIn) {
+      showSignInMessage("لم يعثر Clerk على طلب تسجيل الدخول المعلّق. أعد إدخال بيانات الدخول مرة واحدة.");
+      return;
+    }
+
+    signInBusy = true;
+    if (signInVerifyButton) signInVerifyButton.disabled = true;
+    showSignInMessage("جارٍ التحقق من الرمز لدى Clerk…");
+    try {
+      const attempt = signInVerificationStage === "first_factor"
+        ? await signIn.attemptFirstFactor({ strategy: "email_code", code })
+        : await signIn.attemptSecondFactor({ strategy: "email_code", code });
+      if (attempt?.status === "complete") {
+        showSignInMessage("تم قبول رمز التحقق. جارٍ تفعيل جلسة الدخول…");
+        await finalizeSignInAttempt(attempt);
+      } else {
+        showSignInMessage("لم تكتمل المصادقة بعد. حالة Clerk: " + String(attempt?.status || "غير معروفة"));
+      }
+    } catch (error) {
+      showSignInMessage(signInErrorMessage(error));
+    } finally {
+      signInBusy = false;
+      if (signInVerifyButton) signInVerifyButton.disabled = false;
+    }
+  }
+
+  function resetSignInVerification() {
+    const signIn = currentSignInAttempt();
+    try { signIn?.reset?.(); } catch (_) {}
+    if (signInCodeInput) signInCodeInput.value = "";
+    showSignInStart("أعد إدخال بيانات تسجيل الدخول للبدء من جديد.");
   }
 
   function currentSignUpAttempt() {
@@ -1125,6 +1344,13 @@ export default function(component) {
 
   root.addEventListener("click", handleFlowNavigation, true);
   signOutButton?.addEventListener("click", handleSignOut);
+  signInStartForm?.addEventListener("submit", handleSignInStart);
+  signInVerifyForm?.addEventListener("submit", handleSignInVerify);
+  signInSignupButton?.addEventListener("click", () => {
+    window.history.pushState({}, "", flowUrl("sign-up"));
+    mountSignedOut("sign-up");
+  });
+  signInVerifyBackButton?.addEventListener("click", resetSignInVerification);
   signUpStartForm?.addEventListener("submit", handleSignUpStart);
   signUpVerifyForm?.addEventListener("submit", handleSignUpVerify);
   signUpResendButton?.addEventListener("click", handleSignUpResend);
@@ -1142,13 +1368,15 @@ export default function(component) {
     if (typeof unsubscribe === "function") unsubscribe();
     root.removeEventListener("click", handleFlowNavigation, true);
     signOutButton?.removeEventListener("click", handleSignOut);
+    signInStartForm?.removeEventListener("submit", handleSignInStart);
+    signInVerifyForm?.removeEventListener("submit", handleSignInVerify);
     signUpStartForm?.removeEventListener("submit", handleSignUpStart);
     signUpVerifyForm?.removeEventListener("submit", handleSignUpVerify);
     signUpResendButton?.removeEventListener("click", handleSignUpResend);
     signUpBackButton?.removeEventListener("click", handleSignUpBack);
     signUpStartBackButton?.removeEventListener("click", handleSignUpBack);
-    try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignIn(signInNode); } catch (_) {}
-    try { if (clerk && signInNode?.dataset.mounted) clerk.unmountSignUp(signInNode); } catch (_) {}
+
+
     try { if (clerk && userButtonNode?.dataset.mounted) clerk.unmountUserButton(userButtonNode); } catch (_) {}
   };
 }
