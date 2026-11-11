@@ -34,6 +34,7 @@ st.caption(
     "بيئة اختبار معزولة: Clerk Development → Supabase Third-Party Auth → "
     "جدول اختبار محمي بسياسات RLS."
 )
+st.caption("Build marker: CLERK-PILOT-DEV-BROWSER-STATE-CALLBACKS-20261111")
 
 st.warning(
     "هذه الصفحة لا تغيّر تسجيل الدخول الحالي، ولا تستخدم قاعدة بيانات الإنتاج، "
