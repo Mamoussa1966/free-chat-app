@@ -274,8 +274,8 @@ def test_environment_diagnostics_read_effective_sdk_snapshot_not_an_unauthentica
     assert "clerk.__internal_environment" in source
     assert "attributes.email_address" in source
     assert "attributes.password" in source
-    assert re.search(r'setStateValue\\(\\s*"environment_email_enabled"', source)
-    assert re.search(r'setStateValue\\(\\s*"environment_password_enabled"', source)
+    assert re.search(r'setStateValue\(\s*"environment_email_enabled"', source)
+    assert re.search(r'setStateValue\(\s*"environment_password_enabled"', source)
     assert 'setStateValue("environment_domain_matches"' in source
     assert "clerk.domain || clerk.frontendApi" in source
     assert "fetch(\"https://dear-hermit-1240.clerk.accounts.dev/v1/environment\"" not in source
