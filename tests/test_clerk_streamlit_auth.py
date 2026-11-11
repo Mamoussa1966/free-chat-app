@@ -290,6 +290,27 @@ def test_dev_browser_callback_token_is_preserved_until_clerk_load_completes():
     assert source.index("await clerk.load({") < source.index("cleanConsumedCallbackUrl();")
 
 
+def test_environment_diagnostic_state_values_are_registered_with_streamlit():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py").read_text(encoding="utf-8")
+    diagnostic_states = (
+        "environment_status",
+        "environment_email_enabled",
+        "environment_password_enabled",
+        "environment_email_verify_at_sign_up",
+        "environment_email_verifications",
+        "environment_sdk_version",
+        "environment_ui_version",
+        "environment_frontend_api",
+        "environment_domain_matches",
+        "environment_publishable_key_matches",
+        "environment_error_code",
+    )
+    for state in diagnostic_states:
+        assert f"on_{state}_change=lambda: None" in source
+
+
 def test_sign_in_and_sign_up_switch_inside_pilot_without_account_portal_navigation():
     from pathlib import Path
 
