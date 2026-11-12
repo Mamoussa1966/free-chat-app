@@ -41,6 +41,14 @@ st.warning(
     "ولا تتيح بوابة Cloudflare Worker Admin. لا تستخدمها لإدخال بيانات حقيقية."
 )
 
+from supabase_native_auth_probe import render_supabase_native_auth_denial_probe
+
+st.divider()
+with st.expander("🧪 اختبار مستقل: رفض رمز Supabase Auth الأصلي", expanded=True):
+    render_supabase_native_auth_denial_probe()
+
+st.divider()
+
 try:
     config = get_clerk_pilot_config(st)
 except ClerkPilotAuthError as exc:
