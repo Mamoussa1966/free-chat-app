@@ -544,3 +544,58 @@ def test_pilot_owner_spoof_result_is_persisted_in_session_and_subject_bound():
     assert 'probe_result.get("status") == "pass"' in source
     assert "تبقى آخر نتيجة ظاهرة عند إعادة تشغيل واجهة Streamlit" in source
     assert "قد تختفي عند انتهاء جلسة المتصفح" in source
+
+
+def test_clerk_email_code_button_has_one_send_call_and_a_single_flight_guard():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("async function handleSignInEmailCode()")
+    end = source.index("async function handleSignInGoogle()", start)
+    handler = source[start:end]
+
+    assert handler.count("prepareFirstFactor(") == 1
+    assert "if (disposed || signInBusy) return;" in handler
+    assert "signInBusy = true;" in handler
+    assert "signInEmailCodeButton.disabled = true" in handler
+    assert "finally {" in handler
+    assert "signInBusy = false;" in handler
+    assert "prepareEmailAddressVerification" not in handler
+    assert "resend" not in handler.lower()
+
+
+def test_clerk_session_refresh_fetches_fresh_token_and_publishes_only_changes():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("async function publishSession(")
+    end = source.index("function mountAuthenticated()", start)
+    function_source = source[start:end]
+
+    assert "session.getToken({ skipCache: true })" in function_source
+    assert "window.setInterval(" in function_source
+    assert "}, 40000);" in function_source
+    assert "if (token !== lastToken)" in function_source
+    assert 'setBackendState("signed_in_pending_verification", token, "")' in function_source
+    assert "let busy = false;" in source
+
+
+def test_clerk_account_switch_clears_signed_out_token_and_reverifies_new_session():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "clerk_streamlit_auth.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("unsubscribe = clerk.addListener(")
+    end = source.index("if (clerk.session)", start)
+    listener = source[start:end]
+
+    assert "if (session === null)" in listener
+    assert 'lastToken = "";' in listener
+    assert "mountSignedOut(activeFlow);" in listener
+    assert "publishSession(session, user);" in listener
+    assert "verify_clerk_session_token(" in source
