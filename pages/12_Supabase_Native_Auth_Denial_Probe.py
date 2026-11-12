@@ -112,6 +112,7 @@ PROBE_HTML = """
     let authenticated = false;
     let readPass = false;
     let readDetail = "";
+    let sessionCreated = false;
     let logoutPass = false;
 
     try {
@@ -133,6 +134,11 @@ PROBE_HTML = """
       const signInData = await readJson(signInResponse);
       accessToken = typeof signInData?.access_token === "string"
         ? signInData.access_token : "";
+      sessionCreated = !!accessToken;
+      if (signInData && typeof signInData === "object") {
+        signInData.access_token = "";
+        signInData.refresh_token = "";
+      }
 
       if (!signInResponse.ok || !accessToken) {
         const code = String(signInData?.code || signInData?.error || "auth_sign_in_failed");
@@ -234,9 +240,11 @@ PROBE_HTML = """
       const readLine = readPass
         ? "PASS — " + readDetail
         : "NOT PASS — " + (readDetail || "لم تكتمل قراءة جدول Clerk.");
-      const logoutLine = logoutPass
-        ? "PASS — أُنهيت جلسة الاختبار الحالية فقط (scope=local)."
-        : "تنبيه — لم نتأكد من إنهاء الجلسة المحلية؛ لا تعِد الاختبار قبل مراجعة حالة الجلسة.";
+      const logoutLine = !sessionCreated
+        ? "لم تُنشأ جلسة Supabase؛ لذلك لم تكن هناك جلسة تحتاج إلى إنهاء."
+        : logoutPass
+          ? "PASS — أُنهيت جلسة الاختبار الحالية فقط (scope=local)."
+          : "تنبيه — لم نتأكد من إنهاء الجلسة المحلية؛ لا تعِد الاختبار قبل مراجعة حالة الجلسة.";
 
       show(authLine + "\n" + readLine + "\n" + logoutLine
         + "\n\nلم نعرض رمز الجلسة أو معرّف المستخدم، ولم نحفظ كلمة المرور أو الرمز.");
