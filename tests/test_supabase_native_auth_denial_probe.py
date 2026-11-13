@@ -19,6 +19,10 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "/auth/v1/user" in source
     assert "/rest/v1/clerk_auth_pilot_records?select=record_id&limit=10" in source
     assert "/auth/v1/logout?scope=local" in source
+    assert '<button id="run-probe" type="button">' in source
+    assert 'runButton.addEventListener("click", runProbe)' in source
+    assert 'emailInput.addEventListener("input", updateReadyState)' in source
+    assert 'passwordInput.addEventListener("input", updateReadyState)' in source
     assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-20261112" in source
     assert "render_supabase_native_auth_denial_probe" in page
     assert "render_supabase_native_auth_denial_probe" in page11
