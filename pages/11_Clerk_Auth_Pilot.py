@@ -44,8 +44,9 @@ st.warning(
 from supabase_native_auth_probe import render_supabase_native_auth_denial_probe
 
 st.divider()
-with st.expander("🧪 اختبار مستقل: رفض رمز Supabase Auth الأصلي", expanded=True):
-    render_supabase_native_auth_denial_probe()
+st.subheader("🧪 اختبار مستقل: رفض رمز Supabase Auth الأصلي")
+st.caption("واجهة اختبار مستقلة ظاهرة مباشرةً في الصفحة، وليست داخل قائمة قابلة للطي.")
+render_supabase_native_auth_denial_probe()
 
 st.divider()
 
