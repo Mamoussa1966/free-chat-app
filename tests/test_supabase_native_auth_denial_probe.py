@@ -20,12 +20,15 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "/rest/v1/clerk_auth_pilot_records?select=record_id&limit=10" in source
     assert "/auth/v1/logout?scope=local" in source
     assert '<button id="run-probe" type="button">' in source
-    assert 'runButton.addEventListener("click", runProbe)' in source
-    assert 'emailInput.addEventListener("input", updateReadyState)' in source
-    assert 'passwordInput.addEventListener("input", updateReadyState)' in source
-    assert "st.iframe(PROBE_HTML, height=470)" in source
+    assert 'runButton?.addEventListener("click", runProbe)' in source
+    assert 'emailInput?.addEventListener("input", updateReadyState)' in source
+    assert 'passwordInput?.addEventListener("input", updateReadyState)' in source
+    assert "from streamlit.components.v2 import component" in source
+    assert "_NATIVE_AUTH_PROBE_COMPONENT = component(" in source
+    assert "_NATIVE_AUTH_PROBE_COMPONENT(" in source
+    assert "st.iframe(" not in source
     assert "components.html" not in source
-    assert "لم يبدأ الاختبار بعد" in source
+    assert "تهيئة واجهة الاختبار" in source
     assert '<input id="native-password" type="text" autocomplete="off"' in source
     assert "ستظهر كلمة المرور أثناء الكتابة" in source
     assert "togglePasswordButton" not in source
