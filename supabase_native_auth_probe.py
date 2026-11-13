@@ -82,6 +82,46 @@ export default function(component) {
     }
   }
 
+  function safeAuthFailure(payload, httpStatus) {
+    const candidates = [
+      payload?.error_code,
+      payload?.error,
+      payload?.code,
+      payload?.msg,
+      payload?.message,
+      payload?.error_description
+    ];
+    const strings = candidates.filter(value => typeof value === "string")
+      .map(value => value.toLowerCase().slice(0, 180));
+    const joined = strings.join(" ");
+
+    if (joined.includes("invalid_credentials")
+      || joined.includes("invalid login credentials")) {
+      return "رفض Supabase بيانات الدخول. هذا يعني أن البريد/كلمة المرور لا يطابقان مستخدمًا أصليًا في Supabase Auth التجريبي، أو أن الحساب غير متاح. تسجيل الدخول إلى Clerk لا يثبت وجود حساب Supabase Auth أصلي.";
+    }
+    if (joined.includes("email_not_confirmed")
+      || joined.includes("email not confirmed")) {
+      return "حساب Supabase Auth التجريبي يحتاج إلى تأكيد البريد الإلكتروني قبل تسجيل الدخول.";
+    }
+    if (joined.includes("user_banned") || joined.includes("user is banned")) {
+      return "حساب Supabase Auth التجريبي موقوف؛ لا تكرر محاولة الدخول.";
+    }
+    if (joined.includes("signup_disabled")) {
+      return "تسجيل الحسابات الأصلية معطّل في مشروع Supabase التجريبي؛ يلزم التحقق من إعدادات Auth قبل المتابعة.";
+    }
+
+    return "رفض Supabase تسجيل الدخول (HTTP " + httpStatus + "). لم تُرجع الاستجابة رمز سبب واضحًا يمكن عرضه بأمان. قبل أي محاولة أخرى، تحقق من وجود المستخدم في Authentication → Users داخل مشروع الاختبار، وأن الحساب مؤكد. استخدم كلمة مرور Supabase Auth الأصلية، لا كلمة مرور Clerk.";
+  }
+
+  function restoreRunButton() {
+    if (!runButton) return;
+    runButton.hidden = false;
+    runButton.style.display = "block";
+    runButton.style.visibility = "visible";
+    runButton.disabled = false;
+    runButton.textContent = "تنفيذ اختبار الرمز الأصلي";
+  }
+
   async function runProbe(event) {
     event?.preventDefault?.();
     if (busy) return;
@@ -100,7 +140,11 @@ export default function(component) {
     }
 
     busy = true;
+    runButton.hidden = false;
+    runButton.style.display = "block";
+    runButton.style.visibility = "visible";
     runButton.disabled = true;
+    runButton.textContent = "جارٍ تنفيذ الاختبار…";
     show("1/4 — يجري إنشاء جلسة Supabase Auth أصلية داخل المتصفح…");
 
     let accessToken = "";
@@ -139,9 +183,8 @@ export default function(component) {
       }
 
       if (!signInResponse.ok || !accessToken) {
-        const code = String(signInData?.code || signInData?.error || "auth_sign_in_failed");
-        signInFailure = "لم ينجح تسجيل الدخول الأصلي إلى Supabase. HTTP "
-          + signInResponse.status + " · " + code + "\nلم يتم تنفيذ اختبار الجدول.";
+        signInFailure = safeAuthFailure(signInData, signInResponse.status)
+          + "\nلم يتم تنفيذ اختبار الجدول.";
       } else {
         show("2/4 — التحقق من الرمز لدى Supabase Auth…");
         const userResponse = await fetch(supabaseUrl + "/auth/v1/user", {
@@ -230,7 +273,7 @@ export default function(component) {
       password = "";
       if (passwordInput) passwordInput.value = "";
       busy = false;
-      if (runButton) runButton.disabled = false;
+      restoreRunButton();
 
       if (signInFailure) {
         show(signInFailure + "\nتم مسح كلمة المرور من الحقل.");
@@ -292,7 +335,7 @@ def render_supabase_native_auth_denial_probe() -> None:
         "بيانات المجلس. لا تدخل كلمة مرور الإنتاج إذا كانت مختلفة."
     )
     st.markdown(
-        "**Supabase test project:** `https://pidcepvwsezdrlhxqksg.supabase.co`  \n\n"
+        f"**Supabase test project:** `{TEST_SUPABASE_URL}`  \n\n"
         "الاختبار: تسجيل دخول أصلي، التحقق من JWT، ثم محاولة قراءة جدول Clerk المعزول."
     )
 
