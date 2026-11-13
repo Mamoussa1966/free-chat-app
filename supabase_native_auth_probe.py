@@ -18,7 +18,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     sent only to the test Supabase project. Nothing is persisted by Streamlit.
     """
     st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
-    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-20261112")
+    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-JS-RAW-20261113")
     st.warning(
         "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
         "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
@@ -32,7 +32,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     SUPABASE_URL_JSON = json.dumps(TEST_SUPABASE_URL)
     SUPABASE_KEY_JSON = json.dumps(TEST_SUPABASE_PUBLISHABLE_KEY)
     
-    PROBE_HTML = """
+    PROBE_HTML = r"""
     <!doctype html>
     <html lang="ar" dir="rtl">
     <head>
