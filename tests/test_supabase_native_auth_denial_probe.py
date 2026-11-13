@@ -23,6 +23,9 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert 'runButton.addEventListener("click", runProbe)' in source
     assert 'emailInput.addEventListener("input", updateReadyState)' in source
     assert 'passwordInput.addEventListener("input", updateReadyState)' in source
+    assert "st.iframe(PROBE_HTML, height=470)" in source
+    assert "components.html" not in source
+    assert "لم يبدأ الاختبار بعد" in source
     assert '<input id="native-password" type="text" autocomplete="off"' in source
     assert "ستظهر كلمة المرور أثناء الكتابة" in source
     assert "togglePasswordButton" not in source
