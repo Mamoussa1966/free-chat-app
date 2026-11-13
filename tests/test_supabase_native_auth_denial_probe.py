@@ -23,12 +23,13 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert 'runButton?.addEventListener("click", runProbe)' in source
     assert 'emailInput?.addEventListener("input", updateReadyState)' in source
     assert 'passwordInput?.addEventListener("input", updateReadyState)' in source
-    assert "from streamlit.components.v2 import component" in source
-    assert "_NATIVE_AUTH_PROBE_COMPONENT = component(" in source
-    assert "_NATIVE_AUTH_PROBE_COMPONENT(" in source
+    assert "import streamlit.components.v1 as components" in source
+    assert "components.html(PROBE_HTML, height=470, scrolling=True)" in source
+    assert "streamlit.components.v2" not in source
     assert "st.iframe(" not in source
-    assert "components.html" not in source
-    assert "تهيئة واجهة الاختبار" in source
+    assert "background:#2563eb; color:white" in source
+    assert "function safeAuthFailure(payload, httpStatus)" in source
+    assert "function restoreRunButton()" in source
     assert "function safeAuthFailure(payload, httpStatus)" in source
     assert "payload?.error_code" in source
     assert "invalid_credentials" in source
