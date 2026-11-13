@@ -29,6 +29,11 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "st.iframe(" not in source
     assert "components.html" not in source
     assert "تهيئة واجهة الاختبار" in source
+    assert "function safeAuthFailure(payload, httpStatus)" in source
+    assert "payload?.error_code" in source
+    assert "invalid_credentials" in source
+    assert "function restoreRunButton()" in source
+    assert "runButton.style.visibility = \"visible\"" in source
     assert '<input id="native-password" type="text" autocomplete="off"' in source
     assert "ستظهر كلمة المرور أثناء الكتابة" in source
     assert "togglePasswordButton" not in source
