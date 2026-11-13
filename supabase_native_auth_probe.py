@@ -3,6 +3,11 @@ from __future__ import annotations
 import streamlit as st
 from streamlit.components.v2 import component
 
+from clerk_streamlit_auth import (
+    TEST_SUPABASE_PUBLISHABLE_KEY,
+    TEST_SUPABASE_URL,
+)
+
 
 _NATIVE_AUTH_PROBE_HTML = """
 <div class="native-auth-probe panel" dir="rtl" lang="ar">
@@ -294,8 +299,8 @@ def render_supabase_native_auth_denial_probe() -> None:
     _NATIVE_AUTH_PROBE_COMPONENT(
         key="ai_council_supabase_native_auth_probe_v2",
         data={
-            "supabase_url": "https://pidcepvwsezdrlhxqksg.supabase.co",
-            "publishable_key": "sb_publishable_DYeRykN5_v4KIpwfF6uY6A_yj18ggAz",
+            "supabase_url": TEST_SUPABASE_URL,
+            "publishable_key": TEST_SUPABASE_PUBLISHABLE_KEY,
         },
     )
 
