@@ -62,9 +62,9 @@ def render_supabase_native_auth_denial_probe() -> None:
         <input id="native-email" type="email" autocomplete="username" required maxlength="254">
         <label for="native-password">كلمة مرور حساب Supabase التجريبي</label>
         <input id="native-password" type="password" autocomplete="current-password" required maxlength="256">
-        <button id="run-probe" type="submit">تنفيذ اختبار الرمز الأصلي</button>
+        <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
       </form>
-      <div id="result" role="status" aria-live="polite">لم يبدأ الاختبار. لن يُرسل أي طلب حتى تضغط الزر.</div>
+      <div id="result" role="status" aria-live="polite">جارٍ تجهيز واجهة الاختبار داخل المتصفح…</div>
     </div>
     <script>
     (() => {
@@ -244,7 +244,22 @@ def render_supabase_native_auth_denial_probe() -> None:
         }
       }
     
+      function updateReadyState() {
+        if (busy) return;
+        if (String(emailInput.value || "").trim() && String(passwordInput.value || "")) {
+          show("الحقول مكتملة والزر جاهز. اضغط «تنفيذ اختبار الرمز الأصلي» لبدء الاتصال بمشروع Supabase التجريبي.");
+        } else {
+          show("واجهة الاختبار جاهزة. أدخل بريد حساب Supabase التجريبي وكلمة مروره، ثم اضغط زر التنفيذ.");
+        }
+      }
+
+      // Use a direct click listener rather than relying only on mobile form submission.
+      // Keep form submit as a keyboard-accessible fallback.
+      runButton.addEventListener("click", runProbe);
       form.addEventListener("submit", runProbe);
+      emailInput.addEventListener("input", updateReadyState);
+      passwordInput.addEventListener("input", updateReadyState);
+      updateReadyState();
     })();
     </script>
     </body>
