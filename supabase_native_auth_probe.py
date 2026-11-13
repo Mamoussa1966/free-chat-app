@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from clerk_streamlit_auth import (
     TEST_SUPABASE_PUBLISHABLE_KEY,
@@ -66,7 +65,7 @@ def render_supabase_native_auth_denial_probe() -> None:
       <p class="hint">ستظهر كلمة المرور أثناء الكتابة لمراجعة الأحرف، وسيتم مسحها بعد تنفيذ الاختبار.</p>
         <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
       </form>
-      <div id="result" role="status" aria-live="polite">جارٍ تجهيز واجهة الاختبار داخل المتصفح…</div>
+      <div id="result" role="status" aria-live="polite">لم يبدأ الاختبار بعد. إذا بقيت هذه الرسالة بعد تحميل الصفحة، فهذا يعني أن واجهة JavaScript لم تتهيأ، ولا تدخل أي بيانات.</div>
     </div>
     <script>
     (() => {
@@ -270,7 +269,7 @@ def render_supabase_native_auth_denial_probe() -> None:
         "__SUPABASE_KEY__", SUPABASE_KEY_JSON
     )
     
-    components.html(PROBE_HTML, height=470, scrolling=True)
+    st.iframe(PROBE_HTML, height=470)
     
     st.caption(
         "الاختبار يقرأ فقط جدول Clerk. لا ينشئ سجلات ولا يغيّر بيانات الجدول. "
