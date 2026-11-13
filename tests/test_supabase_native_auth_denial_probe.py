@@ -40,6 +40,8 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-20261112" in source
     assert "render_supabase_native_auth_denial_probe" in page
     assert "render_supabase_native_auth_denial_probe" in page11
+    assert "render_supabase_native_auth_denial_probe()" in page11
+    assert "with st.expander(\"🧪 اختبار مستقل: رفض رمز Supabase Auth الأصلي\"" not in page11
 
 
 def test_native_supabase_auth_probe_never_persists_or_returns_password_or_token():
