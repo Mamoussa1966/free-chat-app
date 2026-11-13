@@ -62,8 +62,8 @@ def render_supabase_native_auth_denial_probe() -> None:
         <label for="native-email">البريد الإلكتروني</label>
         <input id="native-email" type="email" autocomplete="username" required maxlength="254">
         <label for="native-password">كلمة مرور حساب Supabase التجريبي</label>
-        <input id="native-password" type="password" autocomplete="current-password" required maxlength="256">
-      <button id="toggle-password" class="secondary" type="button" aria-pressed="false">إظهار كلمة المرور</button>
+        <input id="native-password" type="text" autocomplete="off" required maxlength="256">
+      <p class="hint">ستظهر كلمة المرور أثناء الكتابة لمراجعة الأحرف، وسيتم مسحها بعد تنفيذ الاختبار.</p>
         <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
       </form>
       <div id="result" role="status" aria-live="polite">جارٍ تجهيز واجهة الاختبار داخل المتصفح…</div>
@@ -76,7 +76,6 @@ def render_supabase_native_auth_denial_probe() -> None:
       const form = document.getElementById("native-auth-form");
       const emailInput = document.getElementById("native-email");
       const passwordInput = document.getElementById("native-password");
-      const togglePasswordButton = document.getElementById("toggle-password");
       const runButton = document.getElementById("run-probe");
       const resultNode = document.getElementById("result");
       let busy = false;
@@ -258,12 +257,6 @@ def render_supabase_native_auth_denial_probe() -> None:
 
       // Use a direct click listener rather than relying only on mobile form submission.
       // Keep form submit as a keyboard-accessible fallback.
-      togglePasswordButton.addEventListener("click", () => {
-        const reveal = passwordInput.type === "password";
-        passwordInput.type = reveal ? "text" : "password";
-        togglePasswordButton.textContent = reveal ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
-        togglePasswordButton.setAttribute("aria-pressed", String(reveal));
-      });
       runButton.addEventListener("click", runProbe);
       form.addEventListener("submit", runProbe);
       emailInput.addEventListener("input", updateReadyState);
