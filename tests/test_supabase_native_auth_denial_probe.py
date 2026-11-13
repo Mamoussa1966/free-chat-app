@@ -23,6 +23,10 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert 'runButton.addEventListener("click", runProbe)' in source
     assert 'emailInput.addEventListener("input", updateReadyState)' in source
     assert 'passwordInput.addEventListener("input", updateReadyState)' in source
+    assert 'id="toggle-password"' in source
+    assert 'passwordInput.type = reveal ? "text" : "password"' in source
+    assert 'إظهار كلمة المرور' in source
+    assert 'إخفاء كلمة المرور' in source
     assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-20261112" in source
     assert "render_supabase_native_auth_denial_probe" in page
     assert "render_supabase_native_auth_denial_probe" in page11
