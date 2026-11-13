@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
+
 import streamlit as st
-from streamlit.components.v2 import component
+import streamlit.components.v1 as components
 
 from clerk_streamlit_auth import (
     TEST_SUPABASE_PUBLISHABLE_KEY,
@@ -9,212 +11,202 @@ from clerk_streamlit_auth import (
 )
 
 
-_NATIVE_AUTH_PROBE_HTML = """
-<div class="native-auth-probe panel" dir="rtl" lang="ar">
-  <h3>بيانات حساب Supabase التجريبي</h3>
-  <p class="hint">هذه ليست شاشة Clerk. استخدم حساب Supabase Auth الموجود في مشروع الاختبار فقط.</p>
-  <label for="native-email">البريد الإلكتروني</label>
-  <input id="native-email" type="email" autocomplete="username" required maxlength="254">
-  <label for="native-password">كلمة مرور حساب Supabase التجريبي</label>
-  <input id="native-password" type="text" autocomplete="off" required maxlength="256">
-  <p class="hint">ستظهر كلمة المرور أثناء الكتابة لمراجعة الأحرف، وسيتم مسحها بعد تنفيذ الاختبار.</p>
-  <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
-  <div id="result" role="status" aria-live="polite">تهيئة واجهة الاختبار…</div>
-</div>
-"""
+def render_supabase_native_auth_denial_probe() -> None:
+    """Render a browser-only native Supabase Auth token denial test.
 
-_NATIVE_AUTH_PROBE_CSS = """
-.native-auth-probe {
-  font-family: system-ui, sans-serif;
-  border: 1px solid rgba(128,128,128,.45);
-  border-radius: 12px;
-  padding: 16px;
-  color: var(--text-color);
-}
-.native-auth-probe label { display:block; margin:12px 0 6px; font-weight:600; }
-.native-auth-probe input {
-  box-sizing:border-box; width:100%; padding:12px;
-  border:1px solid rgba(128,128,128,.55); border-radius:8px;
-  font:inherit; color:var(--text-color); background:var(--secondary-background-color);
-}
-.native-auth-probe button {
-  width:100%; margin-top:16px; padding:12px; border:0; border-radius:8px;
-  font:inherit; font-weight:700; cursor:pointer;
-  background:var(--primary-color); color:white;
-}
-.native-auth-probe button:disabled { opacity:.6; cursor:wait; }
-.native-auth-probe #result {
-  margin-top:14px; padding:12px; border-radius:8px;
-  white-space:pre-wrap; overflow-wrap:anywhere;
-  background:var(--secondary-background-color);
-}
-.native-auth-probe .hint { opacity:.78; font-size:.92rem; }
-"""
-
-_NATIVE_AUTH_PROBE_JS = r"""
-export default function(component) {
-  const { data, parentElement } = component;
-  const root = parentElement.querySelector(".native-auth-probe");
-  if (!root) return () => {};
-
-  const supabaseUrl = String(data?.supabase_url || "");
-  const publishableKey = String(data?.publishable_key || "");
-  const emailInput = root.querySelector("#native-email");
-  const passwordInput = root.querySelector("#native-password");
-  const runButton = root.querySelector("#run-probe");
-  const resultNode = root.querySelector("#result");
-  let busy = false;
-
-  function show(message) {
-    if (resultNode) resultNode.textContent = String(message || "");
-  }
-
-  async function readJson(response) {
-    try { return await response.json(); } catch (_) { return null; }
-  }
-
-  function updateReadyState() {
-    if (busy) return;
-    if (String(emailInput?.value || "").trim() && String(passwordInput?.value || "")) {
-      show("الحقول مكتملة والزر جاهز. اضغط «تنفيذ اختبار الرمز الأصلي» لبدء الاتصال بمشروع Supabase التجريبي.");
-    } else {
-      show("واجهة الاختبار جاهزة. أدخل بريد حساب Supabase التجريبي وكلمة مروره، ثم اضغط زر التنفيذ.");
-    }
-  }
-
-  function safeAuthFailure(payload, httpStatus) {
-    const candidates = [
-      payload?.error_code,
-      payload?.error,
-      payload?.code,
-      payload?.msg,
-      payload?.message,
-      payload?.error_description
-    ];
-    const strings = candidates.filter(value => typeof value === "string")
-      .map(value => value.toLowerCase().slice(0, 180));
-    const joined = strings.join(" ");
-
-    if (joined.includes("invalid_credentials")
-      || joined.includes("invalid login credentials")) {
-      return "رفض Supabase بيانات الدخول. هذا يعني أن البريد/كلمة المرور لا يطابقان مستخدمًا أصليًا في Supabase Auth التجريبي، أو أن الحساب غير متاح. تسجيل الدخول إلى Clerk لا يثبت وجود حساب Supabase Auth أصلي.";
-    }
-    if (joined.includes("email_not_confirmed")
-      || joined.includes("email not confirmed")) {
-      return "حساب Supabase Auth التجريبي يحتاج إلى تأكيد البريد الإلكتروني قبل تسجيل الدخول.";
-    }
-    if (joined.includes("user_banned") || joined.includes("user is banned")) {
-      return "حساب Supabase Auth التجريبي موقوف؛ لا تكرر محاولة الدخول.";
-    }
-    if (joined.includes("signup_disabled")) {
-      return "تسجيل الحسابات الأصلية معطّل في مشروع Supabase التجريبي؛ يلزم التحقق من إعدادات Auth قبل المتابعة.";
-    }
-
-    return "رفض Supabase تسجيل الدخول (HTTP " + httpStatus + "). لم تُرجع الاستجابة رمز سبب واضحًا يمكن عرضه بأمان. قبل أي محاولة أخرى، تحقق من وجود المستخدم في Authentication → Users داخل مشروع الاختبار، وأن الحساب مؤكد. استخدم كلمة مرور Supabase Auth الأصلية، لا كلمة مرور Clerk.";
-  }
-
-  function restoreRunButton() {
-    if (!runButton) return;
-    runButton.hidden = false;
-    runButton.style.display = "block";
-    runButton.style.visibility = "visible";
-    runButton.disabled = false;
-    runButton.textContent = "تنفيذ اختبار الرمز الأصلي";
-  }
-
-  async function runProbe(event) {
-    event?.preventDefault?.();
-    if (busy) return;
-
-    const email = String(emailInput?.value || "").trim();
-    let password = String(passwordInput?.value || "");
-    if (!email || !password) {
-      show("أدخل البريد وكلمة المرور أولًا.");
-      return;
-    }
-    if (!supabaseUrl || !publishableKey) {
-      password = "";
-      if (passwordInput) passwordInput.value = "";
-      show("إعدادات مشروع Supabase التجريبي غير مكتملة. لم يبدأ الاتصال.");
-      return;
-    }
-
-    busy = true;
-    runButton.hidden = false;
-    runButton.style.display = "block";
-    runButton.style.visibility = "visible";
-    runButton.disabled = true;
-    runButton.textContent = "جارٍ تنفيذ الاختبار…";
-    show("1/4 — يجري إنشاء جلسة Supabase Auth أصلية داخل المتصفح…");
-
-    let accessToken = "";
-    let authenticated = false;
-    let readPass = false;
-    let readDetail = "";
-    let sessionCreated = false;
-    let logoutPass = false;
-    let signInFailure = "";
-
-    try {
-      const signInResponse = await fetch(
-        supabaseUrl + "/auth/v1/token?grant_type=password",
-        {
-          method: "POST",
-          headers: {
-            "apikey": publishableKey,
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-          },
-          body: JSON.stringify({ email, password }),
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "error"
-        }
-      );
-      password = "";
-      if (passwordInput) passwordInput.value = "";
-      const signInData = await readJson(signInResponse);
-      accessToken = typeof signInData?.access_token === "string"
-        ? signInData.access_token : "";
-      sessionCreated = !!accessToken;
-      if (signInData && typeof signInData === "object") {
-        signInData.access_token = "";
-        signInData.refresh_token = "";
+    Credentials and the returned JWT remain in this isolated iframe and are
+    sent only to the test Supabase project. Nothing is persisted by Streamlit.
+    """
+    st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
+    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-20261112")
+    st.warning(
+        "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
+        "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
+        "Supabase التجريبي؛ لا يرسلهما هذا الاختبار إلى Streamlit أو GitHub أو قاعدة "
+        "بيانات المجلس. لا تدخل كلمة مرور الإنتاج إذا كانت مختلفة."
+    )
+    st.markdown(
+        f"**Supabase test project:** `{TEST_SUPABASE_URL}`  \n\n"
+        "الاختبار: تسجيل دخول أصلي، التحقق من JWT، ثم محاولة قراءة جدول Clerk المعزول."
+    )
+    SUPABASE_URL_JSON = json.dumps(TEST_SUPABASE_URL)
+    SUPABASE_KEY_JSON = json.dumps(TEST_SUPABASE_PUBLISHABLE_KEY)
+    
+    PROBE_HTML = """
+    <!doctype html>
+    <html lang="ar" dir="rtl">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; }
+      .panel { border: 1px solid rgba(128,128,128,.45); border-radius: 12px; padding: 16px; }
+      label { display:block; margin: 12px 0 6px; font-weight: 600; }
+      input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #8888;
+              border-radius: 8px; font: inherit; }
+      button { width:100%; margin-top:16px; padding:12px; border:0; border-radius:8px;
+               font:inherit; font-weight:700; cursor:pointer; background:#2563eb; color:white; }
+      button:disabled { opacity:.6; cursor:wait; }
+      button.secondary { width:auto; margin-top:8px; padding:8px 12px; border:1px solid #8888; background:transparent; color:CanvasText; }
+      #result { margin-top:14px; padding:12px; border-radius:8px; white-space:pre-wrap;
+                overflow-wrap:anywhere; background:rgba(128,128,128,.12); }
+      .hint { color:CanvasText; opacity:.75; font-size:.92rem; }
+    </style>
+    </head>
+    <body>
+    <div class="panel">
+      <h3>بيانات حساب Supabase التجريبي</h3>
+      <p class="hint">هذه ليست شاشة Clerk. أدخل كلمة مرور حساب Supabase Auth الموجود في مشروع الاختبار.</p>
+      <form id="native-auth-form" autocomplete="off">
+        <label for="native-email">البريد الإلكتروني</label>
+        <input id="native-email" type="email" autocomplete="username" required maxlength="254">
+        <label for="native-password">كلمة مرور حساب Supabase التجريبي</label>
+        <input id="native-password" type="text" autocomplete="off" required maxlength="256">
+      <p class="hint">ستظهر كلمة المرور أثناء الكتابة لمراجعة الأحرف، وسيتم مسحها بعد تنفيذ الاختبار.</p>
+        <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
+      </form>
+      <div id="result" role="status" aria-live="polite">جارٍ تجهيز واجهة الاختبار داخل المتصفح…</div>
+    </div>
+    <script>
+    (() => {
+      "use strict";
+      const SUPABASE_URL = __SUPABASE_URL__;
+      const SUPABASE_KEY = __SUPABASE_KEY__;
+      const form = document.getElementById("native-auth-form");
+      const emailInput = document.getElementById("native-email");
+      const passwordInput = document.getElementById("native-password");
+      const runButton = document.getElementById("run-probe");
+      const resultNode = document.getElementById("result");
+      let busy = false;
+    
+      function show(message) {
+        resultNode.textContent = String(message || "");
+      }
+    
+      async function readJson(response) {
+        try { return await response.json(); } catch (_) { return null; }
       }
 
-      if (!signInResponse.ok || !accessToken) {
-        signInFailure = safeAuthFailure(signInData, signInResponse.status)
-          + "\nلم يتم تنفيذ اختبار الجدول.";
-      } else {
-        show("2/4 — التحقق من الرمز لدى Supabase Auth…");
-        const userResponse = await fetch(supabaseUrl + "/auth/v1/user", {
-          method: "GET",
-          headers: {
-            "apikey": publishableKey,
-            "Authorization": "Bearer " + accessToken,
-            "Accept": "application/json"
-          },
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "error"
-        });
-        const userData = await readJson(userResponse);
-        authenticated = userResponse.ok && typeof userData?.id === "string";
-        if (userData && typeof userData === "object") {
-          userData.id = "";
-        }
+      function safeAuthFailure(payload, httpStatus) {
+        const values = [
+          payload?.error_code, payload?.error, payload?.code,
+          payload?.msg, payload?.message, payload?.error_description
+        ].filter(value => typeof value === "string")
+          .map(value => value.toLowerCase().slice(0, 180));
+        const reason = values.join(" ");
 
-        if (!authenticated) {
-          readDetail = "تسجيل الدخول أعاد رمزًا، لكن التحقق من المستخدم فشل. HTTP "
-            + userResponse.status + ". أوقفنا اختبار الجدول.";
-        } else {
+        if (reason.includes("invalid_credentials")
+          || reason.includes("invalid login credentials")) {
+          return "رفض Supabase بيانات الدخول. قد لا يكون لهذا البريد حساب أصلي في Supabase Auth التجريبي، أو أن كلمة المرور غير مطابقة. نجاح تسجيل الدخول إلى Clerk لا يعني وجود حساب Supabase Auth أصلي.";
+        }
+        if (reason.includes("email_not_confirmed")
+          || reason.includes("email not confirmed")) {
+          return "حساب Supabase Auth التجريبي يحتاج إلى تأكيد البريد الإلكتروني قبل تسجيل الدخول.";
+        }
+        if (reason.includes("user_banned") || reason.includes("user is banned")) {
+          return "حساب Supabase Auth التجريبي موقوف. لا تكرر المحاولة.";
+        }
+        if (reason.includes("signup_disabled")) {
+          return "تسجيل الحسابات الأصلية معطّل في مشروع Supabase التجريبي. يلزم فحص إعدادات Auth.";
+        }
+        return "رفض Supabase تسجيل الدخول (HTTP " + httpStatus + "). لم يتوفر رمز خطأ محدد يمكن عرضه بأمان. لا تكرر المحاولة قبل التحقق من وجود المستخدم وتأكيد بريده في Authentication → Users داخل مشروع الاختبار. استخدم كلمة مرور Supabase Auth الأصلية، لا كلمة مرور Clerk.";
+      }
+
+      function restoreRunButton() {
+        runButton.hidden = false;
+        runButton.style.display = "block";
+        runButton.style.visibility = "visible";
+        runButton.disabled = false;
+        runButton.textContent = "تنفيذ اختبار الرمز الأصلي";
+      }
+    
+      async function runProbe(event) {
+        event.preventDefault();
+        if (busy) return;
+    
+        const email = String(emailInput.value || "").trim();
+        let password = String(passwordInput.value || "");
+        if (!email || !password) {
+          show("أدخل البريد وكلمة المرور أولًا.");
+          return;
+        }
+    
+        busy = true;
+        runButton.hidden = false;
+        runButton.style.display = "block";
+        runButton.style.visibility = "visible";
+        runButton.disabled = true;
+        runButton.textContent = "جارٍ تنفيذ الاختبار…";
+        show("1/4 — يجري إنشاء جلسة Supabase Auth أصلية داخل المتصفح…");
+    
+        let accessToken = "";
+        let authenticated = false;
+        let readPass = false;
+        let readDetail = "";
+        let sessionCreated = false;
+        let logoutPass = false;
+    
+        try {
+          const signInResponse = await fetch(
+            SUPABASE_URL + "/auth/v1/token?grant_type=password",
+            {
+              method: "POST",
+              headers: {
+                "apikey": SUPABASE_KEY,
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+              },
+              body: JSON.stringify({ email, password }),
+              cache: "no-store",
+              credentials: "omit",
+              redirect: "error"
+            }
+          );
+          password = "";
+          passwordInput.value = "";
+          const signInData = await readJson(signInResponse);
+          accessToken = typeof signInData?.access_token === "string"
+            ? signInData.access_token : "";
+          sessionCreated = !!accessToken;
+          if (signInData && typeof signInData === "object") {
+            signInData.access_token = "";
+            signInData.refresh_token = "";
+          }
+    
+          if (!signInResponse.ok || !accessToken) {
+            show(safeAuthFailure(signInData, signInResponse.status)
+              + "\nلم يتم تنفيذ اختبار الجدول.");
+            return;
+          }
+    
+          show("2/4 — التحقق من الرمز لدى Supabase Auth…");
+          const userResponse = await fetch(SUPABASE_URL + "/auth/v1/user", {
+            method: "GET",
+            headers: {
+              "apikey": SUPABASE_KEY,
+              "Authorization": "Bearer " + accessToken,
+              "Accept": "application/json"
+            },
+            cache: "no-store",
+            credentials: "omit",
+            redirect: "error"
+          });
+          const userData = await readJson(userResponse);
+          authenticated = userResponse.ok && typeof userData?.id === "string";
+          if (!authenticated) {
+            show("تسجيل الدخول أعاد رمزًا، لكن التحقق من المستخدم فشل. HTTP "
+              + userResponse.status + "\nأوقفنا اختبار الجدول.");
+            return;
+          }
+    
           show("3/4 — فحص قراءة جدول Clerk باستخدام JWT الأصلي…");
           const readResponse = await fetch(
-            supabaseUrl + "/rest/v1/clerk_auth_pilot_records?select=record_id&limit=10",
+            SUPABASE_URL + "/rest/v1/clerk_auth_pilot_records?select=record_id&limit=10",
             {
               method: "GET",
               headers: {
-                "apikey": publishableKey,
+                "apikey": SUPABASE_KEY,
                 "Authorization": "Bearer " + accessToken,
                 "Accept": "application/json"
               },
@@ -224,7 +216,7 @@ export default function(component) {
             }
           );
           const rows = await readJson(readResponse);
-
+    
           if (readResponse.status === 200 && Array.isArray(rows) && rows.length === 0) {
             readPass = true;
             readDetail = "RLS أعادت صفر سجلات؛ لم يتمكن رمز Supabase Auth من قراءة سجلات Clerk.";
@@ -239,114 +231,85 @@ export default function(component) {
             readDetail = "نتيجة غير حاسمة لقراءة الجدول (HTTP "
               + readResponse.status + "). لا تُحسب PASS.";
           }
-        }
-      }
-    } catch (error) {
-      password = "";
-      if (passwordInput) passwordInput.value = "";
-      readDetail = "تعذر إكمال الطلب بسبب خطأ اتصال أو متصفح: "
-        + String(error?.name || "network_error");
-    } finally {
-      if (accessToken) {
-        try {
-          const logoutResponse = await fetch(
-            supabaseUrl + "/auth/v1/logout?scope=local",
-            {
-              method: "POST",
-              headers: {
-                "apikey": publishableKey,
-                "Authorization": "Bearer " + accessToken,
-                "Accept": "application/json"
-              },
-              cache: "no-store",
-              credentials: "omit",
-              redirect: "error"
+    
+          show("4/4 — إنهاء جلسة الاختبار المحلية…");
+        } catch (error) {
+          readDetail = "تعذر إكمال الطلب بسبب خطأ اتصال أو متصفح: "
+            + String(error?.name || "network_error");
+        } finally {
+          if (accessToken) {
+            try {
+              const logoutResponse = await fetch(
+                SUPABASE_URL + "/auth/v1/logout?scope=local",
+                {
+                  method: "POST",
+                  headers: {
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": "Bearer " + accessToken,
+                    "Accept": "application/json"
+                  },
+                  cache: "no-store",
+                  credentials: "omit",
+                  redirect: "error"
+                }
+              );
+              logoutPass = logoutResponse.ok;
+            } catch (_) {
+              logoutPass = false;
             }
-          );
-          logoutPass = logoutResponse.ok;
-        } catch (_) {
-          logoutPass = false;
+          }
+    
+          // Do not retain credentials or the JWT in browser storage, component state,
+          // Streamlit state, URLs, or DOM output.
+          accessToken = "";
+          password = "";
+          passwordInput.value = "";
+          busy = false;
+          restoreRunButton();
+    
+          const authLine = authenticated
+            ? "PASS — Supabase Auth تحقق من JWT ومستخدمه."
+            : "FAIL — لم يثبت تحقق Supabase Auth من JWT.";
+          const readLine = readPass
+            ? "PASS — " + readDetail
+            : "NOT PASS — " + (readDetail || "لم تكتمل قراءة جدول Clerk.");
+          const logoutLine = !sessionCreated
+            ? "لم تُنشأ جلسة Supabase؛ لذلك لم تكن هناك جلسة تحتاج إلى إنهاء."
+            : logoutPass
+              ? "PASS — أُنهيت جلسة الاختبار الحالية فقط (scope=local)."
+              : "تنبيه — لم نتأكد من إنهاء الجلسة المحلية؛ لا تعِد الاختبار قبل مراجعة حالة الجلسة.";
+    
+          show(authLine + "\n" + readLine + "\n" + logoutLine
+            + "\n\nلم نعرض رمز الجلسة أو معرّف المستخدم، ولم نحفظ كلمة المرور أو الرمز.");
+        }
+      }
+    
+      function updateReadyState() {
+        if (busy) return;
+        if (String(emailInput.value || "").trim() && String(passwordInput.value || "")) {
+          show("الحقول مكتملة والزر جاهز. اضغط «تنفيذ اختبار الرمز الأصلي» لبدء الاتصال بمشروع Supabase التجريبي.");
+        } else {
+          show("واجهة الاختبار جاهزة. أدخل بريد حساب Supabase التجريبي وكلمة مروره، ثم اضغط زر التنفيذ.");
         }
       }
 
-      accessToken = "";
-      password = "";
-      if (passwordInput) passwordInput.value = "";
-      busy = false;
-      restoreRunButton();
-
-      if (signInFailure) {
-        show(signInFailure + "\nتم مسح كلمة المرور من الحقل.");
-      } else {
-        const authLine = authenticated
-          ? "PASS — Supabase Auth تحقق من JWT ومستخدمه."
-          : "FAIL — لم يثبت تحقق Supabase Auth من JWT.";
-        const readLine = readPass
-          ? "PASS — " + readDetail
-          : "NOT PASS — " + (readDetail || "لم تكتمل قراءة جدول Clerk.");
-        const logoutLine = !sessionCreated
-          ? "لم تُنشأ جلسة Supabase؛ لذلك لم تكن هناك جلسة تحتاج إلى إنهاء."
-          : logoutPass
-            ? "PASS — أُنهيت جلسة الاختبار الحالية فقط (scope=local)."
-            : "تنبيه — لم نتأكد من إنهاء الجلسة المحلية؛ لا تعِد الاختبار قبل مراجعة حالة الجلسة.";
-
-        show(authLine + "\n" + readLine + "\n" + logoutLine
-          + "\n\nلم نعرض رمز الجلسة أو معرّف المستخدم، ولم نحفظ كلمة المرور أو الرمز.");
-      }
-    }
-  }
-
-  runButton?.addEventListener("click", runProbe);
-  emailInput?.addEventListener("input", updateReadyState);
-  passwordInput?.addEventListener("input", updateReadyState);
-  updateReadyState();
-
-  return () => {
-    runButton?.removeEventListener("click", runProbe);
-    emailInput?.removeEventListener("input", updateReadyState);
-    passwordInput?.removeEventListener("input", updateReadyState);
-    if (passwordInput) passwordInput.value = "";
-  };
-}
-"""
-
-_NATIVE_AUTH_PROBE_COMPONENT = component(
-    "ai_council.supabase_native_auth_probe_v2",
-    html=_NATIVE_AUTH_PROBE_HTML,
-    css=_NATIVE_AUTH_PROBE_CSS,
-    js=_NATIVE_AUTH_PROBE_JS,
-    isolate_styles=True,
-)
-
-
-def render_supabase_native_auth_denial_probe() -> None:
-    """Render a browser-only native Supabase Auth token denial test.
-
-    Credentials and the returned JWT remain inside the Components v2 iframe.
-    They are sent only to the isolated Supabase test project and never returned
-    to Python, Streamlit session state, logs, URLs, or component state.
-    """
-    st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
-    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-20261112")
-    st.warning(
-        "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
-        "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
-        "Supabase التجريبي؛ لا يرسلهما هذا الاختبار إلى Streamlit أو GitHub أو قاعدة "
-        "بيانات المجلس. لا تدخل كلمة مرور الإنتاج إذا كانت مختلفة."
+      // Use a direct click listener rather than relying only on mobile form submission.
+      // Keep form submit as a keyboard-accessible fallback.
+      runButton.addEventListener("click", runProbe);
+      form.addEventListener("submit", runProbe);
+      emailInput.addEventListener("input", updateReadyState);
+      passwordInput.addEventListener("input", updateReadyState);
+      updateReadyState();
+    })();
+    </script>
+    </body>
+    </html>
+    """.replace("__SUPABASE_URL__", SUPABASE_URL_JSON).replace(
+        "__SUPABASE_KEY__", SUPABASE_KEY_JSON
     )
-    st.markdown(
-        f"**Supabase test project:** `{TEST_SUPABASE_URL}`  \n\n"
-        "الاختبار: تسجيل دخول أصلي، التحقق من JWT، ثم محاولة قراءة جدول Clerk المعزول."
-    )
-
-    _NATIVE_AUTH_PROBE_COMPONENT(
-        key="ai_council_supabase_native_auth_probe_v2",
-        data={
-            "supabase_url": TEST_SUPABASE_URL,
-            "publishable_key": TEST_SUPABASE_PUBLISHABLE_KEY,
-        },
-    )
-
+    
+    components.html(PROBE_HTML, height=470, scrolling=True)
+    
     st.caption(
         "الاختبار يقرأ فقط جدول Clerk. لا ينشئ سجلات ولا يغيّر بيانات الجدول. "
         "يستخدم تسجيل دخول كلمة مرور Supabase Auth المحلي لهذا الفحص فقط، "
