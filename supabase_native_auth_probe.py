@@ -48,6 +48,7 @@ def render_supabase_native_auth_denial_probe() -> None:
       button { width:100%; margin-top:16px; padding:12px; border:0; border-radius:8px;
                font:inherit; font-weight:700; cursor:pointer; background:#2563eb; color:white; }
       button:disabled { opacity:.6; cursor:wait; }
+      button.secondary { width:auto; margin-top:8px; padding:8px 12px; border:1px solid #8888; background:transparent; color:CanvasText; }
       #result { margin-top:14px; padding:12px; border-radius:8px; white-space:pre-wrap;
                 overflow-wrap:anywhere; background:rgba(128,128,128,.12); }
       .hint { color:CanvasText; opacity:.75; font-size:.92rem; }
@@ -62,6 +63,7 @@ def render_supabase_native_auth_denial_probe() -> None:
         <input id="native-email" type="email" autocomplete="username" required maxlength="254">
         <label for="native-password">كلمة مرور حساب Supabase التجريبي</label>
         <input id="native-password" type="password" autocomplete="current-password" required maxlength="256">
+      <button id="toggle-password" class="secondary" type="button" aria-pressed="false">إظهار كلمة المرور</button>
         <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
       </form>
       <div id="result" role="status" aria-live="polite">جارٍ تجهيز واجهة الاختبار داخل المتصفح…</div>
@@ -74,6 +76,7 @@ def render_supabase_native_auth_denial_probe() -> None:
       const form = document.getElementById("native-auth-form");
       const emailInput = document.getElementById("native-email");
       const passwordInput = document.getElementById("native-password");
+      const togglePasswordButton = document.getElementById("toggle-password");
       const runButton = document.getElementById("run-probe");
       const resultNode = document.getElementById("result");
       let busy = false;
@@ -255,6 +258,12 @@ def render_supabase_native_auth_denial_probe() -> None:
 
       // Use a direct click listener rather than relying only on mobile form submission.
       // Keep form submit as a keyboard-accessible fallback.
+      togglePasswordButton.addEventListener("click", () => {
+        const reveal = passwordInput.type === "password";
+        passwordInput.type = reveal ? "text" : "password";
+        togglePasswordButton.textContent = reveal ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
+        togglePasswordButton.setAttribute("aria-pressed", String(reveal));
+      });
       runButton.addEventListener("click", runProbe);
       form.addEventListener("submit", runProbe);
       emailInput.addEventListener("input", updateReadyState);
