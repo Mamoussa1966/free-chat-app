@@ -18,7 +18,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     sent only to the test Supabase project. Nothing is persisted by Streamlit.
     """
     st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
-    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-ORIGIN-DIAG-20261114")
+    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-CLICK-DIAG-20261114")
     st.warning(
         "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
         "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
@@ -322,9 +322,18 @@ def render_supabase_native_auth_denial_probe() -> None:
         }
       }
 
-      // Use a direct click listener rather than relying only on mobile form submission.
-      // Keep form submit as a keyboard-accessible fallback.
-      runButton.addEventListener("click", runProbe);
+      // Instrument the physical interaction separately from the network request.
+      // This lets us prove whether Android taps are reaching the iframe button,
+      // even when no credentials are entered and no Auth request should be sent.
+      runButton.addEventListener("pointerdown", () => {
+        originNode.textContent = "تم رصد لمس زر الاختبار داخل إطار الصفحة.";
+        show("تم رصد اللمس. جارٍ انتظار حدث الضغط…");
+      }, { capture: true });
+      runButton.addEventListener("click", (event) => {
+        originNode.textContent = "تم استقبال ضغطة زر الاختبار داخل إطار الصفحة.";
+        runProbe(event);
+      });
+      // Keep keyboard submission as a fallback.
       form.addEventListener("submit", runProbe);
       emailInput.addEventListener("input", updateReadyState);
       passwordInput.addEventListener("input", updateReadyState);
