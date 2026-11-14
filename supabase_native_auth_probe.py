@@ -66,6 +66,7 @@ def render_supabase_native_auth_denial_probe() -> None:
       <p class="hint">ستظهر كلمة المرور أثناء الكتابة لمراجعة الأحرف، وسيتم مسحها بعد تنفيذ الاختبار.</p>
         <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
       </form>
+      <div id="origin-indicator" class="hint" role="status" aria-live="polite">مصدر تطبيق الاختبار: جارٍ التحديد…</div>
       <div id="result" role="status" aria-live="polite">جارٍ تجهيز واجهة الاختبار داخل المتصفح…</div>
     </div>
     <script>
@@ -78,7 +79,29 @@ def render_supabase_native_auth_denial_probe() -> None:
       const passwordInput = document.getElementById("native-password");
       const runButton = document.getElementById("run-probe");
       const resultNode = document.getElementById("result");
+      const originNode = document.getElementById("origin-indicator");
       let busy = false;
+
+      const pageOrigin = (() => {
+        // Streamlit's srcdoc component may suppress document.referrer.
+        // Prefer the embedding page origin exposed by Chromium.
+        try {
+          const ancestors = window.location.ancestorOrigins;
+          if (ancestors && ancestors.length > 0 && ancestors[0]) {
+            return ancestors[0];
+          }
+        } catch (_) {}
+        try {
+          const ownOrigin = window.location.origin;
+          if (ownOrigin && ownOrigin !== "null") return ownOrigin;
+        } catch (_) {}
+        try {
+          const referrer = new URL(document.referrer).origin;
+          if (referrer && referrer !== "null") return referrer;
+        } catch (_) {}
+        return "غير متاح داخل إطار المتصفح";
+      })();
+      originNode.textContent = "مصدر تطبيق الاختبار الفعلي: " + pageOrigin;
     
       function show(message) {
         resultNode.textContent = String(message || "");
@@ -148,26 +171,7 @@ def render_supabase_native_auth_denial_probe() -> None:
         let logoutPass = false;
         let authFailure = "";
         let tableAttempted = false;
-        const pageOrigin = (() => {
-          // Streamlit's srcdoc component may suppress document.referrer.
-          // Chrome exposes the embedding page through ancestorOrigins.
-          try {
-            const ancestors = window.location.ancestorOrigins;
-            if (ancestors && ancestors.length > 0 && ancestors[0]) {
-              return ancestors[0];
-            }
-          } catch (_) {}
-          try {
-            const ownOrigin = window.location.origin;
-            if (ownOrigin && ownOrigin !== "null") return ownOrigin;
-          } catch (_) {}
-          try {
-            const referrer = new URL(document.referrer).origin;
-            if (referrer && referrer !== "null") return referrer;
-          } catch (_) {}
-          return "غير متاح داخل إطار المتصفح";
-        })();
-    
+
         try {
           const signInResponse = await fetch(
             SUPABASE_URL + "/auth/v1/token?grant_type=password",
