@@ -30,6 +30,11 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "background:#2563eb; color:white" in source
     assert "function safeAuthFailure(payload, httpStatus)" in source
     assert "function restoreRunButton()" in source
+    assert 'let authFailure = ""' in source
+    assert "authFailure = safeAuthFailure(signInData, signInResponse.status)" in source
+    assert "let tableAttempted = false" in source
+    assert "NOT RUN — لم يُنفّذ طلب قراءة جدول Clerk" in source
+    assert "new URL(document.referrer).origin" in source
     assert "function safeAuthFailure(payload, httpStatus)" in source
     assert "payload?.error_code" in source
     assert "invalid_credentials" in source
