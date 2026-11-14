@@ -44,7 +44,9 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "ستظهر كلمة المرور أثناء الكتابة" in source
     assert "togglePasswordButton" not in source
     assert 'PROBE_HTML = r"""' in source
-    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-JS-RAW-20261113" in source
+    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-ORIGIN-DIAG-20261114" in source
+    assert "window.location.ancestorOrigins" in source
+    assert 'window.location.origin' in source
     assert "render_supabase_native_auth_denial_probe" in page
     assert "render_supabase_native_auth_denial_probe" in page11
     assert "render_supabase_native_auth_denial_probe()" in page11
