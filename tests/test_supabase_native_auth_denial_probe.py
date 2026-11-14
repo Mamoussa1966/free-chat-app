@@ -20,7 +20,8 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "/rest/v1/clerk_auth_pilot_records?select=record_id&limit=10" in source
     assert "/auth/v1/logout?scope=local" in source
     assert '<button id="run-probe" type="button">' in source
-    assert 'runButton.addEventListener("click", runProbe)' in source
+    assert 'runButton.addEventListener("click", (event) => {' in source
+    assert "runProbe(event);" in source
     assert 'emailInput.addEventListener("input", updateReadyState)' in source
     assert 'passwordInput.addEventListener("input", updateReadyState)' in source
     assert "import streamlit.components.v1 as components" in source
