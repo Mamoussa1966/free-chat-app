@@ -18,7 +18,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     sent only to the test Supabase project. Nothing is persisted by Streamlit.
     """
     st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
-    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-JS-RAW-20261113")
+    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-ORIGIN-DIAG-20261114")
     st.warning(
         "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
         "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
@@ -149,8 +149,23 @@ def render_supabase_native_auth_denial_probe() -> None:
         let authFailure = "";
         let tableAttempted = false;
         const pageOrigin = (() => {
-          try { return new URL(document.referrer).origin; }
-          catch (_) { return "غير متاح"; }
+          // Streamlit's srcdoc component may suppress document.referrer.
+          // Chrome exposes the embedding page through ancestorOrigins.
+          try {
+            const ancestors = window.location.ancestorOrigins;
+            if (ancestors && ancestors.length > 0 && ancestors[0]) {
+              return ancestors[0];
+            }
+          } catch (_) {}
+          try {
+            const ownOrigin = window.location.origin;
+            if (ownOrigin && ownOrigin !== "null") return ownOrigin;
+          } catch (_) {}
+          try {
+            const referrer = new URL(document.referrer).origin;
+            if (referrer && referrer !== "null") return referrer;
+          } catch (_) {}
+          return "غير متاح داخل إطار المتصفح";
         })();
     
         try {
