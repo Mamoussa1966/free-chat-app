@@ -146,6 +146,12 @@ def render_supabase_native_auth_denial_probe() -> None:
         let readDetail = "";
         let sessionCreated = false;
         let logoutPass = false;
+        let authFailure = "";
+        let tableAttempted = false;
+        const pageOrigin = (() => {
+          try { return new URL(document.referrer).origin; }
+          catch (_) { return "غير متاح"; }
+        })();
     
         try {
           const signInResponse = await fetch(
@@ -175,8 +181,7 @@ def render_supabase_native_auth_denial_probe() -> None:
           }
     
           if (!signInResponse.ok || !accessToken) {
-            show(safeAuthFailure(signInData, signInResponse.status)
-              + "\nلم يتم تنفيذ اختبار الجدول.");
+            authFailure = safeAuthFailure(signInData, signInResponse.status);
             return;
           }
     
@@ -195,11 +200,12 @@ def render_supabase_native_auth_denial_probe() -> None:
           const userData = await readJson(userResponse);
           authenticated = userResponse.ok && typeof userData?.id === "string";
           if (!authenticated) {
-            show("تسجيل الدخول أعاد رمزًا، لكن التحقق من المستخدم فشل. HTTP "
-              + userResponse.status + "\nأوقفنا اختبار الجدول.");
+            authFailure = "تسجيل الدخول أعاد رمزًا، لكن التحقق من المستخدم فشل. HTTP "
+              + userResponse.status;
             return;
           }
     
+          tableAttempted = true;
           show("3/4 — فحص قراءة جدول Clerk باستخدام JWT الأصلي…");
           const readResponse = await fetch(
             SUPABASE_URL + "/rest/v1/clerk_auth_pilot_records?select=record_id&limit=10",
@@ -234,8 +240,9 @@ def render_supabase_native_auth_denial_probe() -> None:
     
           show("4/4 — إنهاء جلسة الاختبار المحلية…");
         } catch (error) {
-          readDetail = "تعذر إكمال الطلب بسبب خطأ اتصال أو متصفح: "
+          authFailure = "تعذر إكمال طلب المصادقة أو الاختبار بسبب خطأ اتصال/متصفح: "
             + String(error?.name || "network_error");
+          readDetail = authFailure;
         } finally {
           if (accessToken) {
             try {
@@ -269,10 +276,12 @@ def render_supabase_native_auth_denial_probe() -> None:
     
           const authLine = authenticated
             ? "PASS — Supabase Auth تحقق من JWT ومستخدمه."
-            : "FAIL — لم يثبت تحقق Supabase Auth من JWT.";
-          const readLine = readPass
-            ? "PASS — " + readDetail
-            : "NOT PASS — " + (readDetail || "لم تكتمل قراءة جدول Clerk.");
+            : "FAIL — " + (authFailure || "لم يثبت تحقق Supabase Auth من JWT.");
+          const readLine = !tableAttempted
+            ? "NOT RUN — لم يُنفّذ طلب قراءة جدول Clerk لأن تسجيل الدخول أو التحقق من JWT لم يكتمل."
+            : readPass
+              ? "PASS — " + readDetail
+              : "NOT PASS — " + (readDetail || "لم تكتمل قراءة جدول Clerk.");
           const logoutLine = !sessionCreated
             ? "لم تُنشأ جلسة Supabase؛ لذلك لم تكن هناك جلسة تحتاج إلى إنهاء."
             : logoutPass
@@ -280,6 +289,7 @@ def render_supabase_native_auth_denial_probe() -> None:
               : "تنبيه — لم نتأكد من إنهاء الجلسة المحلية؛ لا تعِد الاختبار قبل مراجعة حالة الجلسة.";
     
           show(authLine + "\n" + readLine + "\n" + logoutLine
+            + "\nمصدر الصفحة الذي أرسل طلب المصادقة: " + pageOrigin
             + "\n\nلم نعرض رمز الجلسة أو معرّف المستخدم، ولم نحفظ كلمة المرور أو الرمز.");
         }
       }
