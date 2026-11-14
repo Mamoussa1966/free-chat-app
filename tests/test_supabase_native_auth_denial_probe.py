@@ -47,6 +47,9 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-ORIGIN-DIAG-20261114" in source
     assert "window.location.ancestorOrigins" in source
     assert 'window.location.origin' in source
+    assert 'id="origin-indicator"' in source
+    assert "مصدر تطبيق الاختبار الفعلي" in source
+    assert "originNode.textContent" in source
     assert "render_supabase_native_auth_denial_probe" in page
     assert "render_supabase_native_auth_denial_probe" in page11
     assert "render_supabase_native_auth_denial_probe()" in page11
