@@ -179,6 +179,9 @@ def render_supabase_native_auth_denial_probe() -> None:
         let nativeTokenVerified = false;
         let readPass = false;
         let readDetail = "";
+        let insertAttempted = false;
+        let insertPass = false;
+        let insertDetail = "";
         let sessionCreated = false;
         let logoutPass = false;
         let authFailure = "";
@@ -295,7 +298,73 @@ def render_supabase_native_auth_denial_probe() -> None:
             readDetail = "نتيجة غير حاسمة لقراءة الجدول (HTTP "
               + readResponse.status + "). لا تُحسب PASS.";
           }
-    
+
+          // Stronger issuer-policy proof: try one insert whose owner_subject
+          // exactly equals the verified native Supabase Auth user id. If the
+          // restrictive Clerk issuer policy is active, PostgreSQL must reject
+          // it with insufficient_privilege (42501). If unexpectedly accepted,
+          // immediately delete only this uniquely keyed test row and still fail.
+          insertAttempted = true;
+          const probeNonce = (typeof crypto.randomUUID === "function")
+            ? crypto.randomUUID()
+            : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+          const probeRecordKey = "native-auth-denial-" + probeNonce;
+          const insertResponse = await fetch(
+            SUPABASE_URL + "/rest/v1/clerk_auth_pilot_records",
+            {
+              method: "POST",
+              headers: {
+                "apikey": SUPABASE_KEY,
+                "Authorization": "Bearer " + accessToken,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+                "Accept": "application/json"
+              },
+              body: JSON.stringify({
+                owner_subject: userData.id,
+                record_key: probeRecordKey,
+                record_payload: {test: "native_auth_issuer_denial_probe"}
+              }),
+              cache: "no-store",
+              credentials: "omit",
+              redirect: "error"
+            }
+          );
+          const insertData = await readJson(insertResponse);
+          if (
+            (insertResponse.status === 401 || insertResponse.status === 403)
+            && insertData?.code === "42501"
+          ) {
+            insertPass = true;
+            insertDetail = "PASS — PostgreSQL رفض INSERT بهوية Supabase Auth الأصلية بالرمز 42501.";
+          } else if (insertResponse.ok) {
+            const cleanupResponse = await fetch(
+              SUPABASE_URL + "/rest/v1/clerk_auth_pilot_records?owner_subject=eq."
+                + encodeURIComponent(userData.id) + "&record_key=eq."
+                + encodeURIComponent(probeRecordKey),
+              {
+                method: "DELETE",
+                headers: {
+                  "apikey": SUPABASE_KEY,
+                  "Authorization": "Bearer " + accessToken,
+                  "Prefer": "return=minimal",
+                  "Accept": "application/json"
+                },
+                cache: "no-store",
+                credentials: "omit",
+                redirect: "error"
+              }
+            );
+            insertDetail = cleanupResponse.ok
+              ? "FAIL — قبل الجدول INSERT من JWT الأصلي؛ أزيل سجل الاختبار المؤقت مباشرةً."
+              : "CRITICAL — قبل الجدول INSERT من JWT الأصلي وتعذر تنظيف السجل المؤقت. مفتاح السجل: "
+                + probeRecordKey;
+          } else {
+            insertDetail = "NOT PASS — لم يثبت رفض RLS لمحاولة INSERT. HTTP "
+              + insertResponse.status + " · code="
+              + String(insertData?.code || "غير متاح");
+          }
+
           show("4/4 — إنهاء جلسة الاختبار المحلية…");
         } catch (error) {
           authFailure = "تعذر إكمال طلب المصادقة أو الاختبار بسبب خطأ اتصال/متصفح: "
@@ -340,13 +409,18 @@ def render_supabase_native_auth_denial_probe() -> None:
             : readPass
               ? "PASS — " + readDetail
               : "NOT PASS — " + (readDetail || "لم تكتمل قراءة جدول Clerk.");
+          const insertLine = !insertAttempted
+            ? "NOT RUN — لم تُنفّذ محاولة INSERT الأصلية."
+            : insertPass
+              ? insertDetail
+              : insertDetail || "NOT PASS — لم يثبت رفض INSERT بسبب سياسة مصدر Clerk.";
           const logoutLine = !sessionCreated
             ? "لم تُنشأ جلسة Supabase؛ لذلك لم تكن هناك جلسة تحتاج إلى إنهاء."
             : logoutPass
               ? "PASS — أُنهيت جلسة الاختبار الحالية فقط (scope=local)."
               : "تنبيه — لم نتأكد من إنهاء الجلسة المحلية؛ لا تعِد الاختبار قبل مراجعة حالة الجلسة.";
     
-          show(authLine + "\n" + readLine + "\n" + logoutLine
+          show(authLine + "\n" + readLine + "\n" + insertLine + "\n" + logoutLine
             + "\nمصدر الصفحة الذي أرسل طلب المصادقة: " + pageOrigin
             + "\n\nلم نعرض رمز الجلسة أو معرّف المستخدم، ولم نحفظ كلمة المرور أو الرمز.");
         }
