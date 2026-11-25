@@ -41,8 +41,12 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "invalid_credentials" in source
     assert "function restoreRunButton()" in source
     assert "runButton.style.visibility = \"visible\"" in source
-    assert '<input id="native-password" type="text" autocomplete="off"' in source
-    assert "ستظهر كلمة المرور أثناء الكتابة" in source
+    assert '<input id="native-password" type="password" autocomplete="current-password" required maxlength="256">' in source
+    assert "كلمة المرور مخفية أثناء الإدخال" in source
+    assert "ALLOWED_ORIGIN = __ALLOWED_ORIGIN__" in source
+    assert "const originAllowed = pageOrigin === ALLOWED_ORIGIN" in source
+    assert "if (!originAllowed)" in source
+    assert "runButton.disabled = !originAllowed" in source
     assert "togglePasswordButton" not in source
     assert 'PROBE_HTML = r"""' in source
     assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-SECURE-INPUT-20261125" in source
@@ -84,6 +88,10 @@ def test_native_supabase_auth_probe_requires_a_zero_row_rls_result_for_read_pass
     assert "readResponse.status === 200" in source
     assert "Array.isArray(rows) && rows.length === 0" in source
     assert "readResponse.status === 401 || readResponse.status === 403" in source
+    assert "لا تُحسب PASS." in source
+    assert "verifiedClaims.iss !== expectedIssuer" in source
+    assert 'verifiedClaims.role !== "authenticated"' in source
+    assert "verifiedClaims.sub !== userData.id" in source
     assert "لا تُحسب PASS." in source
     assert "verifiedClaims.iss !== expectedIssuer" in source
     assert 'verifiedClaims.role !== "authenticated"' in source
