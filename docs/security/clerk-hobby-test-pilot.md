@@ -22,24 +22,27 @@ The existing `public.council_conversations` table is not directly compatible wit
 
 Do not cast, truncate, hash, or synthesize UUIDs from Clerk subjects. Do not alter the existing conversation table, its foreign key, triggers, RLS policies, or the Cloudflare admin operator table as part of this pilot.
 
-## Applied isolated test migrations
+## Isolated test-project schema provisioning (not production migrations)
 
-The test project has two dedicated migrations:
+The Clerk pilot table exists only in the dedicated test project. Its provisioning scripts are deliberately kept under `supabase/tests/fixtures/`, not in the standard `supabase/migrations/` directory that feeds the production migration chain.
 
-1. `20261110123054_clerk_auth_pilot_isolated_rls`
-   `supabase/migrations/20261110123054_clerk_auth_pilot_isolated_rls.sql`
-   Creates only `public.clerk_auth_pilot_records`, an isolated table whose owner subject is text. It enables RLS, adds a **restrictive** issuer policy pinned to exactly `https://dear-hermit-1240.clerk.accounts.dev`, and per-operation owner policies comparing `owner_subject` with the JWT `sub`.
-2. `20261110125010_clerk_auth_pilot_restrict_table_grants`
-   `supabase/migrations/20261110125010_clerk_auth_pilot_restrict_table_grants.sql`
+The hosted test project was provisioned with these two scripts on the isolated project only:
+
+1. `supabase/tests/fixtures/20261110123054_clerk_auth_pilot_isolated_rls.sql`
+   Creates only `public.clerk_auth_pilot_records`, enables RLS, pins the restrictive issuer policy to exactly `https://dear-hermit-1240.clerk.accounts.dev`, and adds per-operation owner policies comparing `owner_subject` with JWT `sub`.
+2. `supabase/tests/fixtures/20261110125010_clerk_auth_pilot_restrict_table_grants.sql`
    Revokes inherited/default `PUBLIC` and `anon` table privileges, then grants CRUD only to `authenticated`.
 
-Both migrations are applied and recorded in the hosted test project's migration history. Read-only verification confirms:
+The local pgTAP test now creates or normalizes the same schema and policies inside its own transaction and rolls them back at the end. It does not depend on the fixture scripts being discovered as standard migrations.
+
+Read-only verification on the hosted test project previously confirmed:
 - RLS is enabled.
 - `anon` has no SELECT privilege.
 - `authenticated` has the intended SELECT/INSERT/UPDATE/DELETE privileges.
 - The exact restrictive issuer policy and four owner policies exist.
-- The pilot table contains zero rows.
-- `public.council_conversations`, `private_cloudflare.worker_admin_operators`, Supabase Auth users, and all production resources remain unchanged.
+- The production conversation table, Cloudflare operator table, and production resources were not changed.
+
+The test project's migration history still records its earlier isolated setup. Do not run production `db push`, merge this pilot, or copy these fixtures into `supabase/migrations/` as part of this task.
 
 ## Database RLS test coverage
 
