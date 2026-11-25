@@ -6,6 +6,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from clerk_streamlit_auth import (
+    TEST_CLERK_AUTHORIZED_ORIGIN,
     TEST_SUPABASE_PUBLISHABLE_KEY,
     TEST_SUPABASE_URL,
 )
@@ -18,7 +19,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     sent only to the test Supabase project. Nothing is persisted by Streamlit.
     """
     st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
-    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-CLICK-DIAG-20261114")
+    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-SECURE-INPUT-20261125")
     st.warning(
         "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
         "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
@@ -31,6 +32,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     )
     SUPABASE_URL_JSON = json.dumps(TEST_SUPABASE_URL)
     SUPABASE_KEY_JSON = json.dumps(TEST_SUPABASE_PUBLISHABLE_KEY)
+    ALLOWED_ORIGIN_JSON = json.dumps(TEST_CLERK_AUTHORIZED_ORIGIN)
     
     PROBE_HTML = r"""
     <!doctype html>
@@ -62,8 +64,8 @@ def render_supabase_native_auth_denial_probe() -> None:
         <label for="native-email">البريد الإلكتروني</label>
         <input id="native-email" type="email" autocomplete="username" required maxlength="254">
         <label for="native-password">كلمة مرور حساب Supabase التجريبي</label>
-        <input id="native-password" type="text" autocomplete="off" required maxlength="256">
-      <p class="hint">ستظهر كلمة المرور أثناء الكتابة لمراجعة الأحرف، وسيتم مسحها بعد تنفيذ الاختبار.</p>
+        <input id="native-password" type="password" autocomplete="current-password" required maxlength="256">
+      <p class="hint">كلمة المرور مخفية أثناء الإدخال، وتُمسح من الحقل فور بدء الاختبار.</p>
         <button id="run-probe" type="button">تنفيذ اختبار الرمز الأصلي</button>
       </form>
       <div id="origin-indicator" class="hint" role="status" aria-live="polite">مصدر تطبيق الاختبار: جارٍ التحديد…</div>
@@ -74,6 +76,7 @@ def render_supabase_native_auth_denial_probe() -> None:
       "use strict";
       const SUPABASE_URL = __SUPABASE_URL__;
       const SUPABASE_KEY = __SUPABASE_KEY__;
+      const ALLOWED_ORIGIN = __ALLOWED_ORIGIN__;
       const form = document.getElementById("native-auth-form");
       const emailInput = document.getElementById("native-email");
       const passwordInput = document.getElementById("native-password");
@@ -102,6 +105,7 @@ def render_supabase_native_auth_denial_probe() -> None:
         return "غير متاح داخل إطار المتصفح";
       })();
       originNode.textContent = "مصدر تطبيق الاختبار الفعلي: " + pageOrigin;
+      const originAllowed = pageOrigin === ALLOWED_ORIGIN;
     
       function show(message) {
         resultNode.textContent = String(message || "");
@@ -140,16 +144,23 @@ def render_supabase_native_auth_denial_probe() -> None:
         runButton.hidden = false;
         runButton.style.display = "block";
         runButton.style.visibility = "visible";
-        runButton.disabled = false;
-        runButton.textContent = "تنفيذ اختبار الرمز الأصلي";
+        runButton.disabled = !originAllowed;
+        runButton.textContent = originAllowed
+          ? "تنفيذ اختبار الرمز الأصلي"
+          : "الاختبار متاح من رابط البيئة المعزولة فقط";
       }
     
       async function runProbe(event) {
         event.preventDefault();
         if (busy) return;
+        if (!originAllowed) {
+          show("BLOCKED — هذه الصفحة لا تعمل إلا من أصل تطبيق Clerk التجريبي المصرّح.");
+          return;
+        }
     
         const email = String(emailInput.value || "").trim();
         let password = String(passwordInput.value || "");
+        passwordInput.value = "";
         if (!email || !password) {
           show("أدخل البريد وكلمة المرور أولًا.");
           return;
@@ -165,6 +176,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     
         let accessToken = "";
         let authenticated = false;
+        let nativeTokenVerified = false;
         let readPass = false;
         let readDetail = "";
         let sessionCreated = false;
@@ -223,6 +235,34 @@ def render_supabase_native_auth_denial_probe() -> None:
               + userResponse.status;
             return;
           }
+
+          // /auth/v1/user has validated the JWT signature. Decode it only now
+          // to confirm issuer, role and user subject before the RLS probe.
+          function decodeVerifiedTokenClaims(token) {
+            try {
+              const parts = String(token || "").split(".");
+              if (parts.length !== 3) return null;
+              const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+              const padded = base64 + "=".repeat((4 - base64.length % 4) % 4);
+              const bytes = Uint8Array.from(atob(padded), ch => ch.charCodeAt(0));
+              return JSON.parse(new TextDecoder().decode(bytes));
+            } catch (_) {
+              return null;
+            }
+          }
+          const verifiedClaims = decodeVerifiedTokenClaims(accessToken);
+          const expectedIssuer = SUPABASE_URL.replace(/\\/$/, "") + "/auth/v1";
+          if (
+            !verifiedClaims
+            || verifiedClaims.iss !== expectedIssuer
+            || verifiedClaims.role !== "authenticated"
+            || verifiedClaims.sub !== userData.id
+          ) {
+            authenticated = false;
+            authFailure = "لم يطابق JWT المُصدر أو الدور أو هوية المستخدم المتوقعة لمشروع Supabase التجريبي.";
+            return;
+          }
+          nativeTokenVerified = true;
     
           tableAttempted = true;
           show("3/4 — فحص قراءة جدول Clerk باستخدام JWT الأصلي…");
@@ -246,9 +286,8 @@ def render_supabase_native_auth_denial_probe() -> None:
             readPass = true;
             readDetail = "RLS أعادت صفر سجلات؛ لم يتمكن رمز Supabase Auth من قراءة سجلات Clerk.";
           } else if (readResponse.status === 401 || readResponse.status === 403) {
-            readPass = true;
-            readDetail = "Supabase رفض طلب قراءة جدول Clerk مباشرةً (HTTP "
-              + readResponse.status + ").";
+            readDetail = "رُفض الطلب (HTTP " + readResponse.status
+              + ")، لكن ذلك لا يثبت وحده أن سياسة RLS هي سبب الرفض. لا تُحسب PASS.";
           } else if (readResponse.ok && Array.isArray(rows) && rows.length > 0) {
             readDetail = "FAIL: رمز Supabase Auth قرأ " + rows.length
               + " سجلًا من جدول Clerk. يجب إيقاف اعتماد هذا العزل والتحقيق فورًا.";
@@ -293,8 +332,8 @@ def render_supabase_native_auth_denial_probe() -> None:
           busy = false;
           restoreRunButton();
     
-          const authLine = authenticated
-            ? "PASS — Supabase Auth تحقق من JWT ومستخدمه."
+          const authLine = nativeTokenVerified
+            ? "PASS — تحقق Supabase Auth من JWT، وطابق المُصدر والدور وهوية المستخدم."
             : "FAIL — " + (authFailure || "لم يثبت تحقق Supabase Auth من JWT.");
           const readLine = !tableAttempted
             ? "NOT RUN — لم يُنفّذ طلب قراءة جدول Clerk لأن تسجيل الدخول أو التحقق من JWT لم يكتمل."
@@ -337,14 +376,21 @@ def render_supabase_native_auth_denial_probe() -> None:
       form.addEventListener("submit", runProbe);
       emailInput.addEventListener("input", updateReadyState);
       passwordInput.addEventListener("input", updateReadyState);
-      updateReadyState();
+      if (originAllowed) {
+        updateReadyState();
+      } else {
+        emailInput.disabled = true;
+        passwordInput.disabled = true;
+        restoreRunButton();
+        show("BLOCKED — افتح هذه الصفحة من تطبيق الاختبار المعزول المعتمد فقط.");
+      }
     })();
     </script>
     </body>
     </html>
     """.replace("__SUPABASE_URL__", SUPABASE_URL_JSON).replace(
         "__SUPABASE_KEY__", SUPABASE_KEY_JSON
-    )
+    ).replace("__ALLOWED_ORIGIN__", ALLOWED_ORIGIN_JSON)
     
     components.html(PROBE_HTML, height=470, scrolling=True)
     
