@@ -24,13 +24,13 @@ Do not cast, truncate, hash, or synthesize UUIDs from Clerk subjects. Do not alt
 
 ## Isolated test-project schema provisioning (not production migrations)
 
-The Clerk pilot table exists only in the dedicated test project. Its provisioning scripts are deliberately kept under `supabase/tests/fixtures/`, not in the standard `supabase/migrations/` directory that feeds the production migration chain.
+The Clerk pilot table exists only in the dedicated test project. Its provisioning scripts are deliberately kept under `tests/fixtures/supabase/`, not in the standard `supabase/migrations/` directory that feeds the production migration chain.
 
 The hosted test project was provisioned with these two scripts on the isolated project only:
 
-1. `supabase/tests/fixtures/20261110123054_clerk_auth_pilot_isolated_rls.sql`
+1. `tests/fixtures/supabase/20261110123054_clerk_auth_pilot_isolated_rls.sql`
    Creates only `public.clerk_auth_pilot_records`, enables RLS, pins the restrictive issuer policy to exactly `https://dear-hermit-1240.clerk.accounts.dev`, and adds per-operation owner policies comparing `owner_subject` with JWT `sub`.
-2. `supabase/tests/fixtures/20261110125010_clerk_auth_pilot_restrict_table_grants.sql`
+2. `tests/fixtures/supabase/20261110125010_clerk_auth_pilot_restrict_table_grants.sql`
    Revokes inherited/default `PUBLIC` and `anon` table privileges, then grants CRUD only to `authenticated`.
 
 The local pgTAP test now creates or normalizes the same schema and policies inside its own transaction and rolls them back at the end. It does not depend on the fixture scripts being discovered as standard migrations.
