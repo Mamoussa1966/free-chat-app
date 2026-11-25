@@ -251,7 +251,7 @@ def render_supabase_native_auth_denial_probe() -> None:
             }
           }
           const verifiedClaims = decodeVerifiedTokenClaims(accessToken);
-          const expectedIssuer = SUPABASE_URL.replace(/\\/$/, "") + "/auth/v1";
+          const expectedIssuer = (SUPABASE_URL.endsWith("/") ? SUPABASE_URL.slice(0, -1) : SUPABASE_URL) + "/auth/v1";
           if (
             !verifiedClaims
             || verifiedClaims.iss !== expectedIssuer
