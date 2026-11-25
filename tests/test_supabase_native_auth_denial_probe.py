@@ -96,6 +96,11 @@ def test_native_supabase_auth_probe_requires_a_zero_row_rls_result_for_read_pass
     assert "verifiedClaims.iss !== expectedIssuer" in source
     assert 'verifiedClaims.role !== "authenticated"' in source
     assert "verifiedClaims.sub !== userData.id" in source
+    assert "insertAttempted = true" in source
+    assert "owner_subject: userData.id" in source
+    assert 'insertData?.code === "42501"' in source
+    assert "native-auth-denial-" in source
+    assert "cleanupResponse" in source
     assert "FAIL: رمز Supabase Auth قرأ" in source
     assert "لا تُحسب PASS" in source
 
