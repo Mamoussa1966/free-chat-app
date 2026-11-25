@@ -45,7 +45,7 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "ستظهر كلمة المرور أثناء الكتابة" in source
     assert "togglePasswordButton" not in source
     assert 'PROBE_HTML = r"""' in source
-    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-CLICK-DIAG-20261114" in source
+    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-SECURE-INPUT-20261125" in source
     assert 'runButton.addEventListener("pointerdown"' in source
     assert 'runButton.addEventListener("click"' in source
     assert "تم رصد لمس زر الاختبار" in source
@@ -82,5 +82,17 @@ def test_native_supabase_auth_probe_requires_a_zero_row_rls_result_for_read_pass
     assert "readResponse.status === 200" in source
     assert "Array.isArray(rows) && rows.length === 0" in source
     assert "readResponse.status === 401 || readResponse.status === 403" in source
+    assert "لا تُحسب PASS." in source
+    assert "verifiedClaims.iss !== expectedIssuer" in source
+    assert 'verifiedClaims.role !== "authenticated"' in source
+    assert "verifiedClaims.sub !== userData.id" in source
     assert "FAIL: رمز Supabase Auth قرأ" in source
     assert "لا تُحسب PASS" in source
+
+
+
+def test_clerk_pilot_migrations_are_not_in_the_production_migrations_directory():
+    assert not (ROOT / "supabase/migrations/20261110123054_clerk_auth_pilot_isolated_rls.sql").exists()
+    assert not (ROOT / "supabase/migrations/20261110125010_clerk_auth_pilot_restrict_table_grants.sql").exists()
+    assert (ROOT / "supabase/tests/fixtures/20261110123054_clerk_auth_pilot_isolated_rls.sql").exists()
+    assert (ROOT / "supabase/tests/fixtures/20261110125010_clerk_auth_pilot_restrict_table_grants.sql").exists()
