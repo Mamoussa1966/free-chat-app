@@ -104,5 +104,5 @@ def test_native_supabase_auth_probe_requires_a_zero_row_rls_result_for_read_pass
 def test_clerk_pilot_migrations_are_not_in_the_production_migrations_directory():
     assert not (ROOT / "supabase/migrations/20261110123054_clerk_auth_pilot_isolated_rls.sql").exists()
     assert not (ROOT / "supabase/migrations/20261110125010_clerk_auth_pilot_restrict_table_grants.sql").exists()
-    assert (ROOT / "supabase/tests/fixtures/20261110123054_clerk_auth_pilot_isolated_rls.sql").exists()
-    assert (ROOT / "supabase/tests/fixtures/20261110125010_clerk_auth_pilot_restrict_table_grants.sql").exists()
+    assert (ROOT / "tests/fixtures/supabase/20261110123054_clerk_auth_pilot_isolated_rls.sql").exists()
+    assert (ROOT / "tests/fixtures/supabase/20261110125010_clerk_auth_pilot_restrict_table_grants.sql").exists()
