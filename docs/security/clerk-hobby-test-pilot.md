@@ -54,9 +54,9 @@ Added `supabase/tests/clerk_auth_pilot_rls.test.sql` to the local Supabase pgTAP
 - A token with a wrong issuer cannot read or insert.
 - User A's original data remains unchanged after B's attempted modification/deletion.
 
-The first run exposed three test expectation issues: the table inherited a default `PUBLIC`/anon grant, and PostgreSQL's RLS error message includes the restrictive policy name. Both were corrected with the second migration and updated assertions. The **initial RLS test run failed (3 of 17)**; the corrected rerun on the latest branch is pending. Do not interpret the earlier run as a pass.
+The first local RLS run exposed three test expectation issues (3 failures out of 17); these were corrected. The current workflow on branch head `335f93c4f6754a01f1aaa1f9f7bb7b392a9ca833` completed successfully: **54 pgTAP tests passed across all 3 SQL test files**, including the Clerk pilot suite.
 
-The workflow applies versioned migrations in a disposable local Supabase stack and runs `supabase test db --local`. These are synthetic local JWT-claim tests, not proof of a real browser sign-in or a live Clerk session token. The live external-token acceptance tests below remain required.
+The workflow applies the test fixtures in a disposable local Supabase stack and runs `supabase test db --local`. These tests use synthetic JWT claim contexts. They prove the SQL policy behavior under those contexts, but do not replace a live request authenticated with an actual Clerk or native Supabase Auth JWT. External-token acceptance gates remain separate.
 
 ## Streamlit Clerk UI and server-side JWT verification
 
@@ -89,13 +89,11 @@ This keeps the dependency contract unchanged and ensures the application does no
 
 ## Authorized-party deployment boundary
 
-The production Streamlit origin is intentionally excluded from this pilot. A second Streamlit Community Cloud app must be created from branch `security/clerk-hobby-test-pilot` using the page entry point `pages/11_Clerk_Auth_Pilot.py` or the repository's normal main entry with page discovery. In that new app only, set the server-side Secret:
+The production Streamlit origin is intentionally excluded from this pilot. The currently deployed isolated test app is pinned in code to exactly:
 
-```toml
-CLERK_TEST_AUTHORIZED_PARTIES = "https://YOUR-NEW-TEST-APP.streamlit.app"
-```
+`https://free-chat-app-vrbyn5tesfyhhz5skphzn5.streamlit.app`
 
-Replace the placeholder with the exact new test app origin. Do not reuse or modify the live production app's configuration. Until that separate app exists and its exact origin is pinned, the Clerk page deliberately fails closed with a missing-authorized-party message.
+The verifier does not accept the production origin or arbitrary runtime origins. This source-level allowlist is intentionally stricter than a user-editable environment value. Do not add `CLERK_TEST_AUTHORIZED_PARTIES` to the production app, and do not reuse or modify production settings. The test app must continue to be deployed from `security/clerk-hobby-test-pilot`, with the Clerk Development issuer and the isolated Supabase test project only.
 
 ## Security acceptance gates — still pending
 
@@ -127,21 +125,60 @@ No AI provider requests are needed for this authentication pilot.
 - Never place a Supabase service-role/secret key or project JWT signing secret in the browser, Clerk dashboard, or repository.
 - Do not request or store user passwords or raw authentication tokens in chat.
 
-## Current verified status
+## Current verified status — evidence refreshed 2026-11-26
 
-- Clerk `Reject compromised passwords` is saved as `On` in the Development instance.
-- Clerk's Supabase integration shows `Enabled`.
-- Supabase Third-Party Auth shows Clerk as `Enabled` with issuer/domain `https://dear-hermit-1240.clerk.accounts.dev`.
-- Test project status is `ACTIVE_HEALTHY`.
-- Both pilot migrations are applied and present in test migration history.
-- Post-migration read-only verification confirms `anon_select=false`, authenticated CRUD grants are true, RLS is true, and pilot row count is zero.
-- The existing Supabase Security Advisor warnings remain: the exposed `public.cloudflare_worker_admin_dispatch(...)` SECURITY DEFINER execute warning and the native Supabase Auth leaked-password-protection warning. Neither was modified by this pilot. Clerk's HIBP protection protects Clerk-managed passwords; it does not turn on HIBP for the native Supabase Auth endpoints.
-- Current branch head: `a3e7d98c431adb1c8f5b08ec81698c35bd927f7e`.
-- Current AI Council CI run on this exact head passed: **1042 passed, 2 skipped**; release-candidate ZIP integrity and SHA-256 sidecar verification passed. Run: https://github.com/Mamoussa1966/free-chat-app/actions/runs/42829437550
-- Current Supabase RLS database workflow on this exact head passed: all **54 pgTAP tests across 3 SQL test files** passed, including the isolated Clerk issuer/subject RLS suite. Run: https://github.com/Mamoussa1966/free-chat-app/actions/runs/42829437437
-- The hosted test-project schema/RLS checks were also verified independently after applying the two pilot migrations; `anon` has no table SELECT privilege and the pilot table remains empty.
-- No real Clerk session token has yet been accepted by a deployed Streamlit test page. A separate Streamlit test deployment is still required because the live production origin is explicitly excluded. No real external two-account test or live native Supabase Auth token bypass test has yet been executed.
-- No production schema, secrets, Auth configuration, Cloudflare Worker, deployment, or AI provider call was changed.
+### GitHub and CI evidence
+
+- Production branch `gitops-v0.4-final` remains at `b4883ff5f33aa721c42909a2b09a2f2baf8325e8`.
+- Test branch head is `335f93c4f6754a01f1aaa1f9f7bb7b392a9ca833` (2026-11-25 17:49:37 UTC).
+- PR #112 remains **open, Draft, and unmerged**, targeting `gitops-v0.4-final`. No production merge or deployment was performed.
+- AI Council CI on the current test head: **1061 passed, 2 skipped**. The full release candidate, ZIP integrity, SHA-256 sidecar, and release identity checks passed. The CI attestation explicitly reports `live_deployment_closure_proven: false`; this is not evidence that production is deployed from this candidate.
+  - PR CI: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45668826831
+  - Push CI / release artifact: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45668817862
+- Supabase RLS workflow on the same head: **54 pgTAP tests passed across 3 SQL files**.
+  - https://github.com/Mamoussa1966/free-chat-app/actions/runs/45668826770
+- Dependabot Python Compatibility and Supabase Preview were skipped for this head; do not count them as passing live checks.
+
+### Current hosted test-project database evidence
+
+A read-only SQL query on `ai-council-storage-test` (`pidcepvwsezdrlhxqksg`) returned:
+
+- `clerk_auth_pilot_records`: 2 records.
+- Distinct `owner_subject` values: 1. This is not yet a real two-Clerk-account isolation proof.
+- Native Supabase Auth users: 4. The count alone does not establish that any one of them is a second Clerk identity.
+- RLS enabled: true.
+- Policies on the pilot table: 5.
+- Direct `anon` SELECT grants: 0.
+
+Earlier real-browser evidence established one working Clerk user session, access to that user's two test records, and rejection of an owner-spoof attempt. Sign-out followed by sign-in again restored the same account's session and its own records. This does not yet prove independent two-account isolation, live token refresh/expiry, or account switching.
+
+### Native Supabase Auth negative probe
+
+- Added `pages/12_Supabase_Native_Auth_Denial_Probe.py` with current build marker `SUPABASE-NATIVE-AUTH-DENIAL-PROBE-SECURE-INPUT-20261125`.
+- It signs into the native Supabase Auth test account from the browser, validates the issued token through `/auth/v1/user`, checks the JWT issuer/role/subject, and attempts both table read and a narrowly keyed insert-denial probe.
+- Password and bearer token are not written to Streamlit state, browser storage, URLs, or output. A successful unexpected insert is immediately targeted for cleanup and is reported as a failure, not a pass.
+- **This live browser probe has not yet been executed.** Only a test-only Supabase Auth password may be entered into this page; never send the password or token in chat.
+
+### Duplicate email investigation
+
+- Clerk's email-code handler currently contains one `prepareFirstFactor({strategy: "email_code", ...})` call and a single-flight `signInBusy` guard. Unit coverage asserts one send call and no resend path in this handler.
+- One Clerk `email.delivered` event was supplied for the reported incident: `01a1cc44-a094-7ad1-a348-267d557ae17f` at 2026-11-11 23:20:12 Riyadh time, SMTP status 250.
+- That single event does not explain why Gmail displayed two messages. The second Clerk email event (if present) and the two Gmail RFC `Message-ID` values have not yet been correlated. Do not claim the duplicate-delivery root cause is resolved.
+- The earlier sign-in/session flow and the static single-call guard are not substitutes for event correlation.
+
+### Remaining live acceptance gates
+
+1. Run the native Supabase Auth denial page using a test-only native Supabase Auth account; confirm the real token is validated and the pilot table denies the read/insert operations.
+2. Use a second, distinct Clerk Development account to prove owner isolation with real sessions. Do not infer a second Clerk account from the four native Supabase Auth users.
+3. Complete real browser session refresh, expiry, sign-out, and account-switch acceptance; automated tests cover portions of the code path but not the full live browser behavior.
+4. Correlate the duplicate Gmail messages against Clerk Email Logs and Gmail RFC `Message-ID` values.
+5. Reconfirm the production runtime SHA and existing AAL2-protected Cloudflare Worker Admin path separately before any future production-auth decision.
+
+### Cost and scope guardrails
+
+- Clerk Hobby currently lists a free tier with 50,000 monthly retained users per app and email-code authentication; the published plan excludes MFA. Supabase Free lists 50,000 Monthly Active Third-Party Users. Usage and plan limits must be monitored; do not switch to paid plans or enable billable add-ons.
+- Clerk Hobby's lack of MFA is why this pilot must not replace or weaken the existing Supabase Auth AAL2 requirement on Cloudflare Worker Admin.
+- No production database, production secrets, production Auth configuration, Cloudflare Worker, AI provider, or production deployment was changed by this test branch work.
 
 ## Official references
 
