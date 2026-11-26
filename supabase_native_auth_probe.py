@@ -19,7 +19,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     sent only to the test Supabase project. Nothing is persisted by Streamlit.
     """
     st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
-    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-CLEANUP-VERIFIED-20261126")
+    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-LOCKOUT-GUARD-20261126")
     st.warning(
         "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
         "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
@@ -500,7 +500,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     components.html(PROBE_HTML, height=520, scrolling=True)
     
     st.caption(
-        "الاختبار يقرأ جدول Clerk ويحاول INSERT بسجل مؤقت فريد لاختبار رفض الكتابة. عند قبول الإدخال على نحو غير متوقع يحاول حذف هذا السجل وحده، ولا يعلن نجاح التنظيف إلا بعد استلام السجل المحذوف والتحقق من المفتاح والمالك؛ إذا تعذر التأكد فتوقف ولا تُعد التشغيل. "
+        "الاختبار يقرأ جدول Clerk ويحاول INSERT بسجل مؤقت فريد لاختبار رفض الكتابة. عند قبول الإدخال على نحو غير متوقع يحاول حذف هذا السجل وحده، ولا يعلن نجاح التنظيف إلا بعد استلام السجل المحذوف والتحقق من المفتاح والمالك؛ إذا قُبل INSERT أو أصبحت نتيجته مجهولة، يُقفل زر الاختبار لهذه الجلسة. إذا تعذر التأكد فتوقف ولا تُعد التشغيل. "
         "يستخدم تسجيل دخول كلمة مرور Supabase Auth المحلي لهذا الفحص فقط، "
         "ثم يطلب إنهاء الجلسة الحالية بنطاق local، ولا يخرج المستخدم من أجهزته الأخرى."
     )
