@@ -130,13 +130,14 @@ No AI provider requests are needed for this authentication pilot.
 ### GitHub and CI evidence
 
 - Production branch `gitops-v0.4-final` remains at `b4883ff5f33aa721c42909a2b09a2f2baf8325e8`.
-- Test branch head is `55e17277cd87335d1ce50dc25e7eb1bcd6b7dce0` (2026-11-26 02:05:09 UTC).
+- Last code/workflow verification head: `3a0b59edad893758822bff02d70bf2036594fa0e` (2026-11-26 02:12:48 UTC). A later documentation-only update may advance the PR head without changing the verified application or RLS workflow code.
 - PR #112 remains **open, Draft, and unmerged**, targeting `gitops-v0.4-final`. No production merge or deployment was performed.
-- AI Council CI on the exact current test head: **1061 passed, 2 skipped**. The full release candidate, ZIP integrity, SHA-256 sidecar, and release identity checks passed. The exact-head push attestation reports candidate SHA-256 `aa03038f3de3f0ed3f7265a955f76b3f15ec6f608c5dfd4f080ff6c72df64245` and `live_deployment_closure_proven: false`; this is not evidence that production is deployed from this candidate.
-  - PR CI: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740052812
-  - Exact-head push CI / release artifact: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740045936
-- Supabase RLS workflow on the same head: **54 pgTAP tests passed across 3 SQL files**.
-  - https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740052745
+- AI Council CI on exact code/workflow head `3a0b59edad893758822bff02d70bf2036594fa0e`: **1061 passed, 2 skipped**. The exact-head push artifact passed ZIP integrity and SHA-256 sidecar verification; candidate SHA-256 is `71ce7e2feafdf01cb3c820b4dabf6a763a691584cbb168c44167dce822b32d0a`. The attestation correctly reports `live_deployment_closure_proven: false`; it is not production runtime proof.
+  - Exact-head push CI: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740883467
+  - PR CI: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740888345
+- Supabase RLS test on the exact PR head: **54 pgTAP tests passed across 3 SQL files**. The workflow log explicitly reports `RLS_SOURCE_SHA=3a0b59edad893758822bff02d70bf2036594fa0e`, matching the head SHA, followed by `Files=3, Tests=54` and `Result: PASS`.
+  - https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740888335
+- The follow-up commit `218d77b275b02c25d2d21add602918e6639923ea` refreshed the dossier; commit `3a0b59e...` then changed only the RLS workflow to pin and verify the exact PR head. No test-only Clerk migration is placed in `supabase/migrations/`; SQL fixtures remain under `tests/fixtures/supabase/` and `supabase/tests/`.
 - Dependabot Python Compatibility and Supabase Preview were skipped for this head; do not count them as passing live checks.
 
 ### Current hosted test-project database evidence
