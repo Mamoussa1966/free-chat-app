@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
+    source = (ROOT / "supabase_native_auth_probe.py").read_text(encoding="utf-8")
+    page = (ROOT / "pages" / "12_Supabase_Native_Auth_Denial_Probe.py").read_text(encoding="utf-8")
+    page11 = (ROOT / "pages" / "11_Clerk_Auth_Pilot.py").read_text(encoding="utf-8")
+
+    assert "TEST_SUPABASE_URL" in source
+    assert "TEST_SUPABASE_PUBLISHABLE_KEY" in source
+    assert "pidcepvwsezdrlhxqksg.supabase.co" not in source
+    assert "free-chat-app-qmqyxzh2oe2n3qwcvqvpdh.streamlit.app" not in source
+    assert "/auth/v1/token?grant_type=password" in source
+    assert "/auth/v1/user" in source
+    assert "/rest/v1/clerk_auth_pilot_records?select=record_id&limit=10" in source
+    assert "/auth/v1/logout?scope=local" in source
+    assert '<button id="run-probe" type="button">' in source
+    assert 'runButton.addEventListener("click", (event) => {' in source
+    assert "runProbe(event);" in source
+    assert 'emailInput.addEventListener("input", updateReadyState)' in source
+    assert 'passwordInput.addEventListener("input", updateReadyState)' in source
+    assert "import streamlit.components.v1 as components" in source
+    assert "components.html(PROBE_HTML, height=520, scrolling=True)" in source
+    assert "streamlit.components.v2" not in source
+    assert "st.iframe(" not in source
+    assert "background:#2563eb; color:white" in source
+    assert "function safeAuthFailure(payload, httpStatus)" in source
+    assert "function restoreRunButton()" in source
+    assert 'let authFailure = ""' in source
+    assert "authFailure = safeAuthFailure(signInData, signInResponse.status)" in source
+    assert "let tableAttempted = false" in source
+    assert "NOT RUN — لم يُنفّذ طلب قراءة جدول Clerk" in source
+    assert "new URL(document.referrer).origin" in source
+    assert "function safeAuthFailure(payload, httpStatus)" in source
+    assert "payload?.error_code" in source
+    assert "invalid_credentials" in source
+    assert "function restoreRunButton()" in source
+    assert "runButton.style.visibility = \"visible\"" in source
+    assert '<input id="native-password" type="password" autocomplete="current-password" required maxlength="256">' in source
+    assert "كلمة المرور مخفية أثناء الإدخال" in source
+    assert "ALLOWED_ORIGIN = __ALLOWED_ORIGIN__" in source
+    assert "const originAllowed = pageOrigin === ALLOWED_ORIGIN" in source
+    assert "if (!originAllowed)" in source
+    assert "runButton.disabled = !originAllowed" in source
+    assert "togglePasswordButton" not in source
+    assert 'PROBE_HTML = r"""' in source
+    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-LOCKOUT-GUARD-20261126" in source
+    assert 'runButton.addEventListener("pointerdown"' in source
+    assert 'runButton.addEventListener("click"' in source
+    assert "تم رصد لمس زر الاختبار" in source
+    assert "تم استقبال ضغطة زر الاختبار" in source
+    assert "window.location.ancestorOrigins" in source
+    assert 'window.location.origin' in source
+    assert 'id="origin-indicator"' in source
+    assert "مصدر تطبيق الاختبار الفعلي" in source
+    assert "originNode.textContent" in source
+    assert "Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-LOCKOUT-GUARD-20261126" in page
+    assert "Build marker: CLERK-PILOT-SECURITY-HARDENING-20261125" in page11
+    assert "render_supabase_native_auth_denial_probe" in page
+    assert "render_supabase_native_auth_denial_probe" in page11
+    assert "render_supabase_native_auth_denial_probe()" in page11
+    assert "with st.expander(\"🧪 اختبار مستقل: رفض رمز Supabase Auth الأصلي\"" not in page11
+
+
+
+
+
+def test_native_supabase_auth_probe_discloses_temporary_insert_and_cleanup_before_execution():
+    source = (ROOT / "supabase_native_auth_probe.py").read_text(encoding="utf-8")
+    page = (ROOT / "pages" / "12_Supabase_Native_Auth_Denial_Probe.py").read_text(encoding="utf-8")
+
+    disclosure = "يحاول INSERT بسجل مؤقت فريد لاختبار رفض الكتابة"
+    cleanup = "إذا تعذر التأكد فتوقف ولا تُعد التشغيل"
+    assert disclosure in source
+    assert cleanup in source
+    assert "محاولة INSERT بسجل مؤقت فريد" in page
+    assert "إذا لم يتأكد الاختبار من حذف السجل المؤقت بالضبط، فتوقف ولا تُعد التشغيل" in page
+    assert "الاختبار يقرأ فقط جدول Clerk" not in source
+    assert "لا ينشئ سجلات ولا يغيّر بيانات الجدول" not in source
+
+def test_native_supabase_auth_probe_never_persists_or_returns_password_or_token():
+    source = (ROOT / "supabase_native_auth_probe.py").read_text(encoding="utf-8")
+
+    assert "localStorage" not in source
+    assert "sessionStorage" not in source
+    assert "Streamlit.setComponentValue" not in source
+    assert "parent.postMessage" not in source
+    assert "service_role" not in source.lower()
+    assert "SUPABASE_SECRET_KEY" not in source
+    assert "st.text_input" not in source
+    assert "st.text_area" not in source
+    assert "passwordInput.value = \"\"" in source
+    assert "accessToken = \"\"" in source
+
+
+def test_native_supabase_auth_probe_requires_a_zero_row_rls_result_for_read_pass():
+    source = (ROOT / "supabase_native_auth_probe.py").read_text(encoding="utf-8")
+
+    assert "readResponse.status === 200" in source
+    assert "Array.isArray(rows) && rows.length === 0" in source
+    assert "readResponse.status === 401 || readResponse.status === 403" in source
+    assert "لا تُحسب PASS." in source
+    assert "verifiedClaims.iss !== expectedIssuer" in source
+    assert 'verifiedClaims.role !== "authenticated"' in source
+    assert "verifiedClaims.sub !== userData.id" in source
+    assert "لا تُحسب PASS." in source
+    assert "verifiedClaims.iss !== expectedIssuer" in source
+    assert 'verifiedClaims.role !== "authenticated"' in source
+    assert "verifiedClaims.sub !== userData.id" in source
+    assert "insertAttempted = true" in source
+    assert "owner_subject: userData.id" in source
+    assert 'insertData?.code === "42501"' in source
+    assert "native-auth-denial-" in source
+    assert "cleanupResponse" in source
+    assert '"Prefer": "return=representation"' in source
+    assert "const cleanupRows = await readJson(cleanupResponse)" in source
+    assert "cleanupRows.length === 1" in source
+    assert "cleanupRows[0]?.record_key === probeRecordKey" in source
+    assert "cleanupRows[0]?.owner_subject === userData.id" in source
+    assert "cleanupVerified" in source
+    assert 'cleanupVerified = cleanupResponse.ok' in source
+    assert "let halted = false" in source
+    assert "runButton.disabled = !originAllowed || halted" in source
+    assert 'if (halted) {' in source
+    assert "insertResponseReceived = true" in source
+    assert "if (insertAttempted && !insertResponseReceived)" in source
+    assert "else if (insertAccepted && !cleanupVerified)" in source
+    assert "تم إيقاف الاختبار — لا تُعد تشغيله" in source
+    assert "مفتاح السجل الذي يجب مراجعته في جدول الاختبار" in source
+    assert "cleanupRows.length === 1" in source
+    assert "cleanupRows[0]?.record_key === probeRecordKey" in source
+    assert "cleanupRows[0]?.owner_subject === userData.id" in source
+    assert "FAIL: رمز Supabase Auth قرأ" in source
+    assert "لا تُحسب PASS" in source
+
+
+
+def test_clerk_pilot_migrations_are_not_in_the_production_migrations_directory():
+    assert not (ROOT / "supabase/migrations/20261110123054_clerk_auth_pilot_isolated_rls.sql").exists()
+    assert not (ROOT / "supabase/migrations/20261110125010_clerk_auth_pilot_restrict_table_grants.sql").exists()
+    assert (ROOT / "tests/fixtures/supabase/20261110123054_clerk_auth_pilot_isolated_rls.sql").exists()
+    assert (ROOT / "tests/fixtures/supabase/20261110125010_clerk_auth_pilot_restrict_table_grants.sql").exists()
