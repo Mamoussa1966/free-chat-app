@@ -25,7 +25,7 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert 'emailInput.addEventListener("input", updateReadyState)' in source
     assert 'passwordInput.addEventListener("input", updateReadyState)' in source
     assert "import streamlit.components.v1 as components" in source
-    assert "components.html(PROBE_HTML, height=470, scrolling=True)" in source
+    assert "components.html(PROBE_HTML, height=520, scrolling=True)" in source
     assert "streamlit.components.v2" not in source
     assert "st.iframe(" not in source
     assert "background:#2563eb; color:white" in source
