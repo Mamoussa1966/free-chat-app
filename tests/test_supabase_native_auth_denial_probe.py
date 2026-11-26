@@ -49,7 +49,7 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "runButton.disabled = !originAllowed" in source
     assert "togglePasswordButton" not in source
     assert 'PROBE_HTML = r"""' in source
-    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-SECURE-INPUT-20261125" in source
+    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-DISCLOSURE-20261126" in source
     assert 'runButton.addEventListener("pointerdown"' in source
     assert 'runButton.addEventListener("click"' in source
     assert "تم رصد لمس زر الاختبار" in source
@@ -59,13 +59,29 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert 'id="origin-indicator"' in source
     assert "مصدر تطبيق الاختبار الفعلي" in source
     assert "originNode.textContent" in source
-    assert "Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-SECURE-INPUT-20261125" in page
+    assert "Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-DISCLOSURE-20261126" in page
     assert "Build marker: CLERK-PILOT-SECURITY-HARDENING-20261125" in page11
     assert "render_supabase_native_auth_denial_probe" in page
     assert "render_supabase_native_auth_denial_probe" in page11
     assert "render_supabase_native_auth_denial_probe()" in page11
     assert "with st.expander(\"🧪 اختبار مستقل: رفض رمز Supabase Auth الأصلي\"" not in page11
 
+
+
+
+
+def test_native_supabase_auth_probe_discloses_temporary_insert_and_cleanup_before_execution():
+    source = (ROOT / "supabase_native_auth_probe.py").read_text(encoding="utf-8")
+    page = (ROOT / "pages" / "12_Supabase_Native_Auth_Denial_Probe.py").read_text(encoding="utf-8")
+
+    disclosure = "يحاول INSERT بسجل مؤقت فريد لاختبار رفض الكتابة"
+    cleanup = "إذا فشل الحذف فتوقف ولا تُعد التشغيل"
+    assert disclosure in source
+    assert cleanup in source
+    assert "محاولة INSERT بسجل مؤقت فريد" in page
+    assert "إذا فشل التنظيف فتوقف ولا تُعد التشغيل" in page
+    assert "الاختبار يقرأ فقط جدول Clerk" not in source
+    assert "لا ينشئ سجلات ولا يغيّر بيانات الجدول" not in source
 
 def test_native_supabase_auth_probe_never_persists_or_returns_password_or_token():
     source = (ROOT / "supabase_native_auth_probe.py").read_text(encoding="utf-8")
