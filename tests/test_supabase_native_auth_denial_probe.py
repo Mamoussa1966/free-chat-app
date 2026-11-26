@@ -123,7 +123,15 @@ def test_native_supabase_auth_probe_requires_a_zero_row_rls_result_for_read_pass
     assert "cleanupRows[0]?.record_key === probeRecordKey" in source
     assert "cleanupRows[0]?.owner_subject === userData.id" in source
     assert "cleanupVerified" in source
-    assert 'const cleanupVerified = cleanupResponse.ok' in source
+    assert 'cleanupVerified = cleanupResponse.ok' in source
+    assert "let halted = false" in source
+    assert "runButton.disabled = !originAllowed || halted" in source
+    assert 'if (halted) {' in source
+    assert "insertResponseReceived = true" in source
+    assert "if (insertAttempted && !insertResponseReceived)" in source
+    assert "else if (insertAccepted && !cleanupVerified)" in source
+    assert "تم إيقاف الاختبار — لا تُعد تشغيله" in source
+    assert "مفتاح السجل الذي يجب مراجعته في جدول الاختبار" in source
     assert "cleanupRows.length === 1" in source
     assert "cleanupRows[0]?.record_key === probeRecordKey" in source
     assert "cleanupRows[0]?.owner_subject === userData.id" in source
