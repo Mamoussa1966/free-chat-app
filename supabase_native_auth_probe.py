@@ -19,7 +19,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     sent only to the test Supabase project. Nothing is persisted by Streamlit.
     """
     st.subheader("اختبار رفض رمز Supabase Auth الأصلي")
-    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-DISCLOSURE-20261126")
+    st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-CLEANUP-VERIFIED-20261126")
     st.warning(
         "أدخل بيانات حساب موجود بالفعل في مشروع Supabase التجريبي فقط. "
         "كلمة المرور ورمز الجلسة يبقيان داخل إطار المتصفح ويُرسلان مباشرة إلى "
@@ -347,7 +347,7 @@ def render_supabase_native_auth_denial_probe() -> None:
                 headers: {
                   "apikey": SUPABASE_KEY,
                   "Authorization": "Bearer " + accessToken,
-                  "Prefer": "return=minimal",
+                  "Prefer": "return=representation",
                   "Accept": "application/json"
                 },
                 cache: "no-store",
@@ -355,9 +355,15 @@ def render_supabase_native_auth_denial_probe() -> None:
                 redirect: "error"
               }
             );
-            insertDetail = cleanupResponse.ok
-              ? "FAIL — قبل الجدول INSERT من JWT الأصلي؛ أزيل سجل الاختبار المؤقت مباشرةً."
-              : "CRITICAL — قبل الجدول INSERT من JWT الأصلي وتعذر تنظيف السجل المؤقت. مفتاح السجل: "
+            const cleanupRows = await readJson(cleanupResponse);
+            const cleanupVerified = cleanupResponse.ok
+              && Array.isArray(cleanupRows)
+              && cleanupRows.length === 1
+              && cleanupRows[0]?.record_key === probeRecordKey
+              && cleanupRows[0]?.owner_subject === userData.id;
+            insertDetail = cleanupVerified
+              ? "FAIL — قبل الجدول INSERT من JWT الأصلي؛ تأكد حذف السجل المؤقت الفريد وحده."
+              : "CRITICAL — قبل الجدول INSERT من JWT الأصلي، ولم يتأكد حذف السجل المؤقت بالضبط. أوقف الاختبار ولا تُعد تشغيله. مفتاح السجل: "
                 + probeRecordKey;
           } else {
             insertDetail = "NOT PASS — لم يثبت رفض RLS لمحاولة INSERT. HTTP "
@@ -469,7 +475,7 @@ def render_supabase_native_auth_denial_probe() -> None:
     components.html(PROBE_HTML, height=520, scrolling=True)
     
     st.caption(
-        "الاختبار يقرأ جدول Clerk ويحاول INSERT بسجل مؤقت فريد لاختبار رفض الكتابة. عند قبول الإدخال على نحو غير متوقع يحاول حذف هذا السجل وحده فورًا؛ إذا فشل الحذف فتوقف ولا تُعد التشغيل. "
+        "الاختبار يقرأ جدول Clerk ويحاول INSERT بسجل مؤقت فريد لاختبار رفض الكتابة. عند قبول الإدخال على نحو غير متوقع يحاول حذف هذا السجل وحده، ولا يعلن نجاح التنظيف إلا بعد استلام السجل المحذوف والتحقق من المفتاح والمالك؛ إذا تعذر التأكد فتوقف ولا تُعد التشغيل. "
         "يستخدم تسجيل دخول كلمة مرور Supabase Auth المحلي لهذا الفحص فقط، "
         "ثم يطلب إنهاء الجلسة الحالية بنطاق local، ولا يخرج المستخدم من أجهزته الأخرى."
     )
