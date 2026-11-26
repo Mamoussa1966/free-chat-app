@@ -12,6 +12,9 @@ st.set_page_config(
 
 st.title("🧪 اختبار رفض رمز Supabase Auth الأصلي")
 st.caption("بيئة اختبار مستقلة — لا تستخدم قاعدة بيانات الإنتاج ولا تغيّر إعدادات المصادقة.")
-st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-SECURE-INPUT-20261125")
-st.warning("أدخل بيانات حساب Supabase Auth التجريبي فقط. كلمة المرور والرمز لا يغادران إطار المتصفح إلا إلى مشروع Supabase التجريبي.")
+st.caption("Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-DISCLOSURE-20261126")
+st.warning(
+    "استخدم حسابًا تجريبيًا في مشروع Supabase الاختباري فقط. ينفذ الفحص قراءة لجدول Clerk ومحاولة INSERT بسجل مؤقت فريد لاختبار رفض الكتابة. "
+    "إذا قُبل الإدخال على نحو غير متوقع، يحاول الاختبار حذف هذا السجل وحده؛ إذا فشل التنظيف فتوقف ولا تُعد التشغيل."
+)
 render_supabase_native_auth_denial_probe()
