@@ -130,13 +130,13 @@ No AI provider requests are needed for this authentication pilot.
 ### GitHub and CI evidence
 
 - Production branch `gitops-v0.4-final` remains at `b4883ff5f33aa721c42909a2b09a2f2baf8325e8`.
-- Test branch head is `335f93c4f6754a01f1aaa1f9f7bb7b392a9ca833` (2026-11-25 17:49:37 UTC).
+- Test branch head is `55e17277cd87335d1ce50dc25e7eb1bcd6b7dce0` (2026-11-26 02:05:09 UTC).
 - PR #112 remains **open, Draft, and unmerged**, targeting `gitops-v0.4-final`. No production merge or deployment was performed.
-- AI Council CI on the current test head: **1061 passed, 2 skipped**. The full release candidate, ZIP integrity, SHA-256 sidecar, and release identity checks passed. The CI attestation explicitly reports `live_deployment_closure_proven: false`; this is not evidence that production is deployed from this candidate.
-  - PR CI: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45668826831
-  - Push CI / release artifact: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45668817862
+- AI Council CI on the exact current test head: **1061 passed, 2 skipped**. The full release candidate, ZIP integrity, SHA-256 sidecar, and release identity checks passed. The exact-head push attestation reports candidate SHA-256 `aa03038f3de3f0ed3f7265a955f76b3f15ec6f608c5dfd4f080ff6c72df64245` and `live_deployment_closure_proven: false`; this is not evidence that production is deployed from this candidate.
+  - PR CI: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740052812
+  - Exact-head push CI / release artifact: https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740045936
 - Supabase RLS workflow on the same head: **54 pgTAP tests passed across 3 SQL files**.
-  - https://github.com/Mamoussa1966/free-chat-app/actions/runs/45668826770
+  - https://github.com/Mamoussa1966/free-chat-app/actions/runs/45740052745
 - Dependabot Python Compatibility and Supabase Preview were skipped for this head; do not count them as passing live checks.
 
 ### Current hosted test-project database evidence
@@ -176,9 +176,16 @@ Earlier real-browser evidence established one working Clerk user session, access
 
 ### Cost and scope guardrails
 
-- Clerk Hobby currently lists a free tier with 50,000 monthly retained users per app and email-code authentication; the published plan excludes MFA. Supabase Free lists 50,000 Monthly Active Third-Party Users. Usage and plan limits must be monitored; do not switch to paid plans or enable billable add-ons.
+- Clerk Hobby currently lists a free tier with 50,000 monthly retained users per app and email-code authentication; the published plan excludes MFA. Supabase Free lists 50,000 Monthly Active Third-Party Users. Supabase Free does not include native Auth leaked-password protection; that feature is Pro+ only. Usage and plan limits must be monitored; do not switch to paid plans or enable billable add-ons.
 - Clerk Hobby's lack of MFA is why this pilot must not replace or weaken the existing Supabase Auth AAL2 requirement on Cloudflare Worker Admin.
 - No production database, production secrets, production Auth configuration, Cloudflare Worker, AI provider, or production deployment was changed by this test branch work.
+
+### Additional test-project advisor detail — 2026-11-26
+
+- The current test-project Security Advisor reports `authenticated_security_definer_function_executable` for `public.cloudflare_worker_admin_dispatch(...)` and `auth_leaked_password_protection`. Read-only ACL/function inspection confirms `anon` cannot execute the gateway while `authenticated` can. The function checks a non-anonymous, non-banned authenticated user, operator enrollment, allowed actions, and AAL2 for every non-`list` operation. Its 21-test pgTAP gateway suite verifies un-enrolled-user denial and AAL2 enforcement. This is an intentionally exposed, internally guarded admin gateway; do not revoke its `authenticated` execution right without replacing its call path and repeating security acceptance.
+- Supabase documents leaked-password protection as Pro+ only; it is not included in Free. Do not upgrade or ask the user to enable a Pro-only setting under the $0 constraint. The in-app HIBP check in PR #111 is not equivalent to enforcement on direct Supabase Auth endpoints. Clerk's compromised-password protection covers Clerk-managed passwords only.
+- The Advisor flags five `auth_rls_initplan` warnings on the pilot policies. A read-only `pg_policies` inspection shows the deployed expressions already wrap `auth.jwt()` in scalar `SELECT` subqueries. Treat this as an unresolved advisor discrepancy until reconciled; do not rewrite or weaken RLS based only on the warning.
+- Three foreign keys are flagged without covering indexes: `worker_admin_operators.created_by`, `worker_admin_operators.updated_by`, and `worker_control_versions.worker_name`. No indexes were added; measure table size and workload first.
 
 ## Official references
 
