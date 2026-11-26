@@ -75,11 +75,11 @@ def test_native_supabase_auth_probe_discloses_temporary_insert_and_cleanup_befor
     page = (ROOT / "pages" / "12_Supabase_Native_Auth_Denial_Probe.py").read_text(encoding="utf-8")
 
     disclosure = "يحاول INSERT بسجل مؤقت فريد لاختبار رفض الكتابة"
-    cleanup = "إذا فشل الحذف فتوقف ولا تُعد التشغيل"
+    cleanup = "إذا تعذر التأكد فتوقف ولا تُعد التشغيل"
     assert disclosure in source
     assert cleanup in source
     assert "محاولة INSERT بسجل مؤقت فريد" in page
-    assert "إذا فشل التنظيف فتوقف ولا تُعد التشغيل" in page
+    assert "إذا لم يتأكد الاختبار من حذف السجل المؤقت بالضبط، فتوقف ولا تُعد التشغيل" in page
     assert "الاختبار يقرأ فقط جدول Clerk" not in source
     assert "لا ينشئ سجلات ولا يغيّر بيانات الجدول" not in source
 
@@ -123,6 +123,10 @@ def test_native_supabase_auth_probe_requires_a_zero_row_rls_result_for_read_pass
     assert "cleanupRows[0]?.record_key === probeRecordKey" in source
     assert "cleanupRows[0]?.owner_subject === userData.id" in source
     assert "cleanupVerified" in source
+    assert 'const cleanupVerified = cleanupResponse.ok' in source
+    assert "cleanupRows.length === 1" in source
+    assert "cleanupRows[0]?.record_key === probeRecordKey" in source
+    assert "cleanupRows[0]?.owner_subject === userData.id" in source
     assert "FAIL: رمز Supabase Auth قرأ" in source
     assert "لا تُحسب PASS" in source
 
