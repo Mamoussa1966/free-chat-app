@@ -155,10 +155,10 @@ Earlier real-browser evidence established one working Clerk user session, access
 
 ### Native Supabase Auth negative probe
 
-- Added `pages/12_Supabase_Native_Auth_Denial_Probe.py` with current build marker `SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-DISCLOSURE-20261126`.
+- Added `pages/12_Supabase_Native_Auth_Denial_Probe.py` with current build marker `SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-CLEANUP-VERIFIED-20261126`.
 - It signs into the native Supabase Auth test account from the browser, validates the issued token through `/auth/v1/user`, checks the JWT issuer/role/subject, and attempts both table read and a narrowly keyed temporary insert-denial probe. The page explicitly discloses that write attempt before execution.
-- Password and bearer token are not written to Streamlit state, browser storage, URLs, or output. If the unexpected insert succeeds, the probe attempts to delete only its unique temporary row immediately. If cleanup fails, it reports a critical condition and the user must stop and must not rerun the test until the isolated table is inspected.
-- **Disclosure correction 2026-11-26:** the prior page text incorrectly described this as read-only. The updated page marker is `SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-DISCLOSURE-20261126` and now discloses the temporary INSERT/cleanup behavior in both the page warning and component caption. Do not execute an older deployed build that still says the probe is read-only.
+- Password and bearer token are not written to Streamlit state, browser storage, URLs, or output. If the unexpected insert succeeds, the probe attempts to delete only its unique temporary row immediately. If the insert succeeds unexpectedly, cleanup uses `Prefer: return=representation`; it reports cleanup as confirmed only when exactly one returned row matches both the unique probe key and the authenticated owner. If the DELETE fails or the returned row cannot be verified, it reports a critical condition and the user must stop and must not rerun the test until the isolated table is inspected.
+- **Disclosure correction 2026-11-26:** the prior page text incorrectly described this as read-only. The updated page marker is `SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-CLEANUP-VERIFIED-20261126` and now discloses the temporary INSERT/cleanup behavior in both the page warning and component caption. Do not execute an older deployed build that still says the probe is read-only.
 - **This live browser probe has not yet been executed.** Only a test-only Supabase Auth password may be entered into this page; never send the password or token in chat.
 
 ### Duplicate email investigation
