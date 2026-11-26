@@ -84,6 +84,7 @@ def render_supabase_native_auth_denial_probe() -> None:
       const resultNode = document.getElementById("result");
       const originNode = document.getElementById("origin-indicator");
       let busy = false;
+      let halted = false;
 
       const pageOrigin = (() => {
         // Streamlit's srcdoc component may suppress document.referrer.
@@ -144,15 +145,21 @@ def render_supabase_native_auth_denial_probe() -> None:
         runButton.hidden = false;
         runButton.style.display = "block";
         runButton.style.visibility = "visible";
-        runButton.disabled = !originAllowed;
-        runButton.textContent = originAllowed
-          ? "تنفيذ اختبار الرمز الأصلي"
-          : "الاختبار متاح من رابط البيئة المعزولة فقط";
+        runButton.disabled = !originAllowed || halted;
+        runButton.textContent = halted
+          ? "تم إيقاف الاختبار — لا تُعد تشغيله"
+          : originAllowed
+            ? "تنفيذ اختبار الرمز الأصلي"
+            : "الاختبار متاح من رابط البيئة المعزولة فقط";
       }
     
       async function runProbe(event) {
         event.preventDefault();
         if (busy) return;
+        if (halted) {
+          show("STOP — هذه الجلسة أوقفت الاختبار بعد نتيجة كتابة خطرة أو غير محسومة. لا تُعد تشغيله.");
+          return;
+        }
         if (!originAllowed) {
           show("BLOCKED — هذه الصفحة لا تعمل إلا من أصل تطبيق Clerk التجريبي المصرّح.");
           return;
@@ -180,6 +187,10 @@ def render_supabase_native_auth_denial_probe() -> None:
         let readPass = false;
         let readDetail = "";
         let insertAttempted = false;
+        let insertResponseReceived = false;
+        let insertAccepted = false;
+        let cleanupVerified = false;
+        let probeRecordKey = "";
         let insertPass = false;
         let insertDetail = "";
         let sessionCreated = false;
@@ -308,7 +319,7 @@ def render_supabase_native_auth_denial_probe() -> None:
           const probeNonce = (typeof crypto.randomUUID === "function")
             ? crypto.randomUUID()
             : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
-          const probeRecordKey = "native-auth-denial-" + probeNonce;
+          probeRecordKey = "native-auth-denial-" + probeNonce;
           const insertResponse = await fetch(
             SUPABASE_URL + "/rest/v1/clerk_auth_pilot_records",
             {
@@ -330,6 +341,7 @@ def render_supabase_native_auth_denial_probe() -> None:
               redirect: "error"
             }
           );
+          insertResponseReceived = true;
           const insertData = await readJson(insertResponse);
           if (
             (insertResponse.status === 401 || insertResponse.status === 403)
@@ -338,6 +350,10 @@ def render_supabase_native_auth_denial_probe() -> None:
             insertPass = true;
             insertDetail = "PASS — PostgreSQL رفض INSERT بهوية Supabase Auth الأصلية بالرمز 42501.";
           } else if (insertResponse.ok) {
+            // A successful INSERT means the issuer boundary failed. Lock this
+            // iframe for the rest of the page session, even if cleanup succeeds.
+            insertAccepted = true;
+            halted = true;
             const cleanupResponse = await fetch(
               SUPABASE_URL + "/rest/v1/clerk_auth_pilot_records?owner_subject=eq."
                 + encodeURIComponent(userData.id) + "&record_key=eq."
@@ -356,7 +372,7 @@ def render_supabase_native_auth_denial_probe() -> None:
               }
             );
             const cleanupRows = await readJson(cleanupResponse);
-            const cleanupVerified = cleanupResponse.ok
+            cleanupVerified = cleanupResponse.ok
               && Array.isArray(cleanupRows)
               && cleanupRows.length === 1
               && cleanupRows[0]?.record_key === probeRecordKey
@@ -376,6 +392,15 @@ def render_supabase_native_auth_denial_probe() -> None:
           authFailure = "تعذر إكمال طلب المصادقة أو الاختبار بسبب خطأ اتصال/متصفح: "
             + String(error?.name || "network_error");
           readDetail = authFailure;
+          if (insertAttempted && !insertResponseReceived) {
+            halted = true;
+            insertDetail = "CRITICAL — انقطع الاتصال قبل استلام نتيجة INSERT؛ قد يكون الطلب وصل إلى قاعدة البيانات. لا تُعد تشغيل الاختبار. مفتاح السجل الذي يجب مراجعته في جدول الاختبار: "
+              + probeRecordKey;
+          } else if (insertAccepted && !cleanupVerified) {
+            halted = true;
+            insertDetail = "CRITICAL — قُبل INSERT ولم يتأكد حذف السجل المؤقت وحده. أوقف الاختبار ولا تُعد تشغيله. مفتاح السجل الذي يجب مراجعته في جدول الاختبار: "
+              + probeRecordKey;
+          }
         } finally {
           if (accessToken) {
             try {
