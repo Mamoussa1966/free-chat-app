@@ -49,7 +49,7 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert "runButton.disabled = !originAllowed" in source
     assert "togglePasswordButton" not in source
     assert 'PROBE_HTML = r"""' in source
-    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-CLEANUP-VERIFIED-20261126" in source
+    assert "SUPABASE-NATIVE-AUTH-DENIAL-PROBE-LOCKOUT-GUARD-20261126" in source
     assert 'runButton.addEventListener("pointerdown"' in source
     assert 'runButton.addEventListener("click"' in source
     assert "تم رصد لمس زر الاختبار" in source
@@ -59,7 +59,7 @@ def test_native_supabase_auth_probe_is_test_project_only_and_browser_side():
     assert 'id="origin-indicator"' in source
     assert "مصدر تطبيق الاختبار الفعلي" in source
     assert "originNode.textContent" in source
-    assert "Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-READ-WRITE-CLEANUP-VERIFIED-20261126" in page
+    assert "Build marker: SUPABASE-NATIVE-AUTH-DENIAL-PROBE-LOCKOUT-GUARD-20261126" in page
     assert "Build marker: CLERK-PILOT-SECURITY-HARDENING-20261125" in page11
     assert "render_supabase_native_auth_denial_probe" in page
     assert "render_supabase_native_auth_denial_probe" in page11
